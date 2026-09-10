@@ -1,12 +1,12 @@
 use crate::{
-    event::{
-        Data,
-        InfoError,
-    },
+    event::{Data, InfoError},
     prelude::*,
 };
 
-pub(crate) async fn info(transaction: &mut Transaction<'_, Postgres>, data: &Data<'_>) -> Result<Option<RawHtml<String>>, InfoError> {
+pub(crate) async fn info(
+    transaction: &mut Transaction<'_, Postgres>,
+    data: &Data<'_>,
+) -> Result<Option<RawHtml<String>>, InfoError> {
     Ok(match &*data.event {
         "20" => Some(html! {
             article {
@@ -20,4 +20,3 @@ pub(crate) async fn info(transaction: &mut Transaction<'_, Postgres>, data: &Dat
         _ => None,
     })
 }
-

@@ -1,7 +1,4 @@
-use {
-    reqwest::Client,
-    crate::prelude::*,
-};
+use {crate::prelude::*, reqwest::Client};
 
 const API_URL: &str = "https://avianart.games/api.php";
 const POLL_INTERVAL_SECS: u64 = 5;
@@ -79,22 +76,38 @@ impl AvianartClient {
         let url = format!("{}?action=generate&preset={}", API_URL, preset);
         let body = json!([{"args": {"race": true}}]);
         let req = self.apply_auth(self.client.post(&url));
-        let result: AvianartEnvelope<AvianartGenerateResponse> = req.json(&body).send().await?.json().await?;
+        let result: AvianartEnvelope<AvianartGenerateResponse> =
+            req.json(&body).send().await?.json().await?;
         if result.status != 200 {
-            return Err(AvianartError::GenerationFailed(result.response.message.unwrap_or_else(|| format!("status {}", result.status))));
+            return Err(AvianartError::GenerationFailed(
+                result
+                    .response
+                    .message
+                    .unwrap_or_else(|| format!("status {}", result.status)),
+            ));
         }
-        let hash = result.response.hash.ok_or_else(|| AvianartError::GenerationFailed("missing hash in generate response".into()))?;
+        let hash = result.response.hash.ok_or_else(|| {
+            AvianartError::GenerationFailed("missing hash in generate response".into())
+        })?;
         Ok(hash)
     }
 
-    pub(crate) async fn wait_for_seed(&self, hash: &str) -> Result<AvianartPermlinkResponse, AvianartError> {
+    pub(crate) async fn wait_for_seed(
+        &self,
+        hash: &str,
+    ) -> Result<AvianartPermlinkResponse, AvianartError> {
         let url = format!("{}?action=permlink&hash={}", API_URL, hash);
         for _attempt in 1..=MAX_POLL_ATTEMPTS {
             sleep(Duration::from_secs(POLL_INTERVAL_SECS)).await;
             let req = self.apply_auth(self.client.get(&url));
-            let envelope: AvianartEnvelope<AvianartPermlinkResponse> = req.send().await?.json().await?;
+            let envelope: AvianartEnvelope<AvianartPermlinkResponse> =
+                req.send().await?.json().await?;
             match envelope.response.status.as_deref() {
-                Some("failure") => return Err(AvianartError::GenerationFailed(envelope.response.message.unwrap_or_default())),
+                Some("failure") => {
+                    return Err(AvianartError::GenerationFailed(
+                        envelope.response.message.unwrap_or_default(),
+                    ));
+                }
                 None => return Ok(envelope.response), // status absent = generation complete
                 Some(_) => {}
             }
@@ -117,10 +130,12 @@ pub(crate) fn parse_file_hash(hash_str: &str) -> Result<[String; 5], AvianartErr
         .split(", ")
         .map(|s| s.trim().replace(' ', "")) // "Bug Net" → "BugNet"
         .collect();
-    parts.try_into().map_err(|v: Vec<_>| AvianartError::HashParse {
-        count: v.len(),
-        raw: hash_str.to_owned(),
-    })
+    parts
+        .try_into()
+        .map_err(|v: Vec<_>| AvianartError::HashParse {
+            count: v.len(),
+            raw: hash_str.to_owned(),
+        })
 }
 
 #[cfg(test)]
@@ -129,21 +144,28 @@ mod tests {
 
     #[test]
     fn file_hash_from_spoiler_meta() {
-        let envelope: AvianartEnvelope<AvianartPermlinkResponse> = serde_json_inner::from_str(r#"{
+        let envelope: AvianartEnvelope<AvianartPermlinkResponse> = serde_json_inner::from_str(
+            r#"{
             "status": 200,
             "response": {
                 "status": null,
                 "message": "",
                 "spoiler": {"meta": {"hash": "Bomb, Powder, Rod, Ocarina, Bug Net"}}
             }
-        }"#).unwrap();
+        }"#,
+        )
+        .unwrap();
 
-        assert_eq!(envelope.response.file_hash(), Some("Bomb, Powder, Rod, Ocarina, Bug Net"));
+        assert_eq!(
+            envelope.response.file_hash(),
+            Some("Bomb, Powder, Rod, Ocarina, Bug Net")
+        );
     }
 
     #[test]
     fn file_hash_from_fshash_when_spoiler_meta_hash_is_null() {
-        let envelope: AvianartEnvelope<AvianartPermlinkResponse> = serde_json_inner::from_str(r#"{
+        let envelope: AvianartEnvelope<AvianartPermlinkResponse> = serde_json_inner::from_str(
+            r#"{
             "status": 200,
             "response": {
                 "status": null,
@@ -151,8 +173,13 @@ mod tests {
                 "fshash": "Big Key, Heart, Mirror, Bugnet, Compass",
                 "spoiler": {"meta": {"hash": null}}
             }
-        }"#).unwrap();
+        }"#,
+        )
+        .unwrap();
 
-        assert_eq!(envelope.response.file_hash(), Some("Big Key, Heart, Mirror, Bugnet, Compass"));
+        assert_eq!(
+            envelope.response.file_hash(),
+            Some("Big Key, Heart, Mirror, Bugnet, Compass")
+        );
     }
 }

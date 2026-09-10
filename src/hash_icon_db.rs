@@ -1,6 +1,6 @@
 use {
     serde::{Deserialize, Serialize},
-    sqlx::{Transaction, Postgres},
+    sqlx::{Postgres, Transaction},
 };
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -51,4 +51,4 @@ impl HashIconData {
         .fetch_all(&mut **transaction)
         .await
     }
-} 
+}

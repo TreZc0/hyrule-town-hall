@@ -4,43 +4,35 @@
 //static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc; // fails to compile on Ubuntu
 
 use {
-    std::env,
+    crate::prelude::*,
     rocket::Rocket,
     serde_json_inner as _, // `preserve_order` feature required to correctly render progression spoilers
     sqlx::{
         ConnectOptions as _,
-        postgres::{
-            PgConnectOptions,
-            PgPoolOptions,
-        },
+        postgres::{PgConnectOptions, PgPoolOptions},
     },
-    crate::prelude::*,
+    std::env,
 };
-#[cfg(unix)] use {
+#[cfg(unix)]
+use {
+    crate::{racetime_bot::SeedRollUpdate, unix_socket::ClientMessage as Subcommand},
     mhstatus::PrepareStopUpdate,
     openssl as _, // `vendored` feature required to fix release build
     tokio::{
-        io::{
-            AsyncWriteExt as _,
-            stdout,
-        },
+        io::{AsyncWriteExt as _, stdout},
         net::UnixStream,
-    },
-    crate::{
-        racetime_bot::SeedRollUpdate,
-        unix_socket::ClientMessage as Subcommand,
     },
 };
 
 mod admin;
-mod deadline_notifications;
 mod api;
 mod async_race;
-mod avianart;
 mod auth;
+mod avianart;
 mod cal;
 mod challonge;
 mod config;
+mod deadline_notifications;
 mod discord_bot;
 mod discord_role_manager;
 mod discord_scheduled_events;
@@ -52,12 +44,14 @@ mod game;
 mod games;
 mod hash_icon;
 mod hash_icon_db;
-#[macro_use] mod http;
+#[macro_use]
+mod http;
 mod hth_info;
 mod id;
 mod lang;
 mod legal;
-#[macro_use] mod macros;
+#[macro_use]
+mod macros;
 mod mw;
 mod notification;
 mod ootr_web;
@@ -70,7 +64,8 @@ mod speedgaming_export;
 mod startgg;
 mod team;
 mod time;
-#[cfg(unix)] mod unix_socket;
+#[cfg(unix)]
+mod unix_socket;
 mod user;
 mod volunteer_pings;
 mod volunteer_requests;
@@ -82,9 +77,21 @@ include!(concat!(env!("OUT_DIR"), "/version.rs"));
 #[allow(unused)] // variants only constructed under conditional compilation
 #[derive(Default, Clone, Copy)]
 enum Environment {
-    #[cfg_attr(any(feature = "production", not(any(feature = "dev", feature = "local", debug_assertions))), default)]
+    #[cfg_attr(
+        any(
+            feature = "production",
+            not(any(feature = "dev", feature = "local", debug_assertions))
+        ),
+        default
+    )]
     Production,
-    #[cfg_attr(any(feature = "dev", all(debug_assertions, not(feature = "production"), not(feature = "local"))), default)]
+    #[cfg_attr(
+        any(
+            feature = "dev",
+            all(debug_assertions, not(feature = "production"), not(feature = "local"))
+        ),
+        default
+    )]
     Dev,
     #[cfg_attr(feature = "local", default)]
     Local,
@@ -99,9 +106,12 @@ impl Environment {
         }
     }
 
-
     fn racetime_host(&self) -> &'static str {
-        if self.is_dev() { "rtdev.zsr.gg" } else { "racetime.gg" }
+        if self.is_dev() {
+            "rtdev.zsr.gg"
+        } else {
+            "racetime.gg"
+        }
     }
 
     fn base_uri(&self) -> rocket::http::uri::Absolute<'static> {
@@ -112,7 +122,6 @@ impl Environment {
         }
     }
 }
-
 
 fn racetime_host() -> &'static str {
     Environment::default().racetime_host()
@@ -145,23 +154,44 @@ struct Args {
 
 #[derive(Debug, thiserror::Error)]
 enum Error {
-    #[error(transparent)] AutoImport(#[from] cal::AutoImportError),
-    #[error(transparent)] Base64(#[from] base64::DecodeError),
-    #[error(transparent)] Config(#[from] config::Error),
-    #[cfg(unix)] #[error(transparent)] Io(#[from] io::Error),
-    #[error(transparent)] Racetime(#[from] racetime_bot::MainError),
-    #[cfg(unix)] #[error(transparent)] Read(#[from] async_proto::ReadError),
-    #[error(transparent)] Reqwest(#[from] reqwest::Error),
-    #[error(transparent)] Rocket(#[from] rocket::Error),
-    #[error(transparent)] Serenity(#[from] serenity::Error),
-    #[error(transparent)] Sql(#[from] sqlx::Error),
-    #[error(transparent)] SpeedGamingExport(#[from] speedgaming_export::Error),
-    #[error(transparent)] Task(#[from] tokio::task::JoinError),
-    #[error(transparent)] VolunteerRequests(#[from] volunteer_requests::Error),
-    #[cfg(unix)] #[error(transparent)] Wheel(#[from] wheel::Error),
-    #[error(transparent)] DeadlineNotifications(#[from] deadline_notifications::Error),
-    #[error(transparent)] ZsrExport(#[from] zsr_export::Error),
-    #[cfg(unix)] #[error(transparent)] Write(#[from] async_proto::WriteError),
+    #[error(transparent)]
+    AutoImport(#[from] cal::AutoImportError),
+    #[error(transparent)]
+    Base64(#[from] base64::DecodeError),
+    #[error(transparent)]
+    Config(#[from] config::Error),
+    #[cfg(unix)]
+    #[error(transparent)]
+    Io(#[from] io::Error),
+    #[error(transparent)]
+    Racetime(#[from] racetime_bot::MainError),
+    #[cfg(unix)]
+    #[error(transparent)]
+    Read(#[from] async_proto::ReadError),
+    #[error(transparent)]
+    Reqwest(#[from] reqwest::Error),
+    #[error(transparent)]
+    Rocket(#[from] rocket::Error),
+    #[error(transparent)]
+    Serenity(#[from] serenity::Error),
+    #[error(transparent)]
+    Sql(#[from] sqlx::Error),
+    #[error(transparent)]
+    SpeedGamingExport(#[from] speedgaming_export::Error),
+    #[error(transparent)]
+    Task(#[from] tokio::task::JoinError),
+    #[error(transparent)]
+    VolunteerRequests(#[from] volunteer_requests::Error),
+    #[cfg(unix)]
+    #[error(transparent)]
+    Wheel(#[from] wheel::Error),
+    #[error(transparent)]
+    DeadlineNotifications(#[from] deadline_notifications::Error),
+    #[error(transparent)]
+    ZsrExport(#[from] zsr_export::Error),
+    #[cfg(unix)]
+    #[error(transparent)]
+    Write(#[from] async_proto::WriteError),
 }
 
 #[wheel::main(rocket)]
@@ -172,32 +202,57 @@ async fn main(Args { port, subcommand }: Args) -> Result<(), Error> {
         .init();
     let _ = rustls::crypto::ring::default_provider().install_default();
     if let Some(subcommand) = subcommand {
-        #[cfg(unix)] let mut sock = UnixStream::connect(unix_socket::PATH).await?;
-        #[cfg(unix)] subcommand.write(&mut sock).await?;
+        #[cfg(unix)]
+        let mut sock = UnixStream::connect(unix_socket::path()).await?;
+        #[cfg(unix)]
+        subcommand.write(&mut sock).await?;
         match subcommand {
-            #[cfg(unix)] Subcommand::CleanupRoles { .. } => {
+            #[cfg(unix)]
+            Subcommand::CleanupRoles { .. } => {
                 u8::read(&mut sock).await?;
             }
-            #[cfg(unix)] Subcommand::PrepareStop { async_proto: false, .. } => {
+            #[cfg(unix)]
+            Subcommand::PrepareStop {
+                async_proto: false, ..
+            } => {
                 while let Some(update) = Option::<PrepareStopUpdate>::read(&mut sock).await? {
-                    println!("{} preparing to stop HTH: {update}", Utc::now().format("%Y-%m-%d %H:%M:%S"));
+                    println!(
+                        "{} preparing to stop HTH: {update}",
+                        Utc::now().format("%Y-%m-%d %H:%M:%S")
+                    );
                 }
-                println!("{} preparing to stop HTH: done", Utc::now().format("%Y-%m-%d %H:%M:%S"));
+                println!(
+                    "{} preparing to stop HTH: done",
+                    Utc::now().format("%Y-%m-%d %H:%M:%S")
+                );
             }
-            #[cfg(unix)] Subcommand::PrepareStop { async_proto: true, .. } => {
+            #[cfg(unix)]
+            Subcommand::PrepareStop {
+                async_proto: true, ..
+            } => {
                 let mut stdout = stdout();
                 while let Some(update) = Option::<PrepareStopUpdate>::read(&mut sock).await? {
                     update.write(&mut stdout).await?;
                     stdout.flush().await?;
                 }
             }
-            #[cfg(unix)] Subcommand::Roll { .. } | Subcommand::RollRsl { .. } | Subcommand::Seed { .. } => while let Some(update) = Option::<SeedRollUpdate>::read(&mut sock).await? {
-                println!("{} {update:#?}", Utc::now().format("%Y-%m-%d %H:%M:%S"));
-            },
-            #[cfg(unix)] Subcommand::UpdateRegionalVc { .. } => {
-                println!("{} HTH: updating regional voice chat", Utc::now().format("%Y-%m-%d %H:%M:%S"));
+            #[cfg(unix)]
+            Subcommand::Roll { .. } | Subcommand::RollRsl { .. } | Subcommand::Seed { .. } => {
+                while let Some(update) = Option::<SeedRollUpdate>::read(&mut sock).await? {
+                    println!("{} {update:#?}", Utc::now().format("%Y-%m-%d %H:%M:%S"));
+                }
+            }
+            #[cfg(unix)]
+            Subcommand::UpdateRegionalVc { .. } => {
+                println!(
+                    "{} HTH: updating regional voice chat",
+                    Utc::now().format("%Y-%m-%d %H:%M:%S")
+                );
                 u8::read(&mut sock).await?;
-                println!("{} HTH: done updating regional voice chat", Utc::now().format("%Y-%m-%d %H:%M:%S"));
+                println!(
+                    "{} HTH: done updating regional voice chat",
+                    Utc::now().format("%Y-%m-%d %H:%M:%S")
+                );
             }
         }
     } else {
@@ -208,14 +263,22 @@ async fn main(Args { port, subcommand }: Args) -> Result<(), Error> {
         }));
         let config = Config::load().await?;
         let http_client = reqwest::Client::builder()
-            .user_agent(concat!("HyruleTownHall/", env!("CARGO_PKG_VERSION"), " (https://github.com/TreZc0/hyrule-town-hall)"))
+            .user_agent(concat!(
+                "HyruleTownHall/",
+                env!("CARGO_PKG_VERSION"),
+                " (https://github.com/TreZc0/hyrule-town-hall)"
+            ))
             .timeout(Duration::from_secs(30))
             .use_rustls_tls()
             .hickory_dns(true)
             .https_only(true)
             .build()?;
         let insecure_http_client = reqwest::Client::builder()
-            .user_agent(concat!("HyruleTownHall/", env!("CARGO_PKG_VERSION"), " (https://github.com/TreZc0/hyrule-town-hall)"))
+            .user_agent(concat!(
+                "HyruleTownHall/",
+                env!("CARGO_PKG_VERSION"),
+                " (https://github.com/TreZc0/hyrule-town-hall)"
+            ))
             .timeout(Duration::from_secs(30))
             .danger_accept_invalid_certs(true) // https://discord.com/channels/274180765816848384/1012773802201071736/1372836620822122526
             .use_rustls_tls()
@@ -227,7 +290,8 @@ async fn main(Args { port, subcommand }: Args) -> Result<(), Error> {
         let mut db_options = if Environment::default().is_dev() {
             if let Ok(database_url) = env::var("DATABASE_URL") {
                 // Use DATABASE_URL for dedicated authentication (dev mode only)
-                database_url.parse::<PgConnectOptions>()?
+                database_url
+                    .parse::<PgConnectOptions>()?
                     .application_name("midos-house")
                     .log_slow_statements(log::LevelFilter::Warn, Duration::from_secs(10))
             } else {
@@ -271,18 +335,31 @@ async fn main(Args { port, subcommand }: Args) -> Result<(), Error> {
             .connect_with(db_options)
             .await?;
         let seed_metadata = Arc::default();
-        let practice_seeds: event::PracticeSeeds = Arc::new(tokio::sync::RwLock::new(HashMap::default()));
-        let race_import_jobs: cal::RaceImportJobs = Arc::new(tokio::sync::RwLock::new(HashMap::default()));
-        let ootr_api_client = Arc::new(ootr_web::ApiClient::new(http_client.clone(), config.ootr_api_key.clone(), config.ootr_api_key_encryption.clone()));
+        let practice_seeds: event::PracticeSeeds =
+            Arc::new(tokio::sync::RwLock::new(HashMap::default()));
+        let race_import_jobs: cal::RaceImportJobs =
+            Arc::new(tokio::sync::RwLock::new(HashMap::default()));
+        let ootr_api_client = Arc::new(ootr_web::ApiClient::new(
+            http_client.clone(),
+            config.ootr_api_key.clone(),
+            config.ootr_api_key_encryption.clone(),
+        ));
         let rocket_builder = http::rocket(
             db_pool.clone(),
             discord_builder.ctx_fut.clone(),
             http_client.clone(),
             config.clone(),
-            port.unwrap_or_else(|| if Environment::default().is_dev() { 24814 } else { 24812 }),
+            port.unwrap_or_else(|| {
+                if Environment::default().is_dev() {
+                    24814
+                } else {
+                    24812
+                }
+            }),
             Arc::clone(&seed_metadata),
             ootr_api_client.clone(),
-        ).await?;
+        )
+        .await?;
         let new_room_lock = Arc::default();
         let race_import_lock = Arc::default();
         let clean_shutdown = Arc::default();
@@ -291,70 +368,143 @@ async fn main(Args { port, subcommand }: Args) -> Result<(), Error> {
             client_id: String::new(),
             client_secret: String::new(),
         };
-        let global_state = Arc::new(racetime_bot::GlobalState::new(
-            Arc::clone(&new_room_lock),
-            Arc::clone(&race_import_lock),
-            racetime_config,
-            db_pool.clone(),
-            http_client.clone(),
-            insecure_http_client,
-            config.league_api_key.clone(),
-            config.startgg.clone(),
-            ootr_api_client,
-            discord_builder.ctx_fut.clone(),
-            Arc::clone(&clean_shutdown),
-            seed_metadata,
-            config.avianart_api_key.clone(),
-            config.mmr_api_key.clone(),
-        ).await);
+        let global_state = Arc::new(
+            racetime_bot::GlobalState::new(
+                Arc::clone(&new_room_lock),
+                Arc::clone(&race_import_lock),
+                racetime_config,
+                db_pool.clone(),
+                http_client.clone(),
+                insecure_http_client,
+                config.league_api_key.clone(),
+                config.startgg.clone(),
+                ootr_api_client,
+                discord_builder.ctx_fut.clone(),
+                Arc::clone(&clean_shutdown),
+                seed_metadata,
+                config.avianart_api_key.clone(),
+                config.mmr_api_key.clone(),
+            )
+            .await,
+        );
         let rocket = rocket_builder
             .manage(Arc::clone(&global_state))
             .manage(Arc::clone(&practice_seeds))
             .manage(Arc::clone(&race_import_jobs))
-            .ignite().await?;
-        let discord_builder = discord_bot::configure_builder(discord_builder, global_state.clone(), db_pool.clone(), http_client.clone(), config.clone(), Arc::clone(&new_room_lock), Arc::clone(&clean_shutdown), rocket.shutdown());
-        #[cfg(unix)] let unix_listener = unix_socket::listen(rocket.shutdown(), clean_shutdown, global_state.clone());
-        let racetime_task = tokio::spawn(racetime_bot::main(config.clone(), rocket.shutdown(), global_state)).map(|res| match res {
+            .ignite()
+            .await?;
+        let discord_builder = discord_bot::configure_builder(
+            discord_builder,
+            global_state.clone(),
+            db_pool.clone(),
+            http_client.clone(),
+            config.clone(),
+            Arc::clone(&new_room_lock),
+            Arc::clone(&clean_shutdown),
+            rocket.shutdown(),
+        );
+        #[cfg(unix)]
+        let unix_listener =
+            unix_socket::listen(rocket.shutdown(), clean_shutdown, global_state.clone());
+        let racetime_task = tokio::spawn(racetime_bot::main(
+            config.clone(),
+            rocket.shutdown(),
+            global_state,
+        ))
+        .map(|res| match res {
             Ok(Ok(())) => Ok(()),
             Ok(Err(e)) => Err(Error::from(e)),
             Err(e) => Err(Error::from(e)),
         });
-        let import_task = tokio::spawn(cal::auto_import_races(db_pool.clone(), http_client.clone(), config, rocket.shutdown(), discord_builder.ctx_fut.clone(), new_room_lock, race_import_lock)).map(|res| match res {
+        let import_task = tokio::spawn(cal::auto_import_races(
+            db_pool.clone(),
+            http_client.clone(),
+            config,
+            rocket.shutdown(),
+            discord_builder.ctx_fut.clone(),
+            new_room_lock,
+            race_import_lock,
+        ))
+        .map(|res| match res {
             Ok(Ok(())) => Ok(()),
             Ok(Err(e)) => Err(Error::from(e)),
             Err(e) => Err(Error::Task(e)),
         });
-        let volunteer_request_task = tokio::spawn(volunteer_request_manager(db_pool.clone(), discord_builder.ctx_fut.clone(), rocket.shutdown())).map(|res| match res {
+        let volunteer_request_task = tokio::spawn(volunteer_request_manager(
+            db_pool.clone(),
+            discord_builder.ctx_fut.clone(),
+            rocket.shutdown(),
+        ))
+        .map(|res| match res {
             Ok(Ok(())) => Ok(()),
             Ok(Err(e)) => Err(e),
             Err(e) => Err(Error::Task(e)),
         });
-        let async_race_task = tokio::spawn(async_race_manager(db_pool.clone(), discord_builder.ctx_fut.clone(), http_client.clone(), rocket.shutdown())).map(|res| match res {
+        let pooled_qualifier_task = tokio::spawn(pooled_qualifier_manager(
+            db_pool.clone(),
+            discord_builder.ctx_fut.clone(),
+            rocket.shutdown(),
+        ))
+        .map(|res| match res {
             Ok(Ok(())) => Ok(()),
             Ok(Err(e)) => Err(e),
             Err(e) => Err(Error::Task(e)),
         });
-        let racetime_room_status_task = tokio::spawn(weekly_racetime_room_status_manager(db_pool.clone(), http_client.clone(), rocket.shutdown())).map(|res| match res {
+        let async_race_task = tokio::spawn(async_race_manager(
+            db_pool.clone(),
+            discord_builder.ctx_fut.clone(),
+            http_client.clone(),
+            rocket.shutdown(),
+        ))
+        .map(|res| match res {
             Ok(Ok(())) => Ok(()),
             Ok(Err(e)) => Err(e),
             Err(e) => Err(Error::Task(e)),
         });
-        let zsr_export_task = tokio::spawn(zsr_export_manager(db_pool.clone(), http_client.clone(), rocket.shutdown())).map(|res| match res {
+        let racetime_room_status_task = tokio::spawn(weekly_racetime_room_status_manager(
+            db_pool.clone(),
+            http_client.clone(),
+            rocket.shutdown(),
+        ))
+        .map(|res| match res {
             Ok(Ok(())) => Ok(()),
             Ok(Err(e)) => Err(e),
             Err(e) => Err(Error::Task(e)),
         });
-        let speedgaming_export_task = tokio::spawn(speedgaming_export_manager(db_pool.clone(), http_client, rocket.shutdown())).map(|res| match res {
+        let zsr_export_task = tokio::spawn(zsr_export_manager(
+            db_pool.clone(),
+            http_client.clone(),
+            rocket.shutdown(),
+        ))
+        .map(|res| match res {
             Ok(Ok(())) => Ok(()),
             Ok(Err(e)) => Err(e),
             Err(e) => Err(Error::Task(e)),
         });
-        let weekly_race_task = tokio::spawn(weekly_race_manager(db_pool.clone(), rocket.shutdown())).map(|res| match res {
+        let speedgaming_export_task = tokio::spawn(speedgaming_export_manager(
+            db_pool.clone(),
+            http_client,
+            rocket.shutdown(),
+        ))
+        .map(|res| match res {
             Ok(Ok(())) => Ok(()),
             Ok(Err(e)) => Err(e),
             Err(e) => Err(Error::Task(e)),
         });
-        let deadline_task = tokio::spawn(deadline_notifications::deadline_notification_manager(db_pool.clone(), discord_builder.ctx_fut.clone(), rocket.shutdown())).map(|res| match res {
+        let weekly_race_task =
+            tokio::spawn(weekly_race_manager(db_pool.clone(), rocket.shutdown())).map(|res| {
+                match res {
+                    Ok(Ok(())) => Ok(()),
+                    Ok(Err(e)) => Err(e),
+                    Err(e) => Err(Error::Task(e)),
+                }
+            });
+        let deadline_task = tokio::spawn(deadline_notifications::deadline_notification_manager(
+            db_pool.clone(),
+            discord_builder.ctx_fut.clone(),
+            rocket.shutdown(),
+        ))
+        .map(|res| match res {
             Ok(Ok(())) => Ok(()),
             Ok(Err(e)) => Err(Error::from(e)),
             Err(e) => Err(Error::Task(e)),
@@ -369,13 +519,50 @@ async fn main(Args { port, subcommand }: Args) -> Result<(), Error> {
             Ok(Err(e)) => Err(Error::from(e)),
             Err(e) => Err(Error::from(e)),
         });
-        #[cfg(unix)] let unix_socket_task = tokio::spawn(unix_listener).map(|res| match res {
+        #[cfg(unix)]
+        let unix_socket_task = tokio::spawn(unix_listener).map(|res| match res {
             Ok(Ok(())) => Ok(()),
             Ok(Err(e)) => Err(Error::from(e)),
             Err(e) => Err(Error::from(e)),
         });
-        #[cfg(not(unix))] let unix_socket_task = future::ok(());
-        let ((), (), (), (), (), (), (), (), (), (), (), ()) = tokio::try_join!(discord_task, import_task, racetime_task, async_race_task, racetime_room_status_task, volunteer_request_task, zsr_export_task, speedgaming_export_task, weekly_race_task, deadline_task, rocket_task, unix_socket_task)?;
+        #[cfg(not(unix))]
+        let unix_socket_task = future::ok(());
+        let ((), (), (), (), (), (), (), (), (), (), (), (), ()) = tokio::try_join!(
+            pooled_qualifier_task,
+            discord_task,
+            import_task,
+            racetime_task,
+            async_race_task,
+            racetime_room_status_task,
+            volunteer_request_task,
+            zsr_export_task,
+            speedgaming_export_task,
+            weekly_race_task,
+            deadline_task,
+            rocket_task,
+            unix_socket_task
+        )?;
+    }
+    Ok(())
+}
+
+async fn pooled_qualifier_manager(
+    pool: PgPool,
+    ctx: RwFuture<DiscordCtx>,
+    shutdown: rocket::Shutdown,
+) -> Result<(), Error> {
+    let mut interval = tokio::time::interval(Duration::from_secs(2));
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        tokio::select! {
+            _ = interval.tick() => {
+                let ctx = ctx.read().await;
+                if let Err(error) = async_race::AsyncRaceManager::reconcile_pooled(&pool, &ctx).await {
+                    eprintln!("pooled qualifier reconciliation failed: {error}");
+                }
+            }
+            _ = shutdown.clone() => break,
+        }
     }
     Ok(())
 }
@@ -388,7 +575,7 @@ async fn async_race_manager(
     shutdown: rocket::Shutdown,
 ) -> Result<(), Error> {
     let mut interval = tokio::time::interval(Duration::from_secs(60)); // Check every minute
-    
+
     loop {
         tokio::select! {
             _ = interval.tick() => {
@@ -499,10 +686,7 @@ async fn speedgaming_export_manager(
 /// Background task for proactively creating weekly races so that the
 /// room-opening loop (`create_rooms`) can find them even if no page has
 /// been visited.
-async fn weekly_race_manager(
-    db_pool: PgPool,
-    shutdown: rocket::Shutdown,
-) -> Result<(), Error> {
+async fn weekly_race_manager(db_pool: PgPool, shutdown: rocket::Shutdown) -> Result<(), Error> {
     let mut interval = tokio::time::interval(Duration::from_secs(5 * 60)); // Check every 5 minutes
 
     loop {

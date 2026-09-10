@@ -1,12 +1,5 @@
 use crate::{
-    event::{
-        Data,
-        Error,
-        FindTeamError,
-        InfoError,
-        Tab,
-        enter,
-    },
+    event::{Data, Error, FindTeamError, InfoError, Tab, enter},
     prelude::*,
 };
 
@@ -31,97 +24,497 @@ pub(crate) struct Setting {
 }
 
 pub(crate) const S3_SETTINGS: &[Setting] = &[
-    Setting { name: "wincon", display: "win conditions", default: "meds", default_display: "default wincons", other: &[("scrubs", "Scrubs wincons"), ("th", "Triforce Hunt")], description: "wincon: meds (default: 6 Medallion Bridge + Keysy BK), scrubs (3 Stone Bridge + LACS BK), or th (Triforce Hunt 25/30)" },
-    Setting { name: "dungeons", display: "dungeons", default: "tournament", default_display: "tournament dungeons", other: &[("skulls", "dungeon tokens"), ("keyrings", "keyrings")], description: "dungeons: tournament (default: keys shuffled in own dungeon), skulls (vanilla keys, dungeon tokens), or keyrings (small keyrings anywhere, vanilla boss keys)" },
-    Setting { name: "er", display: "entrance rando", default: "off", default_display: "no ER", other: &[("dungeon", "dungeon ER")], description: "er: off (default) or dungeon" },
-    Setting { name: "trials", display: "trials", default: "0", default_display: "0 trials", other: &[("2", "2 trials")], description: "trials: 0 (default) or 2" },
-    Setting { name: "shops", display: "shops", default: "4", default_display: "shops 4", other: &[("off", "no shops")], description: "shops: 4 (default) or off" },
-    Setting { name: "scrubs", display: "scrubs", default: "affordable", default_display: "affordable scrubs", other: &[("off", "no scrubs")], description: "scrubs: affordable (default) or off" },
-    Setting { name: "fountain", display: "fountain", default: "closed", default_display: "closed fountain", other: &[("open", "open fountain")], description: "fountain: closed (default) or open" },
-    Setting { name: "spawn", display: "spawns", default: "tot", default_display: "ToT spawns", other: &[("random", "random spawns & starting age")], description: "spawn: tot (default: adult start, vanilla spawns) or random (random spawns and starting age)" },
+    Setting {
+        name: "wincon",
+        display: "win conditions",
+        default: "meds",
+        default_display: "default wincons",
+        other: &[("scrubs", "Scrubs wincons"), ("th", "Triforce Hunt")],
+        description: "wincon: meds (default: 6 Medallion Bridge + Keysy BK), scrubs (3 Stone Bridge + LACS BK), or th (Triforce Hunt 25/30)",
+    },
+    Setting {
+        name: "dungeons",
+        display: "dungeons",
+        default: "tournament",
+        default_display: "tournament dungeons",
+        other: &[("skulls", "dungeon tokens"), ("keyrings", "keyrings")],
+        description: "dungeons: tournament (default: keys shuffled in own dungeon), skulls (vanilla keys, dungeon tokens), or keyrings (small keyrings anywhere, vanilla boss keys)",
+    },
+    Setting {
+        name: "er",
+        display: "entrance rando",
+        default: "off",
+        default_display: "no ER",
+        other: &[("dungeon", "dungeon ER")],
+        description: "er: off (default) or dungeon",
+    },
+    Setting {
+        name: "trials",
+        display: "trials",
+        default: "0",
+        default_display: "0 trials",
+        other: &[("2", "2 trials")],
+        description: "trials: 0 (default) or 2",
+    },
+    Setting {
+        name: "shops",
+        display: "shops",
+        default: "4",
+        default_display: "shops 4",
+        other: &[("off", "no shops")],
+        description: "shops: 4 (default) or off",
+    },
+    Setting {
+        name: "scrubs",
+        display: "scrubs",
+        default: "affordable",
+        default_display: "affordable scrubs",
+        other: &[("off", "no scrubs")],
+        description: "scrubs: affordable (default) or off",
+    },
+    Setting {
+        name: "fountain",
+        display: "fountain",
+        default: "closed",
+        default_display: "closed fountain",
+        other: &[("open", "open fountain")],
+        description: "fountain: closed (default) or open",
+    },
+    Setting {
+        name: "spawn",
+        display: "spawns",
+        default: "tot",
+        default_display: "ToT spawns",
+        other: &[("random", "random spawns & starting age")],
+        description: "spawn: tot (default: adult start, vanilla spawns) or random (random spawns and starting age)",
+    },
 ];
 
 pub(crate) const S4_SETTINGS: &[Setting] = &[
-    Setting { name: "gbk", display: "Ganon boss key", default: "meds", default_display: "Ganon bk on 6 medallions", other: &[("stones", "Ganon bk on 3 stones"), ("th", "Triforce Hunt")], description: "gbk (Ganon boss key): meds (default: 6 medallions), stones (3 stones), or th (Triforce Hunt 25/30)" },
-    Setting { name: "bridge", display: "rainbow bridge", default: "meds", default_display: "6 medallions bridge", other: &[("dungeons", "7 dungeon rewards bridge"), ("vanilla", "vanilla bridge")], description: "bridge: meds (default: 6 medallions), dungeons (7 rewards), or vanilla" },
-    Setting { name: "trials", display: "trials", default: "0", default_display: "0 trials", other: &[("2", "2 trials")], description: "trials: 0 (default) or 2" },
-    Setting { name: "bosskeys", display: "boss keys", default: "dungeon", default_display: "own dungeon boss keys", other: &[("regional", "regional boss keys"), ("vanilla", "vanilla boss keys")], description: "bosskeys: dungeon (default), regional, or vanilla" },
-    Setting { name: "smallkeys", display: "small keys", default: "dungeon", default_display: "own dungeon small keys", other: &[("regional", "regional keyrings"), ("vanilla", "vanilla small keys")], description: "smallkeys: dungeon (default), regional (with keyrings), or vanilla" },
-    Setting { name: "deku", display: "open Deku", default: "open", default_display: "open Deku", other: &[("closed", "closed Deku")], description: "deku: open (Default) or closed" },
-    Setting { name: "fountain", display: "fountain", default: "closed", default_display: "closed fountain", other: &[("open", "open fountain")], description: "fountain: closed (default) or open" },
-    Setting { name: "spawn", display: "spawns", default: "tot", default_display: "ToT spawns", other: &[("random", "random spawns & starting age")], description: "spawn: tot (default: adult start, vanilla spawns) or random (random spawns and starting age)" },
-    Setting { name: "dungeon-er", display: "dungeon entrance rando", default: "off", default_display: "no dungeon ER", other: &[("on", "dungeon ER")], description: "dungeon-er: off (default) or on" },
-    Setting { name: "warps", display: "warp song entrance rando", default: "off", default_display: "vanilla warp songs", other: &[("on", "shuffled warp songs")], description: "warps: off (default) or on" },
-    Setting { name: "chubags", display: "bombchu drops", default: "off", default_display: "no bombchu drops", other: &[("on", "bombchu drops")], description: "chubags: off (default) or on" },
-    Setting { name: "shops", display: "shops", default: "4", default_display: "shops 4", other: &[("off", "no shops")], description: "shops: 4 (default) or off" },
-    Setting { name: "skulls", display: "tokens", default: "off", default_display: "no tokens", other: &[("dungeons", "dungeon tokens")], description: "skulls: off (default) or dungeons" },
-    Setting { name: "scrubs", display: "scrubs", default: "affordable", default_display: "affordable scrubs", other: &[("off", "no scrubs")], description: "scrubs: affordable (default) or off" },
-    Setting { name: "cows", display: "cows", default: "off", default_display: "no cows", other: &[("on", "cows")], description: "cows: off (default) or on" },
-    Setting { name: "card", display: "Gerudo card", default: "vanilla", default_display: "vanilla Gerudo card", other: &[("shuffle", "shuffled Gerudo card")], description: "card: vanilla (default) or shuffle" },
-    Setting { name: "merchants", display: "merchants", default: "off", default_display: "no merchants", other: &[("shuffle", "shuffled merchants")], description: "merchants: off (defaut) or shuffle" },
-    Setting { name: "frogs", display: "frogs", default: "off", default_display: "no frogs", other: &[("shuffle", "shuffled frogs")], description: "frogs: off (defaut) or shuffle" },
-    Setting { name: "camc", display: "CAMC", default: "texture", default_display: "chest texture matches contents", other: &[("off", "vanilla chest appearances"), ("both", "chest size & texture match contents")], description: "camc (Chest Appearance Matches Contents): texture (default), off, or both (size & texture)" },
-    Setting { name: "hints", display: "hint type", default: "path", default_display: "path hints", other: &[("woth", "Way of the Hero hints")], description: "hints: path (default) or woth" },
+    Setting {
+        name: "gbk",
+        display: "Ganon boss key",
+        default: "meds",
+        default_display: "Ganon bk on 6 medallions",
+        other: &[("stones", "Ganon bk on 3 stones"), ("th", "Triforce Hunt")],
+        description: "gbk (Ganon boss key): meds (default: 6 medallions), stones (3 stones), or th (Triforce Hunt 25/30)",
+    },
+    Setting {
+        name: "bridge",
+        display: "rainbow bridge",
+        default: "meds",
+        default_display: "6 medallions bridge",
+        other: &[
+            ("dungeons", "7 dungeon rewards bridge"),
+            ("vanilla", "vanilla bridge"),
+        ],
+        description: "bridge: meds (default: 6 medallions), dungeons (7 rewards), or vanilla",
+    },
+    Setting {
+        name: "trials",
+        display: "trials",
+        default: "0",
+        default_display: "0 trials",
+        other: &[("2", "2 trials")],
+        description: "trials: 0 (default) or 2",
+    },
+    Setting {
+        name: "bosskeys",
+        display: "boss keys",
+        default: "dungeon",
+        default_display: "own dungeon boss keys",
+        other: &[
+            ("regional", "regional boss keys"),
+            ("vanilla", "vanilla boss keys"),
+        ],
+        description: "bosskeys: dungeon (default), regional, or vanilla",
+    },
+    Setting {
+        name: "smallkeys",
+        display: "small keys",
+        default: "dungeon",
+        default_display: "own dungeon small keys",
+        other: &[
+            ("regional", "regional keyrings"),
+            ("vanilla", "vanilla small keys"),
+        ],
+        description: "smallkeys: dungeon (default), regional (with keyrings), or vanilla",
+    },
+    Setting {
+        name: "deku",
+        display: "open Deku",
+        default: "open",
+        default_display: "open Deku",
+        other: &[("closed", "closed Deku")],
+        description: "deku: open (Default) or closed",
+    },
+    Setting {
+        name: "fountain",
+        display: "fountain",
+        default: "closed",
+        default_display: "closed fountain",
+        other: &[("open", "open fountain")],
+        description: "fountain: closed (default) or open",
+    },
+    Setting {
+        name: "spawn",
+        display: "spawns",
+        default: "tot",
+        default_display: "ToT spawns",
+        other: &[("random", "random spawns & starting age")],
+        description: "spawn: tot (default: adult start, vanilla spawns) or random (random spawns and starting age)",
+    },
+    Setting {
+        name: "dungeon-er",
+        display: "dungeon entrance rando",
+        default: "off",
+        default_display: "no dungeon ER",
+        other: &[("on", "dungeon ER")],
+        description: "dungeon-er: off (default) or on",
+    },
+    Setting {
+        name: "warps",
+        display: "warp song entrance rando",
+        default: "off",
+        default_display: "vanilla warp songs",
+        other: &[("on", "shuffled warp songs")],
+        description: "warps: off (default) or on",
+    },
+    Setting {
+        name: "chubags",
+        display: "bombchu drops",
+        default: "off",
+        default_display: "no bombchu drops",
+        other: &[("on", "bombchu drops")],
+        description: "chubags: off (default) or on",
+    },
+    Setting {
+        name: "shops",
+        display: "shops",
+        default: "4",
+        default_display: "shops 4",
+        other: &[("off", "no shops")],
+        description: "shops: 4 (default) or off",
+    },
+    Setting {
+        name: "skulls",
+        display: "tokens",
+        default: "off",
+        default_display: "no tokens",
+        other: &[("dungeons", "dungeon tokens")],
+        description: "skulls: off (default) or dungeons",
+    },
+    Setting {
+        name: "scrubs",
+        display: "scrubs",
+        default: "affordable",
+        default_display: "affordable scrubs",
+        other: &[("off", "no scrubs")],
+        description: "scrubs: affordable (default) or off",
+    },
+    Setting {
+        name: "cows",
+        display: "cows",
+        default: "off",
+        default_display: "no cows",
+        other: &[("on", "cows")],
+        description: "cows: off (default) or on",
+    },
+    Setting {
+        name: "card",
+        display: "Gerudo card",
+        default: "vanilla",
+        default_display: "vanilla Gerudo card",
+        other: &[("shuffle", "shuffled Gerudo card")],
+        description: "card: vanilla (default) or shuffle",
+    },
+    Setting {
+        name: "merchants",
+        display: "merchants",
+        default: "off",
+        default_display: "no merchants",
+        other: &[("shuffle", "shuffled merchants")],
+        description: "merchants: off (defaut) or shuffle",
+    },
+    Setting {
+        name: "frogs",
+        display: "frogs",
+        default: "off",
+        default_display: "no frogs",
+        other: &[("shuffle", "shuffled frogs")],
+        description: "frogs: off (defaut) or shuffle",
+    },
+    Setting {
+        name: "camc",
+        display: "CAMC",
+        default: "texture",
+        default_display: "chest texture matches contents",
+        other: &[
+            ("off", "vanilla chest appearances"),
+            ("both", "chest size & texture match contents"),
+        ],
+        description: "camc (Chest Appearance Matches Contents): texture (default), off, or both (size & texture)",
+    },
+    Setting {
+        name: "hints",
+        display: "hint type",
+        default: "path",
+        default_display: "path hints",
+        other: &[("woth", "Way of the Hero hints")],
+        description: "hints: path (default) or woth",
+    },
 ];
 
 pub(crate) const S5_SETTINGS: &[Setting] = &[
-    Setting { name: "gbk", display: "Ganon boss key", default: "meds", default_display: "Ganon bk on 6 medallions", other: &[("stones", "Ganon bk on 3 stones"), ("th", "Triforce Hunt")], description: "gbk (Ganon boss key): meds (default: 6 medallions), stones (3 stones), or th (Triforce Hunt 24/28)" },
-    Setting { name: "bridge", display: "rainbow bridge", default: "meds", default_display: "6 medallions bridge", other: &[("dungeons", "7 dungeon rewards bridge"), ("vanilla", "vanilla bridge")], description: "bridge: meds (default: 6 medallions), dungeons (7 rewards), or vanilla" },
-    Setting { name: "trials", display: "trials", default: "0", default_display: "0 trials", other: &[("2", "2 trials")], description: "trials: 0 (default) or 2" },
-    Setting { name: "bosskeys", display: "boss keys", default: "dungeon", default_display: "own dungeon boss keys", other: &[("regional", "regional boss keys"), ("vanilla", "vanilla boss keys")], description: "bosskeys: dungeon (default), regional, or vanilla" },
-    Setting { name: "smallkeys", display: "small keys", default: "dungeon", default_display: "own dungeon small keys", other: &[("regional", "regional keyrings"), ("vanilla", "vanilla small keys")], description: "smallkeys: dungeon (default), regional (with keyrings), or vanilla" },
-    Setting { name: "deku", display: "open Deku", default: "open", default_display: "open Deku", other: &[("closed", "closed Deku")], description: "deku: open (Default) or closed" },
-    Setting { name: "fountain", display: "fountain", default: "closed", default_display: "closed fountain", other: &[("open", "open fountain")], description: "fountain: closed (default) or open" },
-    Setting { name: "spawn", display: "spawns", default: "tot", default_display: "ToT spawns", other: &[("random", "random spawns & starting age")], description: "spawn: tot (default: adult start, vanilla spawns) or random (random spawns and starting age)" },
-    Setting { name: "dungeon-er", display: "dungeon entrance rando", default: "off", default_display: "no dungeon ER", other: &[("on", "dungeon ER")], description: "dungeon-er: off (default) or on" },
-    Setting { name: "boss-er", display: "boss entrance rando", default: "off", default_display: "no boss ER", other: &[("full", "full boss ER")], description: "boss-er: off (default) or full" },
-    Setting { name: "warps", display: "warp song entrance rando", default: "off", default_display: "vanilla warp songs", other: &[("on", "shuffled warp songs")], description: "warps: off (default) or on" },
-    Setting { name: "chubags", display: "bombchu drops", default: "off", default_display: "no bombchu drops", other: &[("on", "bombchu drops")], description: "chubags: off (default) or on" },
-    Setting { name: "shops", display: "shops", default: "4", default_display: "shops 4", other: &[("off", "no shops")], description: "shops: 4 (default) or off" },
-    Setting { name: "skulls", display: "tokens", default: "dungeons", default_display: "dungeon tokens", other: &[("off", "no tokens")], description: "skulls: dungeons (default) or off" },
-    Setting { name: "scrubs", display: "scrubs", default: "affordable", default_display: "affordable scrubs", other: &[("off", "no scrubs")], description: "scrubs: affordable (default) or off" },
-    Setting { name: "cows", display: "cows", default: "off", default_display: "no cows", other: &[("on", "cows")], description: "cows: off (default) or on" },
-    Setting { name: "card", display: "Gerudo card", default: "vanilla", default_display: "vanilla Gerudo card", other: &[("shuffle", "shuffled Gerudo card")], description: "card: vanilla (default) or shuffle" },
-    Setting { name: "frogs", display: "frogs", default: "off", default_display: "no frogs", other: &[("shuffle", "shuffled frogs")], description: "frogs: off (defaut) or shuffle" },
-    Setting { name: "camc", display: "CAMC", default: "both", default_display: "chest size & texture match contents", other: &[("off", "vanilla chest appearances")], description: "camc (Chest Appearance Matches Contents): both (default: size & texture) or off" },
-    Setting { name: "hints", display: "hint type", default: "path", default_display: "path hints", other: &[("woth", "Way of the Hero hints")], description: "hints: path (default) or woth" },
+    Setting {
+        name: "gbk",
+        display: "Ganon boss key",
+        default: "meds",
+        default_display: "Ganon bk on 6 medallions",
+        other: &[("stones", "Ganon bk on 3 stones"), ("th", "Triforce Hunt")],
+        description: "gbk (Ganon boss key): meds (default: 6 medallions), stones (3 stones), or th (Triforce Hunt 24/28)",
+    },
+    Setting {
+        name: "bridge",
+        display: "rainbow bridge",
+        default: "meds",
+        default_display: "6 medallions bridge",
+        other: &[
+            ("dungeons", "7 dungeon rewards bridge"),
+            ("vanilla", "vanilla bridge"),
+        ],
+        description: "bridge: meds (default: 6 medallions), dungeons (7 rewards), or vanilla",
+    },
+    Setting {
+        name: "trials",
+        display: "trials",
+        default: "0",
+        default_display: "0 trials",
+        other: &[("2", "2 trials")],
+        description: "trials: 0 (default) or 2",
+    },
+    Setting {
+        name: "bosskeys",
+        display: "boss keys",
+        default: "dungeon",
+        default_display: "own dungeon boss keys",
+        other: &[
+            ("regional", "regional boss keys"),
+            ("vanilla", "vanilla boss keys"),
+        ],
+        description: "bosskeys: dungeon (default), regional, or vanilla",
+    },
+    Setting {
+        name: "smallkeys",
+        display: "small keys",
+        default: "dungeon",
+        default_display: "own dungeon small keys",
+        other: &[
+            ("regional", "regional keyrings"),
+            ("vanilla", "vanilla small keys"),
+        ],
+        description: "smallkeys: dungeon (default), regional (with keyrings), or vanilla",
+    },
+    Setting {
+        name: "deku",
+        display: "open Deku",
+        default: "open",
+        default_display: "open Deku",
+        other: &[("closed", "closed Deku")],
+        description: "deku: open (Default) or closed",
+    },
+    Setting {
+        name: "fountain",
+        display: "fountain",
+        default: "closed",
+        default_display: "closed fountain",
+        other: &[("open", "open fountain")],
+        description: "fountain: closed (default) or open",
+    },
+    Setting {
+        name: "spawn",
+        display: "spawns",
+        default: "tot",
+        default_display: "ToT spawns",
+        other: &[("random", "random spawns & starting age")],
+        description: "spawn: tot (default: adult start, vanilla spawns) or random (random spawns and starting age)",
+    },
+    Setting {
+        name: "dungeon-er",
+        display: "dungeon entrance rando",
+        default: "off",
+        default_display: "no dungeon ER",
+        other: &[("on", "dungeon ER")],
+        description: "dungeon-er: off (default) or on",
+    },
+    Setting {
+        name: "boss-er",
+        display: "boss entrance rando",
+        default: "off",
+        default_display: "no boss ER",
+        other: &[("full", "full boss ER")],
+        description: "boss-er: off (default) or full",
+    },
+    Setting {
+        name: "warps",
+        display: "warp song entrance rando",
+        default: "off",
+        default_display: "vanilla warp songs",
+        other: &[("on", "shuffled warp songs")],
+        description: "warps: off (default) or on",
+    },
+    Setting {
+        name: "chubags",
+        display: "bombchu drops",
+        default: "off",
+        default_display: "no bombchu drops",
+        other: &[("on", "bombchu drops")],
+        description: "chubags: off (default) or on",
+    },
+    Setting {
+        name: "shops",
+        display: "shops",
+        default: "4",
+        default_display: "shops 4",
+        other: &[("off", "no shops")],
+        description: "shops: 4 (default) or off",
+    },
+    Setting {
+        name: "skulls",
+        display: "tokens",
+        default: "dungeons",
+        default_display: "dungeon tokens",
+        other: &[("off", "no tokens")],
+        description: "skulls: dungeons (default) or off",
+    },
+    Setting {
+        name: "scrubs",
+        display: "scrubs",
+        default: "affordable",
+        default_display: "affordable scrubs",
+        other: &[("off", "no scrubs")],
+        description: "scrubs: affordable (default) or off",
+    },
+    Setting {
+        name: "cows",
+        display: "cows",
+        default: "off",
+        default_display: "no cows",
+        other: &[("on", "cows")],
+        description: "cows: off (default) or on",
+    },
+    Setting {
+        name: "card",
+        display: "Gerudo card",
+        default: "vanilla",
+        default_display: "vanilla Gerudo card",
+        other: &[("shuffle", "shuffled Gerudo card")],
+        description: "card: vanilla (default) or shuffle",
+    },
+    Setting {
+        name: "frogs",
+        display: "frogs",
+        default: "off",
+        default_display: "no frogs",
+        other: &[("shuffle", "shuffled frogs")],
+        description: "frogs: off (defaut) or shuffle",
+    },
+    Setting {
+        name: "camc",
+        display: "CAMC",
+        default: "both",
+        default_display: "chest size & texture match contents",
+        other: &[("off", "vanilla chest appearances")],
+        description: "camc (Chest Appearance Matches Contents): both (default: size & texture) or off",
+    },
+    Setting {
+        name: "hints",
+        display: "hint type",
+        default: "path",
+        default_display: "path hints",
+        other: &[("woth", "Way of the Hero hints")],
+        description: "hints: path (default) or woth",
+    },
 ];
 
 pub(crate) fn display_s3_draft_picks(picks: &draft::Picks) -> String {
-    English.join_str_opt(
-        S3_SETTINGS.iter().copied()
-            .filter_map(|Setting { name, other, .. }| picks.get(name).and_then(|pick| other.iter().find(|(other, _)| pick == other)).map(|(_, display)| display)),
-    ).unwrap_or_else(|| format!("base settings"))
+    English
+        .join_str_opt(
+            S3_SETTINGS
+                .iter()
+                .copied()
+                .filter_map(|Setting { name, other, .. }| {
+                    picks
+                        .get(name)
+                        .and_then(|pick| other.iter().find(|(other, _)| pick == other))
+                        .map(|(_, display)| display)
+                }),
+        )
+        .unwrap_or_else(|| format!("base settings"))
 }
 
 pub(crate) fn display_s4_draft_picks(picks: &draft::Picks) -> String {
-    English.join_str_opt(
-        S4_SETTINGS.iter().copied()
-            .filter_map(|Setting { name, other, .. }|
-                picks.get(name)
-                    .cloned()
-                    .or_else(|| (name == "camc" && picks.get("special_csmc").map(|special_csmc| &**special_csmc).unwrap_or("no") == "yes").then_some(Cow::Borrowed("both")))
-                    .and_then(|pick| other.iter().find(|&(other, _)| pick == *other))
-                    .map(|(_, display)| display)
-            ),
-    ).unwrap_or_else(|| format!("base settings"))
+    English
+        .join_str_opt(
+            S4_SETTINGS
+                .iter()
+                .copied()
+                .filter_map(|Setting { name, other, .. }| {
+                    picks
+                        .get(name)
+                        .cloned()
+                        .or_else(|| {
+                            (name == "camc"
+                                && picks
+                                    .get("special_csmc")
+                                    .map(|special_csmc| &**special_csmc)
+                                    .unwrap_or("no")
+                                    == "yes")
+                                .then_some(Cow::Borrowed("both"))
+                        })
+                        .and_then(|pick| other.iter().find(|&(other, _)| pick == *other))
+                        .map(|(_, display)| display)
+                }),
+        )
+        .unwrap_or_else(|| format!("base settings"))
 }
 
 pub(crate) fn display_s5_draft_picks(picks: &draft::Picks) -> String {
-    English.join_str_opt(
-        S5_SETTINGS.iter().copied()
-            .filter_map(|Setting { name, other, .. }| picks.get(name).and_then(|pick| other.iter().find(|(other, _)| pick == other)).map(|(_, display)| display)),
-    ).unwrap_or_else(|| format!("base settings"))
+    English
+        .join_str_opt(
+            S5_SETTINGS
+                .iter()
+                .copied()
+                .filter_map(|Setting { name, other, .. }| {
+                    picks
+                        .get(name)
+                        .and_then(|pick| other.iter().find(|(other, _)| pick == other))
+                        .map(|(_, display)| display)
+                }),
+        )
+        .unwrap_or_else(|| format!("base settings"))
 }
 
 pub(crate) fn resolve_s3_draft_settings(picks: &draft::Picks) -> seed::Settings {
-    let wincon = picks.get("wincon").map(|wincon| &**wincon).unwrap_or("meds");
-    let dungeons = picks.get("dungeons").map(|dungeons| &**dungeons).unwrap_or("tournament");
+    let wincon = picks
+        .get("wincon")
+        .map(|wincon| &**wincon)
+        .unwrap_or("meds");
+    let dungeons = picks
+        .get("dungeons")
+        .map(|dungeons| &**dungeons)
+        .unwrap_or("tournament");
     let er = picks.get("er").map(|er| &**er).unwrap_or("off");
     let trials = picks.get("trials").map(|trials| &**trials).unwrap_or("0");
     let shops = picks.get("shops").map(|shops| &**shops).unwrap_or("4");
-    let scrubs = picks.get("scrubs").map(|scrubs| &**scrubs).unwrap_or("affordable");
-    let fountain = picks.get("fountain").map(|fountain| &**fountain).unwrap_or("closed");
+    let scrubs = picks
+        .get("scrubs")
+        .map(|scrubs| &**scrubs)
+        .unwrap_or("affordable");
+    let fountain = picks
+        .get("fountain")
+        .map(|fountain| &**fountain)
+        .unwrap_or("closed");
     let spawn = picks.get("spawn").map(|spawn| &**spawn).unwrap_or("tot");
     collect![
         format!("user_message") => json!("3rd Multiworld Tournament"),
@@ -243,24 +636,59 @@ pub(crate) fn resolve_s3_draft_settings(picks: &draft::Picks) -> seed::Settings 
 
 pub(crate) fn resolve_s4_draft_settings(picks: &draft::Picks) -> seed::Settings {
     let gbk = picks.get("gbk").map(|gbk| &**gbk).unwrap_or("meds");
-    let bridge = picks.get("bridge").map(|bridge| &**bridge).unwrap_or("meds");
+    let bridge = picks
+        .get("bridge")
+        .map(|bridge| &**bridge)
+        .unwrap_or("meds");
     let trials = picks.get("trials").map(|trials| &**trials).unwrap_or("0");
-    let bosskeys = picks.get("bosskeys").map(|bosskeys| &**bosskeys).unwrap_or("dungeon");
-    let smallkeys = picks.get("smallkeys").map(|smallkeys| &**smallkeys).unwrap_or("dungeon");
+    let bosskeys = picks
+        .get("bosskeys")
+        .map(|bosskeys| &**bosskeys)
+        .unwrap_or("dungeon");
+    let smallkeys = picks
+        .get("smallkeys")
+        .map(|smallkeys| &**smallkeys)
+        .unwrap_or("dungeon");
     let deku = picks.get("deku").map(|deku| &**deku).unwrap_or("open");
-    let fountain = picks.get("fountain").map(|fountain| &**fountain).unwrap_or("closed");
+    let fountain = picks
+        .get("fountain")
+        .map(|fountain| &**fountain)
+        .unwrap_or("closed");
     let spawn = picks.get("spawn").map(|spawn| &**spawn).unwrap_or("tot");
-    let dungeon_er = picks.get("dungeon-er").map(|dungeon_er| &**dungeon_er).unwrap_or("off");
+    let dungeon_er = picks
+        .get("dungeon-er")
+        .map(|dungeon_er| &**dungeon_er)
+        .unwrap_or("off");
     let warps = picks.get("warps").map(|warps| &**warps).unwrap_or("off");
-    let chubags = picks.get("chubags").map(|chubags| &**chubags).unwrap_or("off");
+    let chubags = picks
+        .get("chubags")
+        .map(|chubags| &**chubags)
+        .unwrap_or("off");
     let shops = picks.get("shops").map(|shops| &**shops).unwrap_or("4");
     let skulls = picks.get("skulls").map(|skulls| &**skulls).unwrap_or("off");
-    let scrubs = picks.get("scrubs").map(|scrubs| &**scrubs).unwrap_or("affordable");
+    let scrubs = picks
+        .get("scrubs")
+        .map(|scrubs| &**scrubs)
+        .unwrap_or("affordable");
     let cows = picks.get("cows").map(|cows| &**cows).unwrap_or("off");
     let card = picks.get("card").map(|card| &**card).unwrap_or("vanilla");
-    let merchants = picks.get("merchants").map(|merchants| &**merchants).unwrap_or("off");
+    let merchants = picks
+        .get("merchants")
+        .map(|merchants| &**merchants)
+        .unwrap_or("off");
     let frogs = picks.get("frogs").map(|frogs| &**frogs).unwrap_or("off");
-    let camc = picks.get("camc").map(|camc| &**camc).unwrap_or(if picks.get("special_csmc").map(|special_csmc| &**special_csmc).unwrap_or("no") == "yes" { "both" } else { "texture" });
+    let camc = picks.get("camc").map(|camc| &**camc).unwrap_or(
+        if picks
+            .get("special_csmc")
+            .map(|special_csmc| &**special_csmc)
+            .unwrap_or("no")
+            == "yes"
+        {
+            "both"
+        } else {
+            "texture"
+        },
+    );
     let hints = picks.get("hints").map(|hints| &**hints).unwrap_or("path");
     collect![
         format!("user_message") => json!("4th Multiworld Tournament"),
@@ -406,20 +834,47 @@ pub(crate) fn resolve_s4_draft_settings(picks: &draft::Picks) -> seed::Settings 
 
 pub(crate) fn resolve_s5_draft_settings(picks: &draft::Picks) -> seed::Settings {
     let gbk = picks.get("gbk").map(|gbk| &**gbk).unwrap_or("meds");
-    let bridge = picks.get("bridge").map(|bridge| &**bridge).unwrap_or("meds");
+    let bridge = picks
+        .get("bridge")
+        .map(|bridge| &**bridge)
+        .unwrap_or("meds");
     let trials = picks.get("trials").map(|trials| &**trials).unwrap_or("0");
-    let bosskeys = picks.get("bosskeys").map(|bosskeys| &**bosskeys).unwrap_or("dungeon");
-    let smallkeys = picks.get("smallkeys").map(|smallkeys| &**smallkeys).unwrap_or("dungeon");
+    let bosskeys = picks
+        .get("bosskeys")
+        .map(|bosskeys| &**bosskeys)
+        .unwrap_or("dungeon");
+    let smallkeys = picks
+        .get("smallkeys")
+        .map(|smallkeys| &**smallkeys)
+        .unwrap_or("dungeon");
     let deku = picks.get("deku").map(|deku| &**deku).unwrap_or("open");
-    let fountain = picks.get("fountain").map(|fountain| &**fountain).unwrap_or("closed");
+    let fountain = picks
+        .get("fountain")
+        .map(|fountain| &**fountain)
+        .unwrap_or("closed");
     let spawn = picks.get("spawn").map(|spawn| &**spawn).unwrap_or("tot");
-    let dungeon_er = picks.get("dungeon-er").map(|dungeon_er| &**dungeon_er).unwrap_or("off");
-    let boss_er = picks.get("boss-er").map(|boss_er| &**boss_er).unwrap_or("off");
+    let dungeon_er = picks
+        .get("dungeon-er")
+        .map(|dungeon_er| &**dungeon_er)
+        .unwrap_or("off");
+    let boss_er = picks
+        .get("boss-er")
+        .map(|boss_er| &**boss_er)
+        .unwrap_or("off");
     let warps = picks.get("warps").map(|warps| &**warps).unwrap_or("off");
-    let chubags = picks.get("chubags").map(|chubags| &**chubags).unwrap_or("off");
+    let chubags = picks
+        .get("chubags")
+        .map(|chubags| &**chubags)
+        .unwrap_or("off");
     let shops = picks.get("shops").map(|shops| &**shops).unwrap_or("4");
-    let skulls = picks.get("skulls").map(|skulls| &**skulls).unwrap_or("dungeons");
-    let scrubs = picks.get("scrubs").map(|scrubs| &**scrubs).unwrap_or("affordable");
+    let skulls = picks
+        .get("skulls")
+        .map(|skulls| &**skulls)
+        .unwrap_or("dungeons");
+    let scrubs = picks
+        .get("scrubs")
+        .map(|scrubs| &**scrubs)
+        .unwrap_or("affordable");
     let cows = picks.get("cows").map(|cows| &**cows).unwrap_or("off");
     let card = picks.get("card").map(|card| &**card).unwrap_or("vanilla");
     let frogs = picks.get("frogs").map(|frogs| &**frogs).unwrap_or("off");
@@ -568,16 +1023,26 @@ pub(crate) fn resolve_s5_draft_settings(picks: &draft::Picks) -> seed::Settings 
 }
 
 pub(crate) fn s3_chests(picks: &draft::Picks) -> ChestAppearances {
-    static WEIGHTS: LazyLock<HashMap<String, Vec<(ChestAppearances, usize)>>> = LazyLock::new(|| serde_json::from_str(include_str!("../../assets/event/mw/chests-3-6.2.181.json")).expect("failed to parse chest weights")); //TODO update to 6.2.205
+    static WEIGHTS: LazyLock<HashMap<String, Vec<(ChestAppearances, usize)>>> =
+        LazyLock::new(|| {
+            serde_json::from_str(include_str!("../../assets/event/mw/chests-3-6.2.181.json"))
+                .expect("failed to parse chest weights")
+        }); //TODO update to 6.2.205
 
     if let Some(settings_weights) = WEIGHTS.get(&display_s3_draft_picks(picks)) {
-        settings_weights.choose_weighted(&mut rng(), |(_, weight)| *weight).expect("failed to choose random chest textures").0
+        settings_weights
+            .choose_weighted(&mut rng(), |(_, weight)| *weight)
+            .expect("failed to choose random chest textures")
+            .0
     } else {
         ChestAppearances::INVISIBLE
     }
 }
 
-pub(crate) async fn info(transaction: &mut Transaction<'_, Postgres>, data: &Data<'_>) -> Result<Option<RawHtml<String>>, InfoError> {
+pub(crate) async fn info(
+    transaction: &mut Transaction<'_, Postgres>,
+    data: &Data<'_>,
+) -> Result<Option<RawHtml<String>>, InfoError> {
     Ok(match &*data.event {
         "1" => Some(html! {
             article {
@@ -1703,8 +2168,18 @@ pub(crate) struct RaceTimeTeamMember {
     pub(crate) name: String,
 }
 
-pub(crate) async fn enter_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>, uri: Origin<'_>, csrf: Option<&CsrfToken>, data: Data<'_>, ctx: Context<'_>, http_client: &reqwest::Client) -> Result<RawHtml<String>, Error> {
-    let header = data.header(&mut transaction, me.as_ref(), Tab::Enter, false).await?;
+pub(crate) async fn enter_form(
+    mut transaction: Transaction<'_, Postgres>,
+    me: Option<User>,
+    uri: Origin<'_>,
+    csrf: Option<&CsrfToken>,
+    data: Data<'_>,
+    ctx: Context<'_>,
+    http_client: &reqwest::Client,
+) -> Result<RawHtml<String>, Error> {
+    let header = data
+        .header(&mut transaction, me.as_ref(), Tab::Enter, false)
+        .await?;
     Ok(page(transaction, &me, &uri, PageStyle { chests: data.chests().await?, ..PageStyle::default() }, &format!("Enter — {}", data.display_name), if let Some(ref me) = me {
         match me.racetime_user_data(http_client).await? {
             Some(Some(racetime_user)) => {
@@ -1776,9 +2251,7 @@ pub(crate) async fn enter_form(mut transaction: Transaction<'_, Postgres>, me: O
 //TODO this is no longer needed since the forms have been merged
 pub(crate) enum EnterFormStep2Defaults<'a> {
     Context(Context<'a>),
-    Values {
-        racetime_team: RaceTimeTeamData,
-    },
+    Values { racetime_team: RaceTimeTeamData },
 }
 
 impl<'v> EnterFormStep2Defaults<'v> {
@@ -1799,32 +2272,45 @@ impl<'v> EnterFormStep2Defaults<'v> {
     pub(crate) fn racetime_team_name(&self) -> Option<&str> {
         match self {
             Self::Context(ctx) => ctx.field_value("racetime_team_name"),
-            Self::Values { racetime_team: RaceTimeTeamData { name, .. } } => Some(name),
+            Self::Values {
+                racetime_team: RaceTimeTeamData { name, .. },
+            } => Some(name),
         }
     }
 
     pub(crate) fn racetime_team_slug(&self) -> Option<&str> {
         match self {
             Self::Context(ctx) => ctx.field_value("racetime_team"),
-            Self::Values { racetime_team: RaceTimeTeamData { slug, .. } } => Some(slug),
+            Self::Values {
+                racetime_team: RaceTimeTeamData { slug, .. },
+            } => Some(slug),
         }
     }
 
-    pub(crate) fn racetime_members(&self, http_client: &reqwest::Client) -> impl Future<Output = Result<Vec<RaceTimeTeamMember>, Error>> + use<> {
+    pub(crate) fn racetime_members(
+        &self,
+        http_client: &reqwest::Client,
+    ) -> impl Future<Output = Result<Vec<RaceTimeTeamMember>, Error>> + use<> {
         match self {
-            Self::Context(ctx) => if let Some(team_slug) = ctx.field_value("racetime_team") {
-                let http_client = http_client.clone();
-                let url = format!("https://{}/team/{team_slug}/data", racetime_host());
-                async move {
-                    Ok(http_client.get(url)
-                        .send().await?
-                        .detailed_error_for_status().await?
-                        .json_with_text_in_error::<RaceTimeTeamData>().await?
-                        .members
-                    )
-                }.boxed()
-            } else {
-                future::ok(Vec::default()).boxed()
+            Self::Context(ctx) => {
+                if let Some(team_slug) = ctx.field_value("racetime_team") {
+                    let http_client = http_client.clone();
+                    let url = format!("https://{}/team/{team_slug}/data", racetime_host());
+                    async move {
+                        Ok(http_client
+                            .get(url)
+                            .send()
+                            .await?
+                            .detailed_error_for_status()
+                            .await?
+                            .json_with_text_in_error::<RaceTimeTeamData>()
+                            .await?
+                            .members)
+                    }
+                    .boxed()
+                } else {
+                    future::ok(Vec::default()).boxed()
+                }
             }
             Self::Values { racetime_team } => future::ok(racetime_team.members.clone()).boxed(),
         }
@@ -1832,7 +2318,9 @@ impl<'v> EnterFormStep2Defaults<'v> {
 
     pub(crate) fn role(&self, racetime_id: &str) -> Option<event::Role> {
         match self {
-            Self::Context(ctx) => ctx.field_value(&*format!("roles[{racetime_id}]")).and_then(event::Role::from_css_class),
+            Self::Context(ctx) => ctx
+                .field_value(&*format!("roles[{racetime_id}]"))
+                .and_then(event::Role::from_css_class),
             Self::Values { .. } => None,
         }
     }
@@ -1867,8 +2355,17 @@ impl<'v> EnterFormStep2Defaults<'v> {
     }
 }
 
-pub(crate) async fn find_team_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>, uri: Origin<'_>, csrf: Option<&CsrfToken>, data: Data<'_>, ctx: Context<'_>) -> Result<RawHtml<String>, FindTeamError> {
-    let header = data.header(&mut transaction, me.as_ref(), Tab::FindTeam, false).await?;
+pub(crate) async fn find_team_form(
+    mut transaction: Transaction<'_, Postgres>,
+    me: Option<User>,
+    uri: Origin<'_>,
+    csrf: Option<&CsrfToken>,
+    data: Data<'_>,
+    ctx: Context<'_>,
+) -> Result<RawHtml<String>, FindTeamError> {
+    let header = data
+        .header(&mut transaction, me.as_ref(), Tab::FindTeam, false)
+        .await?;
     let mut me_listed = false;
     let mut looking_for_team = Vec::default();
     for row in sqlx::query!(r#"SELECT user_id AS "user: Id<Users>", availability, notes FROM looking_for_team WHERE series = $1 AND event = $2"#, data.series as _, &data.event).fetch_all(&mut *transaction).await? {
@@ -1881,25 +2378,35 @@ pub(crate) async fn find_team_form(mut transaction: Transaction<'_, Postgres>, m
         if me_listed {
             None
         } else {
-            Some(full_form(uri!(event::find_team_post(data.series, &*data.event)), csrf, html! {
-                @if data.is_single_race() {
-                    legend {
-                        : "Click this button to add yourself to the list below.";
+            Some(full_form(
+                uri!(event::find_team_post(data.series, &*data.event)),
+                csrf,
+                html! {
+                    @if data.is_single_race() {
+                        legend {
+                            : "Click this button to add yourself to the list below.";
+                        }
+                    } else {
+                        legend {
+                            : "Fill out this form to add yourself to the list below.";
+                        }
+                        : form_field("availability", &mut errors, html! {
+                            label(for = "availability") : "Timezone/Availability/Commitment:";
+                            input(type = "text", name = "availability", value? = ctx.field_value("availability"));
+                        });
+                        : form_field("notes", &mut errors, html! {
+                            label(for = "notes") : "Any Other Notes?";
+                            input(type = "text", name = "notes", value? = ctx.field_value("notes"));
+                        });
                     }
+                },
+                errors,
+                if data.is_single_race() {
+                    "Looking for Team"
                 } else {
-                    legend {
-                        : "Fill out this form to add yourself to the list below.";
-                    }
-                    : form_field("availability", &mut errors, html! {
-                        label(for = "availability") : "Timezone/Availability/Commitment:";
-                        input(type = "text", name = "availability", value? = ctx.field_value("availability"));
-                    });
-                    : form_field("notes", &mut errors, html! {
-                        label(for = "notes") : "Any Other Notes?";
-                        input(type = "text", name = "notes", value? = ctx.field_value("notes"));
-                    });
-                }
-            }, errors, if data.is_single_race() { "Looking for Team" } else { "Submit" }))
+                    "Submit"
+                },
+            ))
         }
     } else {
         Some(html! {
@@ -1911,40 +2418,51 @@ pub(crate) async fn find_team_form(mut transaction: Transaction<'_, Postgres>, m
             }
         })
     };
-    Ok(page(transaction, &me, &uri, PageStyle { chests: data.chests().await?, ..PageStyle::default() }, &format!("Find Teammates — {}", data.display_name), html! {
-        : header;
-        : form;
-        table {
-            thead {
-                tr {
-                    th : "User";
-                    @if !data.is_single_race() {
-                        th : "Timezone/Availability/Commitment";
-                        th : "Notes";
-                    }
-                }
-            }
-            tbody {
-                @if looking_for_team.is_empty() {
+    Ok(page(
+        transaction,
+        &me,
+        &uri,
+        PageStyle {
+            chests: data.chests().await?,
+            ..PageStyle::default()
+        },
+        &format!("Find Teammates — {}", data.display_name),
+        html! {
+            : header;
+            : form;
+            table {
+                thead {
                     tr {
-                        td(colspan = if data.is_single_race() { "1" } else { "3" }) {
-                            i : "(no one currently looking for teammates)";
+                        th : "User";
+                        @if !data.is_single_race() {
+                            th : "Timezone/Availability/Commitment";
+                            th : "Notes";
                         }
                     }
-                } else {
-                    @for (user, availability, notes) in looking_for_team {
+                }
+                tbody {
+                    @if looking_for_team.is_empty() {
                         tr {
-                            td : user;
-                            @if !data.is_single_race() {
-                                td : availability;
-                                td : notes;
+                            td(colspan = if data.is_single_race() { "1" } else { "3" }) {
+                                i : "(no one currently looking for teammates)";
+                            }
+                        }
+                    } else {
+                        @for (user, availability, notes) in looking_for_team {
+                            tr {
+                                td : user;
+                                @if !data.is_single_race() {
+                                    td : availability;
+                                    td : notes;
+                                }
                             }
                         }
                     }
                 }
             }
-        }
-    }).await?)
+        },
+    )
+    .await?)
 }
 
 pub(crate) fn async_rules(data: &Data<'_>, async_kind: AsyncKind) -> RawHtml<String> {

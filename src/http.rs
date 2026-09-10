@@ -1,34 +1,17 @@
 use {
-    base64::engine::{
-        Engine as _,
-        general_purpose::STANDARD as BASE64,
+    crate::{
+        admin, api, game, games, hth_info, legal,
+        notification::{self, Notification},
+        prelude::*,
+        racetime_bot::SeedMetadata,
     },
+    base64::engine::{Engine as _, general_purpose::STANDARD as BASE64},
     rocket::{
-        Rocket,
-        config::SecretKey,
-        data::ToByteUnit as _,
-        fs::FileServer,
+        Rocket, config::SecretKey, data::ToByteUnit as _, fs::FileServer,
         response::content::RawText,
     },
-    rocket_oauth2::{
-        OAuth2,
-        OAuthConfig,
-    },
+    rocket_oauth2::{OAuth2, OAuthConfig},
     rocket_util::Doctype,
-    crate::{
-        admin,
-        api,
-        game,
-        games,
-        hth_info,
-        notification::{
-            self,
-            Notification,
-        },
-        legal,
-        racetime_bot::SeedMetadata,
-        prelude::*,
-    },
 };
 
 include!(concat!(env!("OUT_DIR"), "/static_files.rs"));
@@ -58,15 +41,27 @@ pub(crate) fn favicon(url: &Url) -> RawHtml<String> {
         Some("challonge.com" | "www.challonge.com") => html! {
             img(class = "favicon", alt = "external link (challonge.com)", srcset = "https://assets.challonge.com/favicon-16x16.png 16w, https://assets.challonge.com/favicon-32x32.png 32w");
         },
-        Some("docs.google.com") if url.path_segments().into_iter().flatten().next() == Some("document") => html! {
-            img(class = "favicon", alt = "external link (docs.google.com/document)", src = "https://ssl.gstatic.com/docs/documents/images/kix-favicon7.ico");
-        },
-        Some("docs.google.com") if url.path_segments().into_iter().flatten().next() == Some("forms") => html! {
-            img(class = "favicon", alt = "external link (docs.google.com/forms)", srcset = "https://ssl.gstatic.com/docs/spreadsheets/forms/favicon_qp2.png 16w, https://ssl.gstatic.com/docs/forms/device_home/android_192.png 192w");
-        },
-        Some("docs.google.com") if url.path_segments().into_iter().flatten().next() == Some("spreadsheets") => html! {
-            img(class = "favicon", alt = "external link (docs.google.com/spreadsheets)", src = "https://ssl.gstatic.com/docs/spreadsheets/favicon3.ico");
-        },
+        Some("docs.google.com")
+            if url.path_segments().into_iter().flatten().next() == Some("document") =>
+        {
+            html! {
+                img(class = "favicon", alt = "external link (docs.google.com/document)", src = "https://ssl.gstatic.com/docs/documents/images/kix-favicon7.ico");
+            }
+        }
+        Some("docs.google.com")
+            if url.path_segments().into_iter().flatten().next() == Some("forms") =>
+        {
+            html! {
+                img(class = "favicon", alt = "external link (docs.google.com/forms)", srcset = "https://ssl.gstatic.com/docs/spreadsheets/forms/favicon_qp2.png 16w, https://ssl.gstatic.com/docs/forms/device_home/android_192.png 192w");
+            }
+        }
+        Some("docs.google.com")
+            if url.path_segments().into_iter().flatten().next() == Some("spreadsheets") =>
+        {
+            html! {
+                img(class = "favicon", alt = "external link (docs.google.com/spreadsheets)", src = "https://ssl.gstatic.com/docs/spreadsheets/favicon3.ico");
+            }
+        }
         Some("drive.google.com") => html! {
             img(class = "favicon", alt = "external link (drive.google.com)", src = "https://ssl.gstatic.com/docs/doclist/images/drive_2022q3_32dp.png");
         },
@@ -85,7 +80,9 @@ pub(crate) fn favicon(url: &Url) -> RawHtml<String> {
         Some("discord.gg") => html! {
             img(class = "favicon", alt = "external link (discord.gg)", src = static_url!("discord-favicon.ico"));
         },
-        Some("racetime.gg" | "racetime.midos.house" | "rtdev.zeldaspeedruns.com" | "rtdev.zsr.gg") => html! {
+        Some(
+            "racetime.gg" | "racetime.midos.house" | "rtdev.zeldaspeedruns.com" | "rtdev.zsr.gg",
+        ) => html! {
             img(class = "favicon", alt = "external link (racetime.gg)", src = static_url!("racetimeGG-favicon.svg"));
         },
         Some("start.gg" | "www.start.gg") => html! {
@@ -128,9 +125,12 @@ impl Default for PageStyle {
 
 #[derive(Debug, thiserror::Error, rocket_util::Error)]
 pub(crate) enum PageError {
-    #[error(transparent)] Event(#[from] event::DataError),
-    #[error(transparent)] Sql(#[from] sqlx::Error),
-    #[error(transparent)] Wheel(#[from] wheel::Error),
+    #[error(transparent)]
+    Event(#[from] event::DataError),
+    #[error(transparent)]
+    Sql(#[from] sqlx::Error),
+    #[error(transparent)]
+    Wheel(#[from] wheel::Error),
     #[error("missing user data for Trezc0")]
     AdminUserData(u8),
 }
@@ -154,8 +154,16 @@ impl IsNetworkError for PageError {
 
 pub(crate) type PageResult = Result<RawHtml<String>, PageError>;
 
-pub(crate) async fn page(mut transaction: Transaction<'_, Postgres>, me: &Option<User>, uri: &Origin<'_>, style: PageStyle, title: &str, content: impl ToHtml) -> PageResult {
-    let content = apply_profile_timezone_fallbacks(content.to_html(), me.as_ref().and_then(|me| me.timezone));
+pub(crate) async fn page(
+    mut transaction: Transaction<'_, Postgres>,
+    me: &Option<User>,
+    uri: &Origin<'_>,
+    style: PageStyle,
+    title: &str,
+    content: impl ToHtml,
+) -> PageResult {
+    let content =
+        apply_profile_timezone_fallbacks(content.to_html(), me.as_ref().and_then(|me| me.timezone));
     let notifications = if let Some(me) = me {
         if let PageKind::Notifications = style.kind {
             Vec::default()
@@ -170,7 +178,9 @@ pub(crate) async fn page(mut transaction: Transaction<'_, Postgres>, me: &Option
     } else {
         (None, Some(content))
     };
-    let admin_user = User::primary_global_admin(&mut *transaction).await?.ok_or(PageError::AdminUserData(1))?;
+    let admin_user = User::primary_global_admin(&mut *transaction)
+        .await?
+        .ok_or(PageError::AdminUserData(1))?;
     transaction.commit().await?;
     Ok(html! {
         : Doctype;
@@ -351,7 +361,7 @@ async fn home_events(
                     SELECT 1 FROM races r
                     WHERE r.series = e.series
                       AND r.event = e.event
-                      AND r.phase = 'Qualifier'
+                      AND r.is_qualifier
                       AND r.start <= NOW()
                 )
             ) AS "is_ongoing!",
@@ -375,16 +385,23 @@ async fn home_events(
     "#, me_id, is_global_admin).fetch_all(&mut **transaction).await?;
     let mut events = Vec::with_capacity(rows.len());
     for row in rows {
-        let data = event::Data::new(&mut *transaction, row.series, row.event).await?
+        let data = event::Data::new(&mut *transaction, row.series, row.event)
+            .await?
             .expect("event deleted during transaction");
         let game = row.game_id.map(|id| game::Game {
             id,
             name: row.game_name.expect("game name missing for mapped game"),
-            display_name: row.game_display_name.expect("game display name missing for mapped game"),
+            display_name: row
+                .game_display_name
+                .expect("game display name missing for mapped game"),
             description: row.game_description,
             discord_guild: row.game_discord_guild.map(|PgSnowflake(id)| id),
-            created_at: row.game_created_at.expect("game creation time missing for mapped game"),
-            updated_at: row.game_updated_at.expect("game update time missing for mapped game"),
+            created_at: row
+                .game_created_at
+                .expect("game creation time missing for mapped game"),
+            updated_at: row
+                .game_updated_at
+                .expect("game update time missing for mapped game"),
         });
         events.push(HomeEvent {
             is_unlisted: !row.listed,
@@ -398,10 +415,16 @@ async fn home_events(
 }
 
 #[rocket::get("/")]
-pub(crate) async fn index(pool: &State<PgPool>, http_client: &State<reqwest::Client>, me: Option<User>, uri: Origin<'_>) -> Result<RawHtml<String>, event::Error> {
+pub(crate) async fn index(
+    pool: &State<PgPool>,
+    http_client: &State<reqwest::Client>,
+    me: Option<User>,
+    uri: Origin<'_>,
+) -> Result<RawHtml<String>, event::Error> {
     let mut transaction = pool.begin().await?;
     let events = home_events(&mut transaction, me.as_ref()).await?;
-    let event_data = events.iter()
+    let event_data = events
+        .iter()
         .filter(|event| !event.is_unlisted)
         .map(|event| event.data.clone())
         .collect::<Vec<_>>();
@@ -424,23 +447,47 @@ pub(crate) async fn index(pool: &State<PgPool>, http_client: &State<reqwest::Cli
             (Some(_), None) => Less,    // Scheduled comes before unscheduled
             (Some(s1), Some(s2)) => s1.cmp(&s2), // Compare scheduled times (soonest first)
         }
-            .then_with(|| race1.series.slug().cmp(race2.series.slug()))
-            .then_with(|| race1.event.cmp(&race2.event))
-            .then_with(|| race1.phase.cmp(&race2.phase))
-            .then_with(|| race1.round.cmp(&race2.round))
-            .then_with(|| race1.source.cmp(&race2.source))
-            .then_with(|| race1.game.cmp(&race2.game))
-            .then_with(|| race1.id.cmp(&race2.id))
+        .then_with(|| race1.series.slug().cmp(race2.series.slug()))
+        .then_with(|| race1.event.cmp(&race2.event))
+        .then_with(|| race1.phase.cmp(&race2.phase))
+        .then_with(|| race1.round.cmp(&race2.round))
+        .then_with(|| race1.source.cmp(&race2.source))
+        .then_with(|| race1.game.cmp(&race2.game))
+        .then_with(|| race1.id.cmp(&race2.id))
     });
-    let chests_event = events.iter().filter(|event| !event.is_unlisted).map(|event| &event.data).choose(&mut rng());
-    let chests = if let Some(event) = chests_event { event.chests().await? } else { ChestAppearances::random() };
+    let chests_event = events
+        .iter()
+        .filter(|event| !event.is_unlisted)
+        .map(|event| &event.data)
+        .choose(&mut rng());
+    let chests = if let Some(event) = chests_event {
+        event.chests().await?
+    } else {
+        ChestAppearances::random()
+    };
     let mut ongoing_by_game = Vec::new();
     let mut upcoming_by_game = Vec::new();
     for event in events {
-        let HomeEvent { data, game, start, is_ongoing, is_unlisted } = event;
-        let groups = if is_ongoing { &mut ongoing_by_game } else { &mut upcoming_by_game };
+        let HomeEvent {
+            data,
+            game,
+            start,
+            is_ongoing,
+            is_unlisted,
+        } = event;
+        let groups = if is_ongoing {
+            &mut ongoing_by_game
+        } else {
+            &mut upcoming_by_game
+        };
         let key = game.as_ref().map(|game| game.id);
-        if let Some(pos) = groups.iter().position(|(group_game, _): &(Option<game::Game>, Vec<_>)| group_game.as_ref().map(|game| game.id) == key) {
+        if let Some(pos) =
+            groups
+                .iter()
+                .position(|(group_game, _): &(Option<game::Game>, Vec<_>)| {
+                    group_game.as_ref().map(|game| game.id) == key
+                })
+        {
             groups[pos].1.push((data, is_unlisted, start));
         } else {
             groups.push((game, vec![(data, is_unlisted, start)]));
@@ -559,7 +606,19 @@ pub(crate) async fn index(pool: &State<PgPool>, http_client: &State<reqwest::Cli
             : cal::race_table(&mut transaction, None, http_client, &uri, None, cal::RaceTableOptions { game_count: false, show_multistreams: false, can_edit: me.as_ref().is_some_and(|me| me.is_archivist), show_restream_consent: false, challonge_import_ctx: None }, &races, me.as_ref(), None).await?;
         }
     };
-    Ok(page(transaction, &me, &uri, PageStyle { kind: PageKind::Index, chests, ..PageStyle::default() }, "Hyrule Town Hall", page_content).await?)
+    Ok(page(
+        transaction,
+        &me,
+        &uri,
+        PageStyle {
+            kind: PageKind::Index,
+            chests,
+            ..PageStyle::default()
+        },
+        "Hyrule Town Hall",
+        page_content,
+    )
+    .await?)
 }
 
 #[derive(Default, Clone, Copy, PartialEq, Eq, Sequence, FromFormField, UriDisplayQuery)]
@@ -581,7 +640,12 @@ impl ArchiveSortKey {
 }
 
 #[rocket::get("/archive?<sort>")]
-async fn archive(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>, sort: Option<ArchiveSortKey>) -> Result<RawHtml<String>, event::Error> {
+async fn archive(
+    pool: &State<PgPool>,
+    me: Option<User>,
+    uri: Origin<'_>,
+    sort: Option<ArchiveSortKey>,
+) -> Result<RawHtml<String>, event::Error> {
     let sort = sort.unwrap_or_default();
     let mut transaction = pool.begin().await?;
     let mut past_events = Vec::default();
@@ -589,7 +653,11 @@ async fn archive(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>, sort: 
         past_events.push(event::Data::new(&mut transaction, row.series, row.event).await?.expect("event deleted during transaction"));
     }
     let chests_event = past_events.choose(&mut rng());
-    let chests = if let Some(event) = chests_event { event.chests().await? } else { ChestAppearances::random() };
+    let chests = if let Some(event) = chests_event {
+        event.chests().await?
+    } else {
+        ChestAppearances::random()
+    };
     let page_content = html! {
         h1 : "Past events";
         p {
@@ -654,13 +722,30 @@ async fn archive(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>, sort: 
             }
         }
     };
-    Ok(page(transaction, &me, &uri, PageStyle { chests, ..PageStyle::default() }, "Event Archive — Hyrule Town Hall", page_content).await?)
+    Ok(page(
+        transaction,
+        &me,
+        &uri,
+        PageStyle {
+            chests,
+            ..PageStyle::default()
+        },
+        "Event Archive — Hyrule Town Hall",
+        page_content,
+    )
+    .await?)
 }
 
 #[rocket::get("/new")]
-pub(crate) async fn new_event(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>) -> PageResult {
+pub(crate) async fn new_event(
+    pool: &State<PgPool>,
+    me: Option<User>,
+    uri: Origin<'_>,
+) -> PageResult {
     let mut transaction = pool.begin().await?;
-    let admin_user = User::primary_global_admin(&mut *transaction).await?.ok_or(PageError::AdminUserData(2))?;
+    let admin_user = User::primary_global_admin(&mut *transaction)
+        .await?
+        .ok_or(PageError::AdminUserData(2))?;
     page(transaction, &me, &uri, PageStyle::default(), "New Event — Hyrule Town Hall", html! {
         p {
             : "If you are planning a tournament, community race, or other event for the Zelda Speedrunning or randomizer community, or if you would like Hyrule Town Hall to archive data about a past event you organized, please contact ";
@@ -678,20 +763,45 @@ async fn robots_txt() -> RawText<&'static str> {
 #[rocket::catch(400)]
 async fn bad_request(request: &Request<'_>) -> PageResult {
     eprintln!("responding with 400 Bad Request to request {request:?}");
-    let pool = request.guard::<&State<PgPool>>().await.expect("missing database pool");
+    let pool = request
+        .guard::<&State<PgPool>>()
+        .await
+        .expect("missing database pool");
     let me = request.guard::<User>().await.succeeded();
-    let uri = request.guard::<Origin<'_>>().await.succeeded().unwrap_or_else(|| Origin(uri!(index)));
-    page(pool.begin().await?, &me, &uri, PageStyle { chests: ChestAppearances::SMALL_KEYS, ..PageStyle::default() }, "Bad Request — Hyrule Town Hall", html! {
-        h1 : "Error 400: Bad Request";
-        p : "Login failed. If you need help, contact TreZ on Discord.";
-    }).await
+    let uri = request
+        .guard::<Origin<'_>>()
+        .await
+        .succeeded()
+        .unwrap_or_else(|| Origin(uri!(index)));
+    page(
+        pool.begin().await?,
+        &me,
+        &uri,
+        PageStyle {
+            chests: ChestAppearances::SMALL_KEYS,
+            ..PageStyle::default()
+        },
+        "Bad Request — Hyrule Town Hall",
+        html! {
+            h1 : "Error 400: Bad Request";
+            p : "Login failed. If you need help, contact TreZ on Discord.";
+        },
+    )
+    .await
 }
 
 #[rocket::catch(404)]
 async fn not_found(request: &Request<'_>) -> PageResult {
-    let pool = request.guard::<&State<PgPool>>().await.expect("missing database pool");
+    let pool = request
+        .guard::<&State<PgPool>>()
+        .await
+        .expect("missing database pool");
     let me = request.guard::<User>().await.succeeded();
-    let uri = request.guard::<Origin<'_>>().await.succeeded().unwrap_or_else(|| Origin(uri!(index)));
+    let uri = request
+        .guard::<Origin<'_>>()
+        .await
+        .succeeded()
+        .unwrap_or_else(|| Origin(uri!(index)));
     page(pool.begin().await?, &me, &uri, PageStyle { kind: PageKind::Banner, chests: ChestAppearances::INVISIBLE, ..PageStyle::default() }, "Not Found — Hyrule Town Hall", html! {
         div(style = "flex-grow: 0;") {
             h1 : "Error 404: Not Found";
@@ -701,10 +811,19 @@ async fn not_found(request: &Request<'_>) -> PageResult {
 }
 
 #[rocket::catch(422)]
-async fn unprocessable_content(request: &Request<'_>) -> Result<(Status, RawHtml<String>), PageError> {
-    let pool = request.guard::<&State<PgPool>>().await.expect("missing database pool");
+async fn unprocessable_content(
+    request: &Request<'_>,
+) -> Result<(Status, RawHtml<String>), PageError> {
+    let pool = request
+        .guard::<&State<PgPool>>()
+        .await
+        .expect("missing database pool");
     let me = request.guard::<User>().await.succeeded();
-    let uri = request.guard::<Origin<'_>>().await.succeeded().unwrap_or_else(|| Origin(uri!(index)));
+    let uri = request
+        .guard::<Origin<'_>>()
+        .await
+        .succeeded()
+        .unwrap_or_else(|| Origin(uri!(index)));
     Ok((Status::NotFound, page(pool.begin().await?, &me, &uri, PageStyle { kind: PageKind::Banner, chests: ChestAppearances::INVISIBLE, ..PageStyle::default() }, "Not Found — Mido's House", html! {
         div(style = "flex-grow: 0;") {
             h1 : "Error 404: Not Found";
@@ -718,20 +837,45 @@ async fn internal_server_error(request: &Request<'_>) -> PageResult {
     if let Environment::Production = Environment::default() {
         log::error!("internal server error");
     }
-    let pool = request.guard::<&State<PgPool>>().await.expect("missing database pool");
+    let pool = request
+        .guard::<&State<PgPool>>()
+        .await
+        .expect("missing database pool");
     let me = request.guard::<User>().await.succeeded();
-    let uri = request.guard::<Origin<'_>>().await.succeeded().unwrap_or_else(|| Origin(uri!(index)));
-    page(pool.begin().await?, &me, &uri, PageStyle { chests: ChestAppearances::TOKENS, ..PageStyle::default() }, "Internal Server Error — Hyrule Town Hall", html! {
-        h1 : "Error 500: Internal Server Error";
-        p : "Sorry, something went wrong. Please notify TreZc0_ on Discord.";
-    }).await
+    let uri = request
+        .guard::<Origin<'_>>()
+        .await
+        .succeeded()
+        .unwrap_or_else(|| Origin(uri!(index)));
+    page(
+        pool.begin().await?,
+        &me,
+        &uri,
+        PageStyle {
+            chests: ChestAppearances::TOKENS,
+            ..PageStyle::default()
+        },
+        "Internal Server Error — Hyrule Town Hall",
+        html! {
+            h1 : "Error 500: Internal Server Error";
+            p : "Sorry, something went wrong. Please notify TreZc0_ on Discord.";
+        },
+    )
+    .await
 }
 
 #[rocket::catch(502)]
 async fn bad_gateway(request: &Request<'_>) -> PageResult {
-    let pool = request.guard::<&State<PgPool>>().await.expect("missing database pool");
+    let pool = request
+        .guard::<&State<PgPool>>()
+        .await
+        .expect("missing database pool");
     let me = request.guard::<User>().await.succeeded();
-    let uri = request.guard::<Origin<'_>>().await.succeeded().unwrap_or_else(|| Origin(uri!(index)));
+    let uri = request
+        .guard::<Origin<'_>>()
+        .await
+        .succeeded()
+        .unwrap_or_else(|| Origin(uri!(index)));
     page(pool.begin().await?, &me, &uri, PageStyle { chests: ChestAppearances::TOKENS, ..PageStyle::default() }, "Bad Gateway — Hyrule Town Hall", html! {
         h1 : "Error 502: Bad Gateway";
         p : "Sorry, there was a network error. Please try again. If this error persists, please contact TreZ on Discord.";
@@ -740,311 +884,376 @@ async fn bad_gateway(request: &Request<'_>) -> PageResult {
 
 #[rocket::catch(default)]
 async fn fallback_catcher(status: Status, request: &Request<'_>) -> PageResult {
-    eprintln!("responding with unexpected HTTP status code {} {} to request {request:?}", status.code, status.reason_lossy());
+    eprintln!(
+        "responding with unexpected HTTP status code {} {} to request {request:?}",
+        status.code,
+        status.reason_lossy()
+    );
     if let Environment::Production = Environment::default() {
-        log::error!("responding with unexpected HTTP status code: {} {}", status.code, status.reason_lossy());
+        log::error!(
+            "responding with unexpected HTTP status code: {} {}",
+            status.code,
+            status.reason_lossy()
+        );
     }
-    let pool = request.guard::<&State<PgPool>>().await.expect("missing database pool");
+    let pool = request
+        .guard::<&State<PgPool>>()
+        .await
+        .expect("missing database pool");
     let me = request.guard::<User>().await.succeeded();
-    let uri = request.guard::<Origin<'_>>().await.succeeded().unwrap_or_else(|| Origin(uri!(index)));
-    page(pool.begin().await?, &me, &uri, PageStyle { chests: ChestAppearances::TOKENS, ..PageStyle::default() }, &format!("{} — Hyrule Town Hall", status.reason_lossy()), html! {
-        h1 {
-            : "Error ";
-            : status.code;
-            : ": ";
-            : status.reason_lossy();
-        }
-        p : "Sorry, something went wrong. Please notify TreZ on Discord.";
-    }).await
+    let uri = request
+        .guard::<Origin<'_>>()
+        .await
+        .succeeded()
+        .unwrap_or_else(|| Origin(uri!(index)));
+    page(
+        pool.begin().await?,
+        &me,
+        &uri,
+        PageStyle {
+            chests: ChestAppearances::TOKENS,
+            ..PageStyle::default()
+        },
+        &format!("{} — Hyrule Town Hall", status.reason_lossy()),
+        html! {
+            h1 {
+                : "Error ";
+                : status.code;
+                : ": ";
+                : status.reason_lossy();
+            }
+            p : "Sorry, something went wrong. Please notify TreZ on Discord.";
+        },
+    )
+    .await
 }
 
-pub(crate) async fn rocket(pool: PgPool, discord_ctx: RwFuture<DiscordCtx>, http_client: reqwest::Client, config: Config, port: u16, seed_metadata: Arc<RwLock<HashMap<String, SeedMetadata>>>, ootr_api_client: Arc<ootr_web::ApiClient>) -> Result<Rocket<rocket::Build>, crate::Error> {
-    Ok(rocket::custom(rocket::Config::figment().merge(rocket::Config {
-        secret_key: SecretKey::from(&BASE64.decode(&config.secret_key)?),
-        log_level: Some(rocket::config::Level::ERROR),
-        limits: rocket::data::Limits::default().limit("form", 4_u64.mebibytes()),
-        ..rocket::Config::default()
-    }).merge(("port", port))) //TODO report issue for lack of typed interface to set port, see https://github.com/rwf2/Rocket/commit/fd294049c784cb52680a423616fadc29d57fa25b
-    .mount("/", rocket::routes![
-        index,
-        archive,
-        new_event,
-        hth_info::get,
-        robots_txt,
-        api::graphql_request,
-        api::graphql_query,
-        api::graphql_playground,
-        api::entrants_csv,
-        api::qualifier_standings,
-        api::swiss_standings_endpoint,
-        api::racetime_goals,
-        auth::racetime_callback,
-        auth::discord_callback,
-        auth::challonge_callback,
-        auth::startgg_callback,
-        auth::login,
-        auth::logout,
-        auth::racetime_login,
-        auth::discord_login,
-        auth::challonge_login,
-        auth::startgg_login,
-        auth::register_racetime,
-        auth::register_discord,
-        auth::merge_accounts,
-        auth::unlink_racetime,
-        auth::unlink_discord,
-        auth::unlink_startgg,
-        auth::unlink_challonge,
-        cal::index_help,
-        cal::index,
-        cal::for_series,
-        cal::for_event,
-        cal::create_race,
-        cal::create_race_post,
-        cal::import_races,
-        cal::import_races_post,
-        cal::import_races_status,
-        cal::practice_seed,
-        cal::edit_race,
-        cal::edit_race_post,
-        cal::add_file_hash,
-        cal::add_file_hash_post,
-        event::info,
-        event::races,
-        event::status,
-        event::status_post,
-        event::find_team,
-        event::find_team_post,
-        event::confirm_signup,
-        event::resign,
-        event::resign_post,
-        event::opt_out,
-        event::opt_out_post,
-        event::status_opt_out,
-        event::manage_team,
-        event::manage_team_post,
-        event::manage_team_choices_post,
-        event::set_startgg_id,
-        event::manage_racetime_entrant,
-        event::manage_racetime_entrant_post,
-        event::request_async,
-        event::submit_async,
-        event::practice_seed,
-        event::practice_seed_post,
-        event::practice_seed_status,
-        event::swiss_standings,
-        event::enter::get,
-        event::enter::post,
-        event::teams::get,
-        event::async_results::get,
-        event::asyncs::get,
-        event::asyncs::post,
-        event::asyncs::delete,
-        event::qualifiers::get,
-        event::qualifiers::post_race,
-        event::qualifiers::post_settings,
-        event::qualifiers::post_notification_role,
-        event::qualifiers::delete_notification_role,
-        event::qualifiers::get_edit,
-        event::qualifiers::post_edit_race,
-        event::qualifiers::delete_race,
-        event::qualifiers::post_seeding_race,
-        event::qualifiers::delete_seeding_race,
-        event::qualifiers::get_edit_seeding_race,
-        event::qualifiers::post_edit_seeding_race,
-        event::configure::get,
-        event::configure::post,
-        event::configure::restreamers_get,
-        event::configure::add_restreamer,
-        event::configure::remove_restreamer,
-        event::configure::save_restream_coordinator_discord_role,
-        event::configure::clear_restream_coordinator_discord_role,
-        event::configure::update_restreamer_languages,
-        event::configure::copy_restreamers,
-        event::configure::weekly_schedules_get,
-        event::configure::weekly_schedule_add,
-        event::configure::weekly_schedule_delete,
-        event::configure::weekly_schedule_toggle,
-        event::configure::weekly_schedule_edit_get,
-        event::configure::weekly_schedule_edit_post,
-        event::configure::info_page_get,
-        event::configure::info_page_post,
-        event::configure::round_labels_get,
-        event::configure::save_pool_names,
-        event::configure::add_round_mapping,
-        event::configure::remove_round_mapping,
-        event::configure::apply_round_mapping,
-        event::configure::rounds_get,
-        event::configure::rounds_save,
-        event::configure::rounds_apply_all,
-        event::configure::rounds_apply_deadlines,
-        event::configure::search_users,
-        event::configure::restreamer_search,
-        event::configure::video_url_suggestions,
-        event::configure::enter_flow_get,
-        event::configure::enter_flow_set_closes,
-        event::configure::enter_flow_add,
-        event::configure::enter_flow_add_radio_choice,
-        event::configure::enter_flow_remove,
-        event::configure::enter_flow_move_up,
-        event::configure::enter_flow_move_down,
-        event::configure::enter_flow_edit_get,
-        event::configure::enter_flow_edit_post,
-        event::roles::get,
-        event::roles::add_role_binding,
-        event::roles::edit_role_binding,
-        event::roles::delete_role_binding,
-        event::roles::approve_role_request,
-        event::roles::reject_role_request,
-        event::roles::apply_for_role,
-        event::roles::forfeit_role,
-        event::roles::volunteer_page_get,
-        event::roles::signup_for_match,
-        event::roles::manage_roster,
-        event::roles::withdraw_signup,
-        event::roles::withdraw_role_request,
-        event::roles::revoke_signup,
-        event::roles::revoke_role_request,
-        event::roles::match_signup_page_get,
-        event::roles::upsert_role_binding_override,
-        event::roles::delete_role_binding_override,
-        event::roles::disable_role_binding,
-        event::roles::enable_role_binding,
-        event::roles::copy_volunteers_from_event,
-        event::roles::update_volunteer_request_settings,
-        event::roles::trigger_volunteer_requests,
-        event::roles::add_ping_workflow,
-        event::roles::edit_ping_workflow,
-        event::roles::delete_ping_workflow,
-        event::roles::add_ping_workflow_lead_time,
-        event::roles::delete_ping_workflow_lead_time,
-        event::setup::create_get,
-        event::setup::create_post,
-        event::setup::get,
-        event::setup::post,
-        event::setup::add_organizer,
-        event::setup::remove_organizer,
-        event::setup::copy_organizers,
-        event::setup::update_enter_flow,
-        event::setup::search_users,
-        favicon::favicon_ico,
-        favicon::favicon_png,
-        legal::legal_disclaimer,
-        crate::mw::index,
-        crate::mw::platforms,
-        crate::mw::install_macos,
-        notification::notifications,
-        notification::dismiss,
-        seed::get,
-        user::profile,
-        user::set_timezone,
-        admin::index,
-        admin::add_game_form,
-        admin::add_game_post,
-        admin::edit_game,
-        admin::manage_game_admins,
-        admin::add_game_admin,
-        admin::remove_game_admin,
-        admin::game_management_overview,
-        games::list,
-        games::get,
-        games::manage_admins,
-        games::add_game_admin,
-        games::remove_game_admin,
-        games::manage_roles,
-        games::apply_for_game_role,
-        games::forfeit_game_role,
-        games::add_game_role_binding,
-        games::edit_game_role_binding,
-        games::remove_game_role_binding,
-        games::approve_game_role_request,
-        games::reject_game_role_request,
-        games::revoke_game_role_request,
-        games::manage_restreamers,
-        games::add_game_restreamer,
-        games::remove_game_restreamer,
-        games::remove_game_restreamer_language,
-        games::update_game_restreamer_languages,
-        games::manage_notification_channels,
-        games::add_notification_channel,
-        games::remove_notification_channel,
-        admin::add_game_ping_workflow,
-        admin::edit_game_ping_workflow,
-        admin::delete_game_ping_workflow,
-        admin::add_game_ping_workflow_lead_time,
-        admin::delete_game_ping_workflow_lead_time,
-        admin::zsr_backends,
-        admin::add_zsr_backend,
-        admin::edit_zsr_backend,
-        admin::update_zsr_backend,
-        admin::delete_zsr_backend,
-        admin::list_restream_channels,
-        admin::create_restream_channel,
-        admin::edit_restream_channel_form,
-        admin::update_restream_channel,
-        admin::delete_restream_channel,
-        event::zsr_export::get,
-        event::zsr_export::add_export,
-        event::zsr_export::edit_export,
-        event::zsr_export::update_export,
-        event::zsr_export::delete_export,
-        event::zsr_export::sync_export,
-        event::zsr_export::sync_all,
-        event::speedgaming_export::get,
-        event::speedgaming_export::add_export,
-        event::speedgaming_export::update_export,
-        event::speedgaming_export::delete_export,
-        event::speedgaming_export::sync_all,
-    ])
+pub(crate) async fn rocket(
+    pool: PgPool,
+    discord_ctx: RwFuture<DiscordCtx>,
+    http_client: reqwest::Client,
+    config: Config,
+    port: u16,
+    seed_metadata: Arc<RwLock<HashMap<String, SeedMetadata>>>,
+    ootr_api_client: Arc<ootr_web::ApiClient>,
+) -> Result<Rocket<rocket::Build>, crate::Error> {
+    Ok(rocket::custom(
+        rocket::Config::figment()
+            .merge(rocket::Config {
+                secret_key: SecretKey::from(&BASE64.decode(&config.secret_key)?),
+                log_level: Some(rocket::config::Level::ERROR),
+                limits: rocket::data::Limits::default().limit("form", 4_u64.mebibytes()),
+                ..rocket::Config::default()
+            })
+            .merge(("port", port)),
+    ) //TODO report issue for lack of typed interface to set port, see https://github.com/rwf2/Rocket/commit/fd294049c784cb52680a423616fadc29d57fa25b
+    .mount(
+        "/",
+        rocket::routes![
+            index,
+            archive,
+            new_event,
+            hth_info::get,
+            robots_txt,
+            api::graphql_request,
+            api::graphql_query,
+            api::graphql_playground,
+            api::entrants_csv,
+            api::qualifier_standings,
+            api::swiss_standings_endpoint,
+            api::racetime_goals,
+            auth::racetime_callback,
+            auth::discord_callback,
+            auth::challonge_callback,
+            auth::startgg_callback,
+            auth::login,
+            auth::logout,
+            auth::racetime_login,
+            auth::discord_login,
+            auth::challonge_login,
+            auth::startgg_login,
+            auth::register_racetime,
+            auth::register_discord,
+            auth::merge_accounts,
+            auth::unlink_racetime,
+            auth::unlink_discord,
+            auth::unlink_startgg,
+            auth::unlink_challonge,
+            cal::index_help,
+            cal::index,
+            cal::for_series,
+            cal::for_event,
+            cal::create_race,
+            cal::create_race_post,
+            cal::import_races,
+            cal::import_races_post,
+            cal::import_races_status,
+            cal::practice_seed,
+            cal::edit_race,
+            cal::edit_race_post,
+            cal::add_file_hash,
+            cal::add_file_hash_post,
+            event::info,
+            event::races,
+            event::status,
+            event::status_post,
+            event::find_team,
+            event::find_team_post,
+            event::confirm_signup,
+            event::resign,
+            event::resign_post,
+            event::opt_out,
+            event::opt_out_post,
+            event::status_opt_out,
+            event::manage_team,
+            event::manage_team_post,
+            event::manage_team_choices_post,
+            event::set_startgg_id,
+            event::manage_racetime_entrant,
+            event::manage_racetime_entrant_post,
+            event::request_async,
+            event::request_pooled_async,
+            event::reserve_pooled_live_retry,
+            event::submit_async,
+            event::practice_seed,
+            event::practice_seed_post,
+            event::practice_seed_status,
+            event::swiss_standings,
+            event::enter::get,
+            event::enter::post,
+            event::teams::get,
+            event::async_results::get,
+            event::asyncs::get,
+            event::asyncs::post,
+            event::asyncs::delete,
+            event::qualifiers::get,
+            event::qualifiers::post_race,
+            event::qualifiers::post_settings,
+            event::qualifiers::post_pooled_config,
+            event::qualifiers::post_pooled_mode,
+            event::qualifiers::post_pooled_seed,
+            event::qualifiers::post_pooled_result,
+            event::qualifiers::post_pooled_generate,
+            event::qualifiers::post_pooled_recover,
+            event::qualifiers::post_notification_role,
+            event::qualifiers::delete_notification_role,
+            event::qualifiers::get_edit,
+            event::qualifiers::post_edit_race,
+            event::qualifiers::delete_race,
+            event::qualifiers::post_seeding_race,
+            event::qualifiers::delete_seeding_race,
+            event::qualifiers::get_edit_seeding_race,
+            event::qualifiers::post_edit_seeding_race,
+            event::configure::get,
+            event::configure::post,
+            event::configure::restreamers_get,
+            event::configure::add_restreamer,
+            event::configure::remove_restreamer,
+            event::configure::save_restream_coordinator_discord_role,
+            event::configure::clear_restream_coordinator_discord_role,
+            event::configure::update_restreamer_languages,
+            event::configure::copy_restreamers,
+            event::configure::weekly_schedules_get,
+            event::configure::weekly_schedule_add,
+            event::configure::weekly_schedule_delete,
+            event::configure::weekly_schedule_toggle,
+            event::configure::weekly_schedule_edit_get,
+            event::configure::weekly_schedule_edit_post,
+            event::configure::info_page_get,
+            event::configure::info_page_post,
+            event::configure::round_labels_get,
+            event::configure::save_pool_names,
+            event::configure::add_round_mapping,
+            event::configure::remove_round_mapping,
+            event::configure::apply_round_mapping,
+            event::configure::rounds_get,
+            event::configure::rounds_save,
+            event::configure::rounds_apply_all,
+            event::configure::rounds_apply_deadlines,
+            event::configure::search_users,
+            event::configure::restreamer_search,
+            event::configure::video_url_suggestions,
+            event::configure::enter_flow_get,
+            event::configure::enter_flow_set_closes,
+            event::configure::enter_flow_add,
+            event::configure::enter_flow_add_radio_choice,
+            event::configure::enter_flow_remove,
+            event::configure::enter_flow_move_up,
+            event::configure::enter_flow_move_down,
+            event::configure::enter_flow_edit_get,
+            event::configure::enter_flow_edit_post,
+            event::roles::get,
+            event::roles::add_role_binding,
+            event::roles::edit_role_binding,
+            event::roles::delete_role_binding,
+            event::roles::approve_role_request,
+            event::roles::reject_role_request,
+            event::roles::apply_for_role,
+            event::roles::forfeit_role,
+            event::roles::volunteer_page_get,
+            event::roles::signup_for_match,
+            event::roles::manage_roster,
+            event::roles::withdraw_signup,
+            event::roles::withdraw_role_request,
+            event::roles::revoke_signup,
+            event::roles::revoke_role_request,
+            event::roles::match_signup_page_get,
+            event::roles::upsert_role_binding_override,
+            event::roles::delete_role_binding_override,
+            event::roles::disable_role_binding,
+            event::roles::enable_role_binding,
+            event::roles::copy_volunteers_from_event,
+            event::roles::update_volunteer_request_settings,
+            event::roles::trigger_volunteer_requests,
+            event::roles::add_ping_workflow,
+            event::roles::edit_ping_workflow,
+            event::roles::delete_ping_workflow,
+            event::roles::add_ping_workflow_lead_time,
+            event::roles::delete_ping_workflow_lead_time,
+            event::setup::create_get,
+            event::setup::create_post,
+            event::setup::get,
+            event::setup::post,
+            event::setup::add_organizer,
+            event::setup::remove_organizer,
+            event::setup::copy_organizers,
+            event::setup::update_enter_flow,
+            event::setup::search_users,
+            favicon::favicon_ico,
+            favicon::favicon_png,
+            legal::legal_disclaimer,
+            crate::mw::index,
+            crate::mw::platforms,
+            crate::mw::install_macos,
+            notification::notifications,
+            notification::dismiss,
+            seed::get,
+            user::profile,
+            user::set_timezone,
+            admin::index,
+            admin::add_game_form,
+            admin::add_game_post,
+            admin::edit_game,
+            admin::manage_game_admins,
+            admin::add_game_admin,
+            admin::remove_game_admin,
+            admin::game_management_overview,
+            games::series::get,
+            games::series::post,
+            games::list,
+            games::get,
+            games::manage_admins,
+            games::add_game_admin,
+            games::remove_game_admin,
+            games::manage_roles,
+            games::apply_for_game_role,
+            games::forfeit_game_role,
+            games::add_game_role_binding,
+            games::edit_game_role_binding,
+            games::remove_game_role_binding,
+            games::approve_game_role_request,
+            games::reject_game_role_request,
+            games::revoke_game_role_request,
+            games::manage_restreamers,
+            games::add_game_restreamer,
+            games::remove_game_restreamer,
+            games::remove_game_restreamer_language,
+            games::update_game_restreamer_languages,
+            games::manage_notification_channels,
+            games::add_notification_channel,
+            games::remove_notification_channel,
+            admin::add_game_ping_workflow,
+            admin::edit_game_ping_workflow,
+            admin::delete_game_ping_workflow,
+            admin::add_game_ping_workflow_lead_time,
+            admin::delete_game_ping_workflow_lead_time,
+            admin::zsr_backends,
+            admin::add_zsr_backend,
+            admin::edit_zsr_backend,
+            admin::update_zsr_backend,
+            admin::delete_zsr_backend,
+            admin::list_restream_channels,
+            admin::create_restream_channel,
+            admin::edit_restream_channel_form,
+            admin::update_restream_channel,
+            admin::delete_restream_channel,
+            event::zsr_export::get,
+            event::zsr_export::add_export,
+            event::zsr_export::edit_export,
+            event::zsr_export::update_export,
+            event::zsr_export::delete_export,
+            event::zsr_export::sync_export,
+            event::zsr_export::sync_all,
+            event::speedgaming_export::get,
+            event::speedgaming_export::add_export,
+            event::speedgaming_export::update_export,
+            event::speedgaming_export::delete_export,
+            event::speedgaming_export::sync_all,
+        ],
+    )
     .mount("/static", FileServer::without_index("assets/static"))
-    .register("/", rocket::catchers![
-        bad_request,
-        not_found,
-        unprocessable_content,
-        internal_server_error,
-        bad_gateway,
-        fallback_catcher,
-    ])
+    .register(
+        "/",
+        rocket::catchers![
+            bad_request,
+            not_found,
+            unprocessable_content,
+            internal_server_error,
+            bad_gateway,
+            fallback_catcher,
+        ],
+    )
     .attach(rocket_csrf::Fairing::default())
-    .attach(OAuth2::<auth::RaceTime>::custom(rocket_oauth2::HyperRustlsAdapter::default(), OAuthConfig::new(
-        rocket_oauth2::StaticProvider {
-            auth_uri: format!("https://{}/o/authorize", racetime_host()).into(),
-            token_uri: format!("https://{}/o/token", racetime_host()).into(),
-        },
-        config.racetime_oauth.client_id.clone(),
-        config.racetime_oauth.client_secret.clone(),
-        Some(uri!(base_uri(), auth::racetime_callback).to_string()),
-    )))
-    .attach(OAuth2::<auth::Discord>::custom(rocket_oauth2::HyperRustlsAdapter::default(), OAuthConfig::new(
-        rocket_oauth2::StaticProvider::Discord,
-        config.discord.client_id.to_string(),
-        config.discord.client_secret.to_string(),
-        Some(uri!(base_uri(), auth::discord_callback).to_string()),
-    )))
-    .attach(OAuth2::<auth::Challonge>::custom(rocket_oauth2::HyperRustlsAdapter::default(), OAuthConfig::new(
-        rocket_oauth2::StaticProvider {
-            auth_uri: "https://api.challonge.com/oauth/authorize".into(),
-            token_uri: "https://api.challonge.com/oauth/token".into(),
-        },
-        config.challonge.client_id.to_string(),
-        config.challonge.client_secret.to_string(),
-        Some(uri!(base_uri(), auth::challonge_callback).to_string()),
-    )))
-    .attach(OAuth2::<auth::StartGG>::custom(rocket_oauth2::HyperRustlsAdapter::default(), OAuthConfig::new(
-        rocket_oauth2::StaticProvider {
-            auth_uri: "https://start.gg/oauth/authorize".into(),
-            token_uri: "https://api.start.gg/oauth/access_token".into(),
-        },
-        config.startgg_oauth.client_id.to_string(),
-        config.startgg_oauth.client_secret.to_string(),
-        Some(uri!(base_uri(), auth::startgg_callback).to_string()),
-    )))
+    .attach(OAuth2::<auth::RaceTime>::custom(
+        rocket_oauth2::HyperRustlsAdapter::default(),
+        OAuthConfig::new(
+            rocket_oauth2::StaticProvider {
+                auth_uri: format!("https://{}/o/authorize", racetime_host()).into(),
+                token_uri: format!("https://{}/o/token", racetime_host()).into(),
+            },
+            config.racetime_oauth.client_id.clone(),
+            config.racetime_oauth.client_secret.clone(),
+            Some(uri!(base_uri(), auth::racetime_callback).to_string()),
+        ),
+    ))
+    .attach(OAuth2::<auth::Discord>::custom(
+        rocket_oauth2::HyperRustlsAdapter::default(),
+        OAuthConfig::new(
+            rocket_oauth2::StaticProvider::Discord,
+            config.discord.client_id.to_string(),
+            config.discord.client_secret.to_string(),
+            Some(uri!(base_uri(), auth::discord_callback).to_string()),
+        ),
+    ))
+    .attach(OAuth2::<auth::Challonge>::custom(
+        rocket_oauth2::HyperRustlsAdapter::default(),
+        OAuthConfig::new(
+            rocket_oauth2::StaticProvider {
+                auth_uri: "https://api.challonge.com/oauth/authorize".into(),
+                token_uri: "https://api.challonge.com/oauth/token".into(),
+            },
+            config.challonge.client_id.to_string(),
+            config.challonge.client_secret.to_string(),
+            Some(uri!(base_uri(), auth::challonge_callback).to_string()),
+        ),
+    ))
+    .attach(OAuth2::<auth::StartGG>::custom(
+        rocket_oauth2::HyperRustlsAdapter::default(),
+        OAuthConfig::new(
+            rocket_oauth2::StaticProvider {
+                auth_uri: "https://start.gg/oauth/authorize".into(),
+                token_uri: "https://api.start.gg/oauth/access_token".into(),
+            },
+            config.startgg_oauth.client_id.to_string(),
+            config.startgg_oauth.client_secret.to_string(),
+            Some(uri!(base_uri(), auth::startgg_callback).to_string()),
+        ),
+    ))
     .manage(config)
     .manage(pool.clone())
     .manage(discord_ctx.clone())
     .manage(http_client)
     .manage(api::schema(pool, discord_ctx))
     .manage(seed_metadata)
-    .manage(ootr_api_client)
-    )
+    .manage(ootr_api_client))
 }

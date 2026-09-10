@@ -1,111 +1,174 @@
 use {
+    crate::prelude::*,
     derivative::Derivative,
     rocket::{
         form::FromFormField,
         http::uri::{
             self,
-            fmt::{
-                FromUriParam,
-                Part,
-                UriDisplay,
-            },
+            fmt::{FromUriParam, Part, UriDisplay},
         },
     },
-    sqlx::{
-        Database,
-        Decode,
-        Encode,
-    },
-    crate::prelude::*,
+    sqlx::{Database, Decode, Encode},
 };
 
 pub(crate) trait Table {
-    fn query_exists(id: i64) -> sqlx::query::QueryScalar<'static, Postgres, bool, <Postgres as Database>::Arguments<'static>>;
+    fn query_exists(
+        id: i64,
+    ) -> sqlx::query::QueryScalar<'static, Postgres, bool, <Postgres as Database>::Arguments<'static>>;
 }
 
 pub(crate) enum Notifications {}
 
 impl Table for Notifications {
-    fn query_exists(id: i64) -> sqlx::query::QueryScalar<'static, Postgres, bool, <Postgres as Database>::Arguments<'static>> {
-        sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM notifications WHERE id = $1) AS "exists!""#, id)
+    fn query_exists(
+        id: i64,
+    ) -> sqlx::query::QueryScalar<'static, Postgres, bool, <Postgres as Database>::Arguments<'static>>
+    {
+        sqlx::query_scalar!(
+            r#"SELECT EXISTS (SELECT 1 FROM notifications WHERE id = $1) AS "exists!""#,
+            id
+        )
     }
 }
 
 pub(crate) enum Races {}
 
 impl Table for Races {
-    fn query_exists(id: i64) -> sqlx::query::QueryScalar<'static, Postgres, bool, <Postgres as Database>::Arguments<'static>> {
-        sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM races WHERE id = $1) AS "exists!""#, id)
+    fn query_exists(
+        id: i64,
+    ) -> sqlx::query::QueryScalar<'static, Postgres, bool, <Postgres as Database>::Arguments<'static>>
+    {
+        sqlx::query_scalar!(
+            r#"SELECT EXISTS (SELECT 1 FROM races WHERE id = $1) AS "exists!""#,
+            id
+        )
     }
 }
 
 pub(crate) enum Teams {}
 
 impl Table for Teams {
-    fn query_exists(id: i64) -> sqlx::query::QueryScalar<'static, Postgres, bool, <Postgres as Database>::Arguments<'static>> {
-        sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM teams WHERE id = $1) AS "exists!""#, id)
+    fn query_exists(
+        id: i64,
+    ) -> sqlx::query::QueryScalar<'static, Postgres, bool, <Postgres as Database>::Arguments<'static>>
+    {
+        sqlx::query_scalar!(
+            r#"SELECT EXISTS (SELECT 1 FROM teams WHERE id = $1) AS "exists!""#,
+            id
+        )
     }
 }
 
 pub(crate) enum Users {}
 
 impl Table for Users {
-    fn query_exists(id: i64) -> sqlx::query::QueryScalar<'static, Postgres, bool, <Postgres as Database>::Arguments<'static>> {
-        sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM users WHERE id = $1) AS "exists!""#, id)
+    fn query_exists(
+        id: i64,
+    ) -> sqlx::query::QueryScalar<'static, Postgres, bool, <Postgres as Database>::Arguments<'static>>
+    {
+        sqlx::query_scalar!(
+            r#"SELECT EXISTS (SELECT 1 FROM users WHERE id = $1) AS "exists!""#,
+            id
+        )
     }
 }
 
 pub(crate) enum RoleTypes {}
 
 impl Table for RoleTypes {
-    fn query_exists(id: i64) -> sqlx::query::QueryScalar<'static, Postgres, bool, <Postgres as Database>::Arguments<'static>> {
-        sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM role_types WHERE id = $1) AS "exists!""#, id as i32)
+    fn query_exists(
+        id: i64,
+    ) -> sqlx::query::QueryScalar<'static, Postgres, bool, <Postgres as Database>::Arguments<'static>>
+    {
+        sqlx::query_scalar!(
+            r#"SELECT EXISTS (SELECT 1 FROM role_types WHERE id = $1) AS "exists!""#,
+            id as i32
+        )
     }
 }
 
 pub(crate) enum RoleBindings {}
 
 impl Table for RoleBindings {
-    fn query_exists(id: i64) -> sqlx::query::QueryScalar<'static, Postgres, bool, <Postgres as Database>::Arguments<'static>> {
-        sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM role_bindings WHERE id = $1) AS "exists!""#, id as i32)
+    fn query_exists(
+        id: i64,
+    ) -> sqlx::query::QueryScalar<'static, Postgres, bool, <Postgres as Database>::Arguments<'static>>
+    {
+        sqlx::query_scalar!(
+            r#"SELECT EXISTS (SELECT 1 FROM role_bindings WHERE id = $1) AS "exists!""#,
+            id as i32
+        )
     }
 }
 
 pub(crate) enum RoleRequests {}
 
 impl Table for RoleRequests {
-    fn query_exists(id: i64) -> sqlx::query::QueryScalar<'static, Postgres, bool, <Postgres as Database>::Arguments<'static>> {
-        sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM role_requests WHERE id = $1) AS "exists!""#, id as i32)
+    fn query_exists(
+        id: i64,
+    ) -> sqlx::query::QueryScalar<'static, Postgres, bool, <Postgres as Database>::Arguments<'static>>
+    {
+        sqlx::query_scalar!(
+            r#"SELECT EXISTS (SELECT 1 FROM role_requests WHERE id = $1) AS "exists!""#,
+            id as i32
+        )
     }
 }
 
 pub(crate) enum Signups {}
 
 impl Table for Signups {
-    fn query_exists(id: i64) -> sqlx::query::QueryScalar<'static, Postgres, bool, <Postgres as Database>::Arguments<'static>> {
-        sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM signups WHERE id = $1) AS "exists!""#, id as i32)
+    fn query_exists(
+        id: i64,
+    ) -> sqlx::query::QueryScalar<'static, Postgres, bool, <Postgres as Database>::Arguments<'static>>
+    {
+        sqlx::query_scalar!(
+            r#"SELECT EXISTS (SELECT 1 FROM signups WHERE id = $1) AS "exists!""#,
+            id as i32
+        )
     }
 }
 
 pub(crate) enum EventRoleBindingOverrides {}
 
 impl Table for EventRoleBindingOverrides {
-    fn query_exists(id: i64) -> sqlx::query::QueryScalar<'static, Postgres, bool, <Postgres as Database>::Arguments<'static>> {
-        sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM event_role_binding_overrides WHERE id = $1) AS "exists!""#, id as i32)
+    fn query_exists(
+        id: i64,
+    ) -> sqlx::query::QueryScalar<'static, Postgres, bool, <Postgres as Database>::Arguments<'static>>
+    {
+        sqlx::query_scalar!(
+            r#"SELECT EXISTS (SELECT 1 FROM event_role_binding_overrides WHERE id = $1) AS "exists!""#,
+            id as i32
+        )
     }
 }
 
 pub(crate) enum EventDisabledRoleBindings {}
 
 impl Table for EventDisabledRoleBindings {
-    fn query_exists(id: i64) -> sqlx::query::QueryScalar<'static, Postgres, bool, <Postgres as Database>::Arguments<'static>> {
-        sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM event_disabled_role_bindings WHERE id = $1) AS "exists!""#, id as i32)
+    fn query_exists(
+        id: i64,
+    ) -> sqlx::query::QueryScalar<'static, Postgres, bool, <Postgres as Database>::Arguments<'static>>
+    {
+        sqlx::query_scalar!(
+            r#"SELECT EXISTS (SELECT 1 FROM event_disabled_role_bindings WHERE id = $1) AS "exists!""#,
+            id as i32
+        )
     }
 }
 
 #[derive(Derivative, Deserialize, Serialize)]
 #[cfg_attr(unix, derive(Protocol), async_proto(where(T: Sync)))]
-#[derivative(Debug(bound = ""), Clone(bound = ""), Copy(bound = ""), PartialEq(bound = ""), Eq(bound = ""), Hash(bound = ""), PartialOrd(bound = ""), Ord(bound = ""))]
+#[derivative(
+    Debug(bound = ""),
+    Clone(bound = ""),
+    Copy(bound = ""),
+    PartialEq(bound = ""),
+    Eq(bound = ""),
+    Hash(bound = ""),
+    PartialOrd(bound = ""),
+    Ord(bound = "")
+)]
 #[serde(from = "u64", into = "u64")]
 pub(crate) struct Id<T: Table> {
     inner: u64,
@@ -117,7 +180,9 @@ impl<T: Table> Id<T> {
         Ok(Self {
             inner: loop {
                 let id = rng().random();
-                if !T::query_exists(id).fetch_one(&mut **transaction).await? { break id as u64 }
+                if !T::query_exists(id).fetch_one(&mut **transaction).await? {
+                    break id as u64;
+                }
             },
             _table: PhantomData,
         })
@@ -178,19 +243,31 @@ impl<T: Table> fmt::Display for Id<T> {
 }
 
 impl<'r, T: Table, DB: Database> Decode<'r, DB> for Id<T>
-where i64: Decode<'r, DB> {
-    fn decode(value: <DB as Database>::ValueRef<'r>) -> Result<Self, Box<dyn std::error::Error + 'static + Send + Sync>> {
+where
+    i64: Decode<'r, DB>,
+{
+    fn decode(
+        value: <DB as Database>::ValueRef<'r>,
+    ) -> Result<Self, Box<dyn std::error::Error + 'static + Send + Sync>> {
         i64::decode(value).map(|id| Self::from(id))
     }
 }
 
 impl<'q, T: Table, DB: Database> Encode<'q, DB> for Id<T>
-where i64: Encode<'q, DB> {
-    fn encode_by_ref(&self, buf: &mut <DB as Database>::ArgumentBuffer<'q>) -> Result<sqlx::encode::IsNull, Box<dyn std::error::Error + Send + Sync>> {
+where
+    i64: Encode<'q, DB>,
+{
+    fn encode_by_ref(
+        &self,
+        buf: &mut <DB as Database>::ArgumentBuffer<'q>,
+    ) -> Result<sqlx::encode::IsNull, Box<dyn std::error::Error + Send + Sync>> {
         (self.inner as i64).encode(buf)
     }
 
-    fn encode(self, buf: &mut <DB as Database>::ArgumentBuffer<'q>) -> Result<sqlx::encode::IsNull, Box<dyn std::error::Error + Send + Sync>> {
+    fn encode(
+        self,
+        buf: &mut <DB as Database>::ArgumentBuffer<'q>,
+    ) -> Result<sqlx::encode::IsNull, Box<dyn std::error::Error + Send + Sync>> {
         (self.inner as i64).encode(buf)
     }
 
@@ -204,7 +281,9 @@ where i64: Encode<'q, DB> {
 }
 
 impl<T: Table, DB: Database> sqlx::Type<DB> for Id<T>
-where i64: sqlx::Type<DB> {
+where
+    i64: sqlx::Type<DB>,
+{
     fn type_info() -> <DB as Database>::TypeInfo {
         i64::type_info()
     }
@@ -239,18 +318,25 @@ impl<T: Table, P: Part> UriDisplay<P> for Id<T> {
 impl<T: Table, P: Part> FromUriParam<P, Self> for Id<T> {
     type Target = Id<T>;
 
-    fn from_uri_param(param: Self) -> Self { param }
+    fn from_uri_param(param: Self) -> Self {
+        param
+    }
 }
 
 impl<'v, T: Table + Send> FromFormField<'v> for Id<T>
-where i64: FromFormField<'v>, u64: FromFormField<'v> {
+where
+    i64: FromFormField<'v>,
+    u64: FromFormField<'v>,
+{
     fn from_value(field: form::ValueField<'v>) -> form::Result<'v, Self> {
         u64::from_value(field.clone())
             .map(Self::from)
             .or_else(|_| i64::from_value(field).map(Self::from))
     }
 
-    fn default() -> Option<Self> { None }
+    fn default() -> Option<Self> {
+        None
+    }
 }
 
 impl From<Id<Races>> for mhstatus::RaceId {
@@ -263,8 +349,14 @@ impl From<Id<Races>> for mhstatus::RaceId {
 pub(crate) enum ZsrBackends {}
 
 impl Table for ZsrBackends {
-    fn query_exists(id: i64) -> sqlx::query::QueryScalar<'static, Postgres, bool, <Postgres as Database>::Arguments<'static>> {
-        sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM zsr_restreaming_backends WHERE id = $1) AS "exists!""#, id as i32)
+    fn query_exists(
+        id: i64,
+    ) -> sqlx::query::QueryScalar<'static, Postgres, bool, <Postgres as Database>::Arguments<'static>>
+    {
+        sqlx::query_scalar!(
+            r#"SELECT EXISTS (SELECT 1 FROM zsr_restreaming_backends WHERE id = $1) AS "exists!""#,
+            id as i32
+        )
     }
 }
 
@@ -272,7 +364,13 @@ impl Table for ZsrBackends {
 pub(crate) enum ZsrExports {}
 
 impl Table for ZsrExports {
-    fn query_exists(id: i64) -> sqlx::query::QueryScalar<'static, Postgres, bool, <Postgres as Database>::Arguments<'static>> {
-        sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM zsr_restream_exports WHERE id = $1) AS "exists!""#, id as i32)
+    fn query_exists(
+        id: i64,
+    ) -> sqlx::query::QueryScalar<'static, Postgres, bool, <Postgres as Database>::Arguments<'static>>
+    {
+        sqlx::query_scalar!(
+            r#"SELECT EXISTS (SELECT 1 FROM zsr_restream_exports WHERE id = $1) AS "exists!""#,
+            id as i32
+        )
     }
 }

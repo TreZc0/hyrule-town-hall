@@ -1,16 +1,16 @@
 use crate::{
-    event::{
-        Role,
-        SignupStatus,
-    },
+    event::{Role, SignupStatus},
     prelude::*,
 };
 
 #[derive(Debug, thiserror::Error, rocket_util::Error)]
 pub(crate) enum Error {
-    #[error(transparent)] Event(#[from] event::DataError),
-    #[error(transparent)] Page(#[from] PageError),
-    #[error(transparent)] Sql(#[from] sqlx::Error),
+    #[error(transparent)]
+    Event(#[from] event::DataError),
+    #[error(transparent)]
+    Page(#[from] PageError),
+    #[error(transparent)]
+    Sql(#[from] sqlx::Error),
     #[error("unknown event")]
     UnknownEvent,
     #[error("unknown user")]
@@ -32,11 +32,18 @@ pub(crate) enum Notification {
 }
 
 impl Notification {
-    pub(crate) async fn get(transaction: &mut Transaction<'_, Postgres>, me: &User) -> Result<Vec<Self>, event::DataError> {
-        let mut notifications = sqlx::query_scalar!(r#"SELECT id AS "id: Id<Notifications>" FROM notifications WHERE rcpt = $1"#, me.id as _)
-            .fetch(&mut **transaction)
-            .map_ok(Self::Simple)
-            .try_collect::<Vec<_>>().await?;
+    pub(crate) async fn get(
+        transaction: &mut Transaction<'_, Postgres>,
+        me: &User,
+    ) -> Result<Vec<Self>, event::DataError> {
+        let mut notifications = sqlx::query_scalar!(
+            r#"SELECT id AS "id: Id<Notifications>" FROM notifications WHERE rcpt = $1"#,
+            me.id as _
+        )
+        .fetch(&mut **transaction)
+        .map_ok(Self::Simple)
+        .try_collect::<Vec<_>>()
+        .await?;
         for team_id in sqlx::query_scalar!(r#"SELECT team AS "team: Id<Teams>" FROM team_members WHERE member = $1 AND status = 'unconfirmed'"#, me.id as _).fetch_all(&mut **transaction).await? {
             let team_row = sqlx::query!(r#"SELECT series AS "series: Series", event, name, racetime_slug FROM teams WHERE id = $1"#, team_id as _).fetch_one(&mut **transaction).await?;
             let event = event::Data::new(&mut *transaction, team_row.series, team_row.event).await?.expect("enforced by database constraint");
@@ -47,7 +54,14 @@ impl Notification {
         Ok(notifications)
     }
 
-    async fn into_html(self, transaction: &mut Transaction<'_, Postgres>, me: &User, csrf: Option<&CsrfToken>, errors: Vec<&form::Error<'_>>, source: TeamInviteSource) -> Result<RawHtml<String>, Error> {
+    async fn into_html(
+        self,
+        transaction: &mut Transaction<'_, Postgres>,
+        me: &User,
+        csrf: Option<&CsrfToken>,
+        errors: Vec<&form::Error<'_>>,
+        source: TeamInviteSource,
+    ) -> Result<RawHtml<String>, Error> {
         Ok(match self {
             Self::Simple(id) => {
                 let text = match sqlx::query_scalar!(r#"SELECT kind AS "kind: SimpleNotificationKind" FROM notifications WHERE id = $1"#, id as _).fetch_one(&mut **transaction).await? {
@@ -92,7 +106,9 @@ impl Notification {
                     div(class = "button-row") : button;
                 }
             }
-            Self::TeamInvite(team_id) => team_invite(transaction, me, csrf, errors, source, team_id).await?,
+            Self::TeamInvite(team_id) => {
+                team_invite(transaction, me, csrf, errors, source, team_id).await?
+            }
         })
     }
 }
@@ -122,9 +138,23 @@ impl From<TeamInviteSource> for event::ResignFormSource {
     }
 }
 
-pub(crate) async fn team_invite(transaction: &mut Transaction<'_, Postgres>, me: &User, csrf: Option<&CsrfToken>, errors: Vec<&form::Error<'_>>, source: TeamInviteSource, team_id: Id<Teams>) -> Result<RawHtml<String>, Error> {
-    let team_row = sqlx::query!(r#"SELECT series AS "series: Series", event, name, racetime_slug FROM teams WHERE id = $1"#, team_id as _).fetch_one(&mut **transaction).await?;
-    let event = event::Data::new(&mut *transaction, team_row.series, team_row.event).await?.ok_or(Error::UnknownEvent)?;
+pub(crate) async fn team_invite(
+    transaction: &mut Transaction<'_, Postgres>,
+    me: &User,
+    csrf: Option<&CsrfToken>,
+    errors: Vec<&form::Error<'_>>,
+    source: TeamInviteSource,
+    team_id: Id<Teams>,
+) -> Result<RawHtml<String>, Error> {
+    let team_row = sqlx::query!(
+        r#"SELECT series AS "series: Series", event, name, racetime_slug FROM teams WHERE id = $1"#,
+        team_id as _
+    )
+    .fetch_one(&mut **transaction)
+    .await?;
+    let event = event::Data::new(&mut *transaction, team_row.series, team_row.event)
+        .await?
+        .ok_or(Error::UnknownEvent)?;
     let mut creator = None;
     let mut my_role = None;
     let mut teammates = Vec::default();
@@ -277,25 +307,52 @@ pub(crate) async fn team_invite(transaction: &mut Transaction<'_, Postgres>, me:
     })
 }
 
-pub(crate) async fn list(pool: &PgPool, me: Option<User>, uri: Origin<'_>, csrf: Option<&CsrfToken>, ctx: Context<'_>) -> Result<RawHtml<String>, Error> {
+pub(crate) async fn list(
+    pool: &PgPool,
+    me: Option<User>,
+    uri: Origin<'_>,
+    csrf: Option<&CsrfToken>,
+    ctx: Context<'_>,
+) -> Result<RawHtml<String>, Error> {
     let mut transaction = pool.begin().await?;
     Ok(if let Some(me) = me {
         let mut notifications = Vec::default();
         for notification in Notification::get(&mut transaction, &me).await? {
-            notifications.push(notification.into_html(&mut transaction, &me, csrf, ctx.errors().collect_vec(), TeamInviteSource::Notifications).await?);
+            notifications.push(
+                notification
+                    .into_html(
+                        &mut transaction,
+                        &me,
+                        csrf,
+                        ctx.errors().collect_vec(),
+                        TeamInviteSource::Notifications,
+                    )
+                    .await?,
+            );
         }
-        page(transaction, &Some(me), &uri, PageStyle { kind: PageKind::Notifications, ..PageStyle::default() }, "Notifications — Hyrule Town Hall", html! {
-            h1 : "Notifications";
-            @if notifications.is_empty() {
-                p : "You have no notifications.";
-            } else {
-                ul {
-                    @for notification in notifications {
-                        li : notification;
+        page(
+            transaction,
+            &Some(me),
+            &uri,
+            PageStyle {
+                kind: PageKind::Notifications,
+                ..PageStyle::default()
+            },
+            "Notifications — Hyrule Town Hall",
+            html! {
+                h1 : "Notifications";
+                @if notifications.is_empty() {
+                    p : "You have no notifications.";
+                } else {
+                    ul {
+                        @for notification in notifications {
+                            li : notification;
+                        }
                     }
                 }
-            }
-        }).await?
+            },
+        )
+        .await?
     } else {
         page(transaction, &me, &uri, PageStyle { kind: PageKind::Notifications, ..PageStyle::default() }, "Notifications — Hyrule Town Hall", html! {
             p {
@@ -307,19 +364,39 @@ pub(crate) async fn list(pool: &PgPool, me: Option<User>, uri: Origin<'_>, csrf:
 }
 
 #[rocket::get("/notifications")]
-pub(crate) async fn notifications(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>, csrf: Option<CsrfToken>) -> Result<RawHtml<String>, Error> {
+pub(crate) async fn notifications(
+    pool: &State<PgPool>,
+    me: Option<User>,
+    uri: Origin<'_>,
+    csrf: Option<CsrfToken>,
+) -> Result<RawHtml<String>, Error> {
     list(pool, me, uri, csrf.as_ref(), Context::default()).await
 }
 
 #[rocket::post("/notifications/dismiss/<id>", data = "<form>")]
-pub(crate) async fn dismiss(pool: &State<PgPool>, me: User, uri: Origin<'_>, id: Id<Notifications>, csrf: Option<CsrfToken>, form: Form<Contextual<'_, EmptyForm>>) -> Result<RedirectOrContent, Error> {
+pub(crate) async fn dismiss(
+    pool: &State<PgPool>,
+    me: User,
+    uri: Origin<'_>,
+    id: Id<Notifications>,
+    csrf: Option<CsrfToken>,
+    form: Form<Contextual<'_, EmptyForm>>,
+) -> Result<RedirectOrContent, Error> {
     let mut form = form.into_inner();
     form.verify(&csrf);
     Ok(if form.value.is_some() {
         if form.context.errors().next().is_some() {
-            RedirectOrContent::Content(list(pool, Some(me), uri, csrf.as_ref(), form.context).await?)
+            RedirectOrContent::Content(
+                list(pool, Some(me), uri, csrf.as_ref(), form.context).await?,
+            )
         } else {
-            sqlx::query!("DELETE FROM notifications WHERE id = $1 AND rcpt = $2", id as _, me.id as _).execute(&**pool).await?;
+            sqlx::query!(
+                "DELETE FROM notifications WHERE id = $1 AND rcpt = $2",
+                id as _,
+                me.id as _
+            )
+            .execute(&**pool)
+            .await?;
             RedirectOrContent::Redirect(Redirect::to(uri!(notifications)))
         }
     } else {

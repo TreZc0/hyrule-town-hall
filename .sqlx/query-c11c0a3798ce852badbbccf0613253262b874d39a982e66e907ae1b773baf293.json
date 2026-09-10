@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT COUNT(*) FROM races WHERE series = $1 AND event = $2 AND phase = 'Qualifier'",
+  "query": "SELECT COUNT(*) FROM races WHERE series = $1 AND event = $2 AND is_qualifier",
   "describe": {
     "columns": [
       {
@@ -19,5 +19,5 @@
       null
     ]
   },
-  "hash": "6883442eb7f96b3055cf50ab23341f9995d56b370570457f670fd8bdc6238b91"
+  "hash": "c11c0a3798ce852badbbccf0613253262b874d39a982e66e907ae1b773baf293"
 }

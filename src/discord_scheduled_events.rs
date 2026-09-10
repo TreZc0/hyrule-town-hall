@@ -1,18 +1,13 @@
 use {
     crate::{
-        cal::{Race, RaceSchedule, Entrants},
+        cal::{Entrants, Race, RaceSchedule},
         discord_bot::PgSnowflake,
         event::Data as EventData,
         prelude::*,
     },
     chrono::TimeDelta,
-    serenity::all::{
-        CreateScheduledEvent,
-        EditScheduledEvent,
-        ScheduledEventType,
-        Timestamp,
-    },
-    sqlx::{Transaction, Postgres},
+    serenity::all::{CreateScheduledEvent, EditScheduledEvent, ScheduledEventType, Timestamp},
+    sqlx::{Postgres, Transaction},
     std::borrow::Cow,
 };
 
@@ -22,19 +17,20 @@ const MAX_DISCORD_EVENT_TITLE_CHARS: usize = 100;
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum Error {
-    #[error(transparent)] Serenity(#[from] serenity::Error),
-    #[error(transparent)] Sql(#[from] sqlx::Error),
-    #[error(transparent)] Cal(#[from] cal::Error),
-    #[error(transparent)] DiscordBot(#[from] crate::discord_bot::Error),
+    #[error(transparent)]
+    Serenity(#[from] serenity::Error),
+    #[error(transparent)]
+    Sql(#[from] sqlx::Error),
+    #[error(transparent)]
+    Cal(#[from] cal::Error),
+    #[error(transparent)]
+    DiscordBot(#[from] crate::discord_bot::Error),
     #[error("Event does not have Discord guild configured")]
     NoDiscordGuild,
 }
 
 /// Check if a race should have a Discord scheduled event based on configuration
-pub(crate) fn should_create_discord_event(
-    race: &Race,
-    event_config: &EventData<'_>,
-) -> bool {
+pub(crate) fn should_create_discord_event(race: &Race, event_config: &EventData<'_>) -> bool {
     // Feature must be enabled
     if !event_config.discord_events_enabled {
         return false;
@@ -68,19 +64,26 @@ async fn resolve_event_location(
     event_config: &EventData<'_>,
 ) -> Result<String, Error> {
     let url = if !race.video_urls.is_empty() {
-        race.video_urls.get(&event_config.language)
+        race.video_urls
+            .get(&event_config.language)
             .or_else(|| race.video_urls.values().next())
             .map(|u| u.to_string())
     } else if matches!(race.schedule, RaceSchedule::Live { room: Some(_), .. }) {
-        race.multistream_url(transaction, http_client, event_config).await?
+        race.multistream_url(transaction, http_client, event_config)
+            .await?
             .map(|u| u.to_string())
     } else {
-        race.multistream_url_prerace(transaction, http_client, event_config).await?
+        race.multistream_url_prerace(transaction, http_client, event_config)
+            .await?
             .map(|u| u.to_string())
     };
 
     let url = url.unwrap_or_else(|| {
-        event_config.url.as_ref().map(|u| u.to_string()).unwrap_or_else(|| "https://ootrandomizer.com".to_string())
+        event_config
+            .url
+            .as_ref()
+            .map(|u| u.to_string())
+            .unwrap_or_else(|| "https://ootrandomizer.com".to_string())
     });
 
     Ok(if url.len() > 100 {
@@ -107,13 +110,19 @@ fn discord_event_title(title: String) -> String {
     if title.chars().count() <= MAX_DISCORD_EVENT_TITLE_CHARS {
         title
     } else {
-        format!("{}...", title.chars().take(MAX_DISCORD_EVENT_TITLE_CHARS - 3).collect::<String>())
+        format!(
+            "{}...",
+            title
+                .chars()
+                .take(MAX_DISCORD_EVENT_TITLE_CHARS - 3)
+                .collect::<String>()
+        )
     }
 }
 
 fn compact_title_label(race: &Race) -> String {
-    let phase = race.phase.as_deref()
-        .map(|phase| phase
+    let phase = race.phase.as_deref().map(|phase| {
+        phase
             .replace("Winners", "W")
             .replace("Winner", "W")
             .replace("Losers", "L")
@@ -124,13 +133,15 @@ fn compact_title_label(race: &Race) -> String {
             .replace("Semifinal", "SF")
             .replace("Final", "F")
             .split_whitespace()
-            .join(" "));
-    let round = race.round.as_deref()
-        .map(|round| round
+            .join(" ")
+    });
+    let round = race.round.as_deref().map(|round| {
+        round
             .replace("Round ", "R")
             .replace("Quarterfinal", "QF")
             .replace("Semifinal", "SF")
-            .replace("Final", "F"));
+            .replace("Final", "F")
+    });
     let game = race.game.map(|game| format!("G{game}"));
     [phase, round, game].into_iter().flatten().join(" ")
 }
@@ -142,14 +153,29 @@ async fn compact_title_matchup(
 ) -> Result<String, Error> {
     Ok(match &race.entrants {
         Entrants::Two([p1, p2]) => {
-            let p1_name = p1.name(transaction, ctx).await?.unwrap_or(Cow::Borrowed("TBD"));
-            let p2_name = p2.name(transaction, ctx).await?.unwrap_or(Cow::Borrowed("TBD"));
+            let p1_name = p1
+                .name(transaction, ctx)
+                .await?
+                .unwrap_or(Cow::Borrowed("TBD"));
+            let p2_name = p2
+                .name(transaction, ctx)
+                .await?
+                .unwrap_or(Cow::Borrowed("TBD"));
             format!("{p1_name}/{p2_name}")
         }
         Entrants::Three([p1, p2, p3]) => {
-            let p1_name = p1.name(transaction, ctx).await?.unwrap_or(Cow::Borrowed("TBD"));
-            let p2_name = p2.name(transaction, ctx).await?.unwrap_or(Cow::Borrowed("TBD"));
-            let p3_name = p3.name(transaction, ctx).await?.unwrap_or(Cow::Borrowed("TBD"));
+            let p1_name = p1
+                .name(transaction, ctx)
+                .await?
+                .unwrap_or(Cow::Borrowed("TBD"));
+            let p2_name = p2
+                .name(transaction, ctx)
+                .await?
+                .unwrap_or(Cow::Borrowed("TBD"));
+            let p3_name = p3
+                .name(transaction, ctx)
+                .await?
+                .unwrap_or(Cow::Borrowed("TBD"));
             format!("{p1_name}/{p2_name}/{p3_name}")
         }
         Entrants::Named(name) => name.clone(),
@@ -175,8 +201,16 @@ async fn compact_combined_event_title(
             format!("{primary_label} - {primary_matchup} & {companion_matchup}")
         }
     } else {
-        let primary = if primary_label.is_empty() { primary_matchup } else { format!("{primary_label} - {primary_matchup}") };
-        let companion = if companion_label.is_empty() { companion_matchup } else { format!("{companion_label} - {companion_matchup}") };
+        let primary = if primary_label.is_empty() {
+            primary_matchup
+        } else {
+            format!("{primary_label} - {primary_matchup}")
+        };
+        let companion = if companion_label.is_empty() {
+            companion_matchup
+        } else {
+            format!("{companion_label} - {companion_matchup}")
+        };
         format!("{primary} & {companion}")
     })
 }
@@ -199,7 +233,9 @@ async fn generate_event_title(
     }
 
     if let Some(companion) = companion {
-        return Ok(discord_event_title(compact_combined_event_title(race, companion, transaction, ctx).await?));
+        return Ok(discord_event_title(
+            compact_combined_event_title(race, companion, transaction, ctx).await?,
+        ));
     }
 
     let mut title = String::new();
@@ -219,18 +255,28 @@ async fn generate_event_title(
     title.push_str(": ");
     match &race.entrants {
         Entrants::Two([p1, p2]) => {
-            let p1_name = p1.name(transaction, ctx).await?
+            let p1_name = p1
+                .name(transaction, ctx)
+                .await?
                 .unwrap_or(Cow::Borrowed("TBD"));
-            let p2_name = p2.name(transaction, ctx).await?
+            let p2_name = p2
+                .name(transaction, ctx)
+                .await?
                 .unwrap_or(Cow::Borrowed("TBD"));
             title.push_str(&format!("{} vs {}", p1_name, p2_name));
         }
         Entrants::Three([p1, p2, p3]) => {
-            let p1_name = p1.name(transaction, ctx).await?
+            let p1_name = p1
+                .name(transaction, ctx)
+                .await?
                 .unwrap_or(Cow::Borrowed("TBD"));
-            let p2_name = p2.name(transaction, ctx).await?
+            let p2_name = p2
+                .name(transaction, ctx)
+                .await?
                 .unwrap_or(Cow::Borrowed("TBD"));
-            let p3_name = p3.name(transaction, ctx).await?
+            let p3_name = p3
+                .name(transaction, ctx)
+                .await?
                 .unwrap_or(Cow::Borrowed("TBD"));
             title.push_str(&format!("{} vs {} vs {}", p1_name, p2_name, p3_name));
         }
@@ -276,7 +322,9 @@ async fn generate_event_description(
     }
 
     // Add restream links if available
-    let restream_links: Vec<String> = race.video_urls.iter()
+    let restream_links: Vec<String> = race
+        .video_urls
+        .iter()
         .map(|(lang, url)| {
             let lang_str = match lang {
                 English => "EN",
@@ -299,7 +347,8 @@ async fn generate_event_description(
             };
 
             // Extract channel name from URL
-            let channel_info = url.path()
+            let channel_info = url
+                .path()
                 .trim_end_matches('/')
                 .rsplit('/')
                 .next()
@@ -307,7 +356,10 @@ async fn generate_event_description(
                 .map(|channel| format!(" ({})", channel))
                 .unwrap_or_default();
 
-            format!("[{} Restream{}{}]({})", lang_str, platform, channel_info, url)
+            format!(
+                "[{} Restream{}{}]({})",
+                lang_str, platform, channel_info, url
+            )
         })
         .collect();
 
@@ -320,7 +372,10 @@ async fn generate_event_description(
 
     if let Some(companion) = companion {
         desc.push_str("\n**Shared race room:**\n");
-        desc.push_str(&format!("This scheduled event covers this race and {} for restream purposes.\n", companion.matchup_label(transaction, ctx).await?));
+        desc.push_str(&format!(
+            "This scheduled event covers this race and {} for restream purposes.\n",
+            companion.matchup_label(transaction, ctx).await?
+        ));
         desc.push_str("Only each runner's originally assigned matchup result counts for tournament progression.\n");
     }
 
@@ -357,7 +412,7 @@ pub(crate) async fn create_discord_scheduled_event(
         if race.discord_scheduled_event_id.is_some() {
             delete_discord_scheduled_event(ctx, transaction, race, event_config).await?;
         }
-        return Ok(())
+        return Ok(());
     }
 
     if !should_create_discord_event(race, event_config) {
@@ -372,13 +427,17 @@ pub(crate) async fn create_discord_scheduled_event(
 
     // If event already exists, update it instead
     if race.discord_scheduled_event_id.is_some() {
-        return update_discord_scheduled_event(ctx, transaction, race, event_config, http_client).await;
+        return update_discord_scheduled_event(ctx, transaction, race, event_config, http_client)
+            .await;
     }
 
     // Generate event content
     let companion = load_companion_race(transaction, http_client, race).await?;
-    let title = generate_event_title(race, companion.as_ref(), event_config, transaction, ctx).await?;
-    let description = generate_event_description(race, companion.as_ref(), event_config, transaction, ctx).await?;
+    let title =
+        generate_event_title(race, companion.as_ref(), event_config, transaction, ctx).await?;
+    let description =
+        generate_event_description(race, companion.as_ref(), event_config, transaction, ctx)
+            .await?;
     let location = resolve_event_location(transaction, http_client, race, event_config).await?;
 
     // Calculate end time (start + 3 hours default)
@@ -418,16 +477,19 @@ pub(crate) async fn update_discord_scheduled_event(
 
     let RaceSchedule::Live { start, .. } = race.schedule else {
         // Schedule changed from live to async/unscheduled, delete the event
-        return delete_discord_scheduled_event(ctx, transaction, &mut race.clone(), event_config).await;
+        return delete_discord_scheduled_event(ctx, transaction, &mut race.clone(), event_config)
+            .await;
     };
 
     if race.companion_primary_id(transaction).await?.is_some() {
-        return delete_discord_scheduled_event(ctx, transaction, &mut race.clone(), event_config).await;
+        return delete_discord_scheduled_event(ctx, transaction, &mut race.clone(), event_config)
+            .await;
     }
 
     if !should_create_discord_event(race, event_config) {
         // No longer meets criteria, delete the event
-        return delete_discord_scheduled_event(ctx, transaction, &mut race.clone(), event_config).await;
+        return delete_discord_scheduled_event(ctx, transaction, &mut race.clone(), event_config)
+            .await;
     }
 
     // Try to fetch the current event to check its state
@@ -448,9 +510,12 @@ pub(crate) async fn update_discord_scheduled_event(
         let _ = guild_id.delete_scheduled_event(&ctx.http, event_id).await;
 
         // Clear our stored ID from database
-        sqlx::query!("UPDATE races SET discord_scheduled_event_id = NULL WHERE id = $1", race.id as _)
-            .execute(&mut **transaction)
-            .await?;
+        sqlx::query!(
+            "UPDATE races SET discord_scheduled_event_id = NULL WHERE id = $1",
+            race.id as _
+        )
+        .execute(&mut **transaction)
+        .await?;
 
         // Only recreate if the new start time is at least 5 minutes in the future
         // Otherwise Discord will immediately transition it to ACTIVE, causing the same issue
@@ -460,8 +525,11 @@ pub(crate) async fn update_discord_scheduled_event(
 
         // Create a new event
         let companion = load_companion_race(transaction, http_client, race).await?;
-        let title = generate_event_title(race, companion.as_ref(), event_config, transaction, ctx).await?;
-        let description = generate_event_description(race, companion.as_ref(), event_config, transaction, ctx).await?;
+        let title =
+            generate_event_title(race, companion.as_ref(), event_config, transaction, ctx).await?;
+        let description =
+            generate_event_description(race, companion.as_ref(), event_config, transaction, ctx)
+                .await?;
         let location = resolve_event_location(transaction, http_client, race, event_config).await?;
         let end_time = start + TimeDelta::hours(3);
 
@@ -477,18 +545,24 @@ pub(crate) async fn update_discord_scheduled_event(
         let scheduled_event = guild_id.create_scheduled_event(&ctx.http, builder).await?;
 
         // Store the new event ID in database
-        sqlx::query!("UPDATE races SET discord_scheduled_event_id = $1 WHERE id = $2",
-            PgSnowflake(scheduled_event.id) as _, race.id as _)
-            .execute(&mut **transaction)
-            .await?;
+        sqlx::query!(
+            "UPDATE races SET discord_scheduled_event_id = $1 WHERE id = $2",
+            PgSnowflake(scheduled_event.id) as _,
+            race.id as _
+        )
+        .execute(&mut **transaction)
+        .await?;
 
         return Ok(());
     }
 
     // Generate updated content
     let companion = load_companion_race(transaction, http_client, race).await?;
-    let title = generate_event_title(race, companion.as_ref(), event_config, transaction, ctx).await?;
-    let description = generate_event_description(race, companion.as_ref(), event_config, transaction, ctx).await?;
+    let title =
+        generate_event_title(race, companion.as_ref(), event_config, transaction, ctx).await?;
+    let description =
+        generate_event_description(race, companion.as_ref(), event_config, transaction, ctx)
+            .await?;
     let location = resolve_event_location(transaction, http_client, race, event_config).await?;
 
     let end_time = start + TimeDelta::hours(3);
@@ -500,7 +574,9 @@ pub(crate) async fn update_discord_scheduled_event(
         .end_time(Timestamp::from_unix_timestamp(end_time.timestamp()).expect("valid timestamp"))
         .location(location);
 
-    guild_id.edit_scheduled_event(&ctx.http, event_id, builder).await?;
+    guild_id
+        .edit_scheduled_event(&ctx.http, event_id, builder)
+        .await?;
 
     Ok(())
 }
@@ -523,9 +599,12 @@ pub(crate) async fn delete_discord_scheduled_event(
 
     // Clear the stored ID
     race.discord_scheduled_event_id = None;
-    sqlx::query!("UPDATE races SET discord_scheduled_event_id = NULL WHERE id = $1", race.id as _)
-        .execute(&mut **transaction)
-        .await?;
+    sqlx::query!(
+        "UPDATE races SET discord_scheduled_event_id = NULL WHERE id = $1",
+        race.id as _
+    )
+    .execute(&mut **transaction)
+    .await?;
 
     Ok(())
 }

@@ -1,7 +1,4 @@
-use {
-    rocket::http::uri::Origin,
-    crate::prelude::*,
-};
+use {crate::prelude::*, rocket::http::uri::Origin};
 
 /// A form that only holds a CSRF token
 #[derive(FromForm, CsrfForm)]
@@ -16,9 +13,15 @@ fn render_form_error(error: &form::Error<'_>) -> RawHtml<String> {
     }
 }
 
-pub(crate) fn form_field(name: &str, errors: &mut Vec<&form::Error<'_>>, content: impl ToHtml) -> RawHtml<String> {
+pub(crate) fn form_field(
+    name: &str,
+    errors: &mut Vec<&form::Error<'_>>,
+    content: impl ToHtml,
+) -> RawHtml<String> {
     let field_errors;
-    (field_errors, *errors) = mem::take(errors).into_iter().partition(|error| error.is_for(name));
+    (field_errors, *errors) = mem::take(errors)
+        .into_iter()
+        .partition(|error| error.is_for(name));
     html! {
         fieldset(class? = (!field_errors.is_empty()).then_some("error")) {
             @for error in field_errors {
@@ -29,9 +32,15 @@ pub(crate) fn form_field(name: &str, errors: &mut Vec<&form::Error<'_>>, content
     }
 }
 
-pub(crate) fn form_table_cell(name: &str, errors: &mut Vec<&form::Error<'_>>, content: impl ToHtml) -> RawHtml<String> {
+pub(crate) fn form_table_cell(
+    name: &str,
+    errors: &mut Vec<&form::Error<'_>>,
+    content: impl ToHtml,
+) -> RawHtml<String> {
     let field_errors;
-    (field_errors, *errors) = mem::take(errors).into_iter().partition(|error| error.is_for(name));
+    (field_errors, *errors) = mem::take(errors)
+        .into_iter()
+        .partition(|error| error.is_for(name));
     html! {
         td {
             @for error in field_errors {
@@ -46,15 +55,33 @@ pub(crate) fn form_table_cell(name: &str, errors: &mut Vec<&form::Error<'_>>, co
 ///
 /// * Errors to display above the button row
 /// * The button itself
-pub(crate) fn button_form(uri: Origin<'_>, csrf: Option<&CsrfToken>, errors: Vec<&form::Error<'_>>, submit_text: &str) -> (RawHtml<String>, RawHtml<String>) {
+pub(crate) fn button_form(
+    uri: Origin<'_>,
+    csrf: Option<&CsrfToken>,
+    errors: Vec<&form::Error<'_>>,
+    submit_text: &str,
+) -> (RawHtml<String>, RawHtml<String>) {
     button_form_ext(uri, csrf, errors, RawHtml(""), submit_text)
 }
 
-pub(crate) fn button_form_ext(uri: Origin<'_>, csrf: Option<&CsrfToken>, errors: Vec<&form::Error<'_>>, extra_fields: impl ToHtml, submit_text: &str) -> (RawHtml<String>, RawHtml<String>) {
+pub(crate) fn button_form_ext(
+    uri: Origin<'_>,
+    csrf: Option<&CsrfToken>,
+    errors: Vec<&form::Error<'_>>,
+    extra_fields: impl ToHtml,
+    submit_text: &str,
+) -> (RawHtml<String>, RawHtml<String>) {
     button_form_ext_disabled(uri, csrf, errors, extra_fields, submit_text, false)
 }
 
-pub(crate) fn button_form_ext_disabled(uri: Origin<'_>, csrf: Option<&CsrfToken>, errors: Vec<&form::Error<'_>>, extra_fields: impl ToHtml, submit_text: &str, disabled: bool) -> (RawHtml<String>, RawHtml<String>) {
+pub(crate) fn button_form_ext_disabled(
+    uri: Origin<'_>,
+    csrf: Option<&CsrfToken>,
+    errors: Vec<&form::Error<'_>>,
+    extra_fields: impl ToHtml,
+    submit_text: &str,
+    disabled: bool,
+) -> (RawHtml<String>, RawHtml<String>) {
     (
         html! {
             @for error in errors {
@@ -71,7 +98,13 @@ pub(crate) fn button_form_ext_disabled(uri: Origin<'_>, csrf: Option<&CsrfToken>
     )
 }
 
-pub(crate) fn full_form(uri: Origin<'_>, csrf: Option<&CsrfToken>, content: impl ToHtml, errors: Vec<&form::Error<'_>>, submit_text: &str) -> RawHtml<String> {
+pub(crate) fn full_form(
+    uri: Origin<'_>,
+    csrf: Option<&CsrfToken>,
+    content: impl ToHtml,
+    errors: Vec<&form::Error<'_>>,
+    submit_text: &str,
+) -> RawHtml<String> {
     html! {
         form(action = uri.to_string(), method = "post") {
             : csrf;
@@ -86,7 +119,14 @@ pub(crate) fn full_form(uri: Origin<'_>, csrf: Option<&CsrfToken>, content: impl
     }
 }
 
-pub(crate) fn full_form_confirm(uri: Origin<'_>, csrf: Option<&CsrfToken>, content: impl ToHtml, errors: Vec<&form::Error<'_>>, submit_text: &str, confirm_message: &str) -> RawHtml<String> {
+pub(crate) fn full_form_confirm(
+    uri: Origin<'_>,
+    csrf: Option<&CsrfToken>,
+    content: impl ToHtml,
+    errors: Vec<&form::Error<'_>>,
+    submit_text: &str,
+    confirm_message: &str,
+) -> RawHtml<String> {
     let onsubmit = format!("return confirm('{}')", confirm_message.replace('\'', "\\'"));
     html! {
         form(action = uri.to_string(), method = "post", onsubmit = onsubmit) {
@@ -102,7 +142,13 @@ pub(crate) fn full_form_confirm(uri: Origin<'_>, csrf: Option<&CsrfToken>, conte
     }
 }
 
-pub(crate) fn button_form_confirm(uri: Origin<'_>, csrf: Option<&CsrfToken>, errors: Vec<&form::Error<'_>>, submit_text: &str, confirm_message: &str) -> (RawHtml<String>, RawHtml<String>) {
+pub(crate) fn button_form_confirm(
+    uri: Origin<'_>,
+    csrf: Option<&CsrfToken>,
+    errors: Vec<&form::Error<'_>>,
+    submit_text: &str,
+    confirm_message: &str,
+) -> (RawHtml<String>, RawHtml<String>) {
     let onsubmit = format!("return confirm('{}')", confirm_message.replace('\'', "\\'"));
     (
         html! {
@@ -118,4 +164,3 @@ pub(crate) fn button_form_confirm(uri: Origin<'_>, csrf: Option<&CsrfToken>, err
         },
     )
 }
-

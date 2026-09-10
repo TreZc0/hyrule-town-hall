@@ -1,17 +1,24 @@
+pub(crate) mod series;
 use crate::{
+    event::roles::{
+        GameRoleBinding, RoleRequest, RoleRequestStatus, RoleType,
+        assign_event_override_discord_roles, remove_event_override_discord_roles,
+        render_language_content_box_end, render_language_content_box_start, render_language_tabs,
+    },
+    form::{button_form, button_form_confirm, form_field, full_form, full_form_confirm},
     game::{Game, GameError},
-    prelude::*,
-    user::User,
-    event::roles::{GameRoleBinding, RoleType, RoleRequest, RoleRequestStatus, render_language_tabs, render_language_content_box_start, render_language_content_box_end, assign_event_override_discord_roles, remove_event_override_discord_roles},
     http::{PageError, StatusOrError},
-    form::{form_field, full_form, full_form_confirm, button_form, button_form_confirm},
     id::{RoleBindings, RoleRequests, RoleTypes},
-    time::{format_datetime, DateTimeFormat},
+    prelude::*,
     series::Series,
-    volunteer_requests,
-    volunteer_pings,
+    time::{DateTimeFormat, format_datetime},
+    user::User,
+    volunteer_pings, volunteer_requests,
 };
-use rocket::{uri, form::{Form, Contextual}};
+use rocket::{
+    form::{Contextual, Form},
+    uri,
+};
 
 pub(crate) async fn assign_game_discord_role(
     transaction: &mut Transaction<'_, Postgres>,
@@ -20,7 +27,9 @@ pub(crate) async fn assign_game_discord_role(
     role_binding_id: Id<RoleBindings>,
     discord_user_id: UserId,
 ) -> sqlx::Result<()> {
-    let Some(discord_guild) = game.discord_guild else { return Ok(()) };
+    let Some(discord_guild) = game.discord_guild else {
+        return Ok(());
+    };
     let discord_role_id = sqlx::query_scalar!(
         r#"SELECT discord_role_id FROM role_bindings WHERE id = $1 AND game_id = $2"#,
         role_binding_id as _,
@@ -29,10 +38,21 @@ pub(crate) async fn assign_game_discord_role(
     .fetch_optional(&mut **transaction)
     .await?
     .flatten();
-    let Some(discord_role_id) = discord_role_id else { return Ok(()) };
+    let Some(discord_role_id) = discord_role_id else {
+        return Ok(());
+    };
     if let Ok(member) = discord_guild.member(discord_ctx, discord_user_id).await {
-        if let Err(e) = member.add_role(discord_ctx, RoleId::new(discord_role_id.try_into().unwrap())).await {
-            eprintln!("Failed to assign game Discord role {} to user {} in guild {}: {}", discord_role_id, discord_user_id, discord_guild, e);
+        if let Err(e) = member
+            .add_role(
+                discord_ctx,
+                RoleId::new(discord_role_id.try_into().unwrap()),
+            )
+            .await
+        {
+            eprintln!(
+                "Failed to assign game Discord role {} to user {} in guild {}: {}",
+                discord_role_id, discord_user_id, discord_guild, e
+            );
         }
     }
     Ok(())
@@ -45,7 +65,9 @@ pub(crate) async fn remove_game_discord_role(
     role_binding_id: Id<RoleBindings>,
     discord_user_id: UserId,
 ) -> sqlx::Result<()> {
-    let Some(discord_guild) = game.discord_guild else { return Ok(()) };
+    let Some(discord_guild) = game.discord_guild else {
+        return Ok(());
+    };
     let discord_role_id = sqlx::query_scalar!(
         r#"SELECT discord_role_id FROM role_bindings WHERE id = $1 AND game_id = $2"#,
         role_binding_id as _,
@@ -54,10 +76,21 @@ pub(crate) async fn remove_game_discord_role(
     .fetch_optional(&mut **transaction)
     .await?
     .flatten();
-    let Some(discord_role_id) = discord_role_id else { return Ok(()) };
+    let Some(discord_role_id) = discord_role_id else {
+        return Ok(());
+    };
     if let Ok(member) = discord_guild.member(discord_ctx, discord_user_id).await {
-        if let Err(e) = member.remove_role(discord_ctx, RoleId::new(discord_role_id.try_into().unwrap())).await {
-            eprintln!("Failed to remove game Discord role {} from user {} in guild {}: {}", discord_role_id, discord_user_id, discord_guild, e);
+        if let Err(e) = member
+            .remove_role(
+                discord_ctx,
+                RoleId::new(discord_role_id.try_into().unwrap()),
+            )
+            .await
+        {
+            eprintln!(
+                "Failed to remove game Discord role {} from user {} in guild {}: {}",
+                discord_role_id, discord_user_id, discord_guild, e
+            );
         }
     }
     Ok(())
@@ -105,7 +138,11 @@ impl IsNetworkError for Error {
 
 #[allow(dead_code)]
 #[rocket::get("/games")]
-pub(crate) async fn list(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>) -> Result<RawHtml<String>, StatusOrError<Error>> {
+pub(crate) async fn list(
+    pool: &State<PgPool>,
+    me: Option<User>,
+    uri: Origin<'_>,
+) -> Result<RawHtml<String>, StatusOrError<Error>> {
     let mut transaction = pool.begin().await.map_err(Error::from)?;
     let games = Game::all(&mut transaction).await.map_err(Error::from)?;
     Ok(page(
@@ -122,7 +159,9 @@ pub(crate) async fn list(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>
                 }
             }
         },
-    ).await.map_err(Error::from)?)
+    )
+    .await
+    .map_err(Error::from)?)
 }
 
 async fn game_page<'a>(
@@ -137,18 +176,24 @@ async fn game_page<'a>(
     let series = game.series(&mut transaction).await?;
     let _admins = game.admins(&mut transaction).await.map_err(Error::from)?;
     let is_admin = if let Some(ref me) = me {
-        game.is_admin(&mut transaction, me).await.map_err(Error::from)?
+        game.is_admin(&mut transaction, me)
+            .await
+            .map_err(Error::from)?
     } else {
         false
     };
     let is_restreamer = if let Some(ref me) = me {
-        game.is_restreamer_any_language(&mut transaction, me).await.map_err(Error::from)?
+        game.is_restreamer_any_language(&mut transaction, me)
+            .await
+            .map_err(Error::from)?
     } else {
         false
     };
-    
+
     // Get role bindings for this game
-    let role_bindings = GameRoleBinding::for_game(&mut transaction, game.id).await.map_err(Error::from)?;
+    let role_bindings = GameRoleBinding::for_game(&mut transaction, game.id)
+        .await
+        .map_err(Error::from)?;
 
     // Get active languages and filter bindings
     let active_languages: Vec<Language> = {
@@ -167,15 +212,20 @@ async fn game_page<'a>(
         .or_else(|| active_languages.iter().find(|&&l| l == English).copied())
         .or_else(|| active_languages.first().copied())
         .unwrap_or(English);
-    let filtered_bindings: Vec<&GameRoleBinding> = role_bindings.iter().filter(|b| b.language == current_language).collect();
+    let filtered_bindings: Vec<&GameRoleBinding> = role_bindings
+        .iter()
+        .filter(|b| b.language == current_language)
+        .collect();
 
     // Get user's role requests if logged in
     let my_requests = if let Some(ref me) = me {
-        RoleRequest::for_user(&mut transaction, me.id).await.map_err(Error::from)?
+        RoleRequest::for_user(&mut transaction, me.id)
+            .await
+            .map_err(Error::from)?
     } else {
         Vec::new()
     };
-    
+
     // Get events for each series
     let mut series_with_events = Vec::new();
     for series_item in &series {
@@ -185,19 +235,20 @@ async fn game_page<'a>(
             series_item as _
         )
         .fetch_all(&mut *transaction)
-        .await.map_err(Error::from)?;
-        
+        .await
+        .map_err(Error::from)?;
+
         series_with_events.push((*series_item, events));
     }
-    
+
     let content = html! {
         article {
             h1 : game.display_name;
-            
+
             @if let Some(description) = &game.description {
                 p : description;
             }
-            
+
             h2 : "Series and Events";
             @if series_with_events.is_empty() {
                 p : "No series associated with this game.";
@@ -225,7 +276,7 @@ async fn game_page<'a>(
                     }
                 }
             }
-            
+
             h2 : "Game Volunteer Roles";
             p : "The coverage through restreams of matches and events requires volunteers. We are very grateful for anyone stepping up to help!";
 
@@ -247,7 +298,7 @@ async fn game_page<'a>(
                         .filter(|req| req.role_binding_id == binding.id && !matches!(req.status, RoleRequestStatus::Aborted))
                         .max_by_key(|req| req.created_at);
                     @let has_active_request = my_request.map_or(false, |req| matches!(req.status, RoleRequestStatus::Pending | RoleRequestStatus::Approved));
-                    
+
                     div(class = "role-binding") {
                         h4 {
                             : binding.role_type_name;
@@ -278,7 +329,7 @@ async fn game_page<'a>(
                                 : format!("{}", discord_role_id);
                             }
                         }
-                        
+
                         @if has_active_request {
                             @let request = my_request.unwrap();
                             p(class = "request-status") {
@@ -350,6 +401,9 @@ async fn game_page<'a>(
 
             @if is_admin || me.as_ref().map_or(false, |me| me.is_global_admin()) {
                 h2 : "Admin Actions";
+                @if me.as_ref().is_some_and(User::is_global_admin) {
+                    p { a(href = uri!(series::get(&game.name))) : "Manage Series"; }
+                }
                 p {
                     a(href = uri!(manage_admins(&game.name))) : "Manage Game Admins";
                 }
@@ -395,10 +449,15 @@ pub(crate) async fn get(
     let mut transaction = pool.begin().await.map_err(Error::from)?;
 
     let game = Game::from_name(&mut transaction, game_name)
-        .await.map_err(Error::from)?
+        .await
+        .map_err(Error::from)?
         .ok_or(StatusOrError::Status(Status::NotFound))?;
 
-    Ok(game_page(transaction, me, &uri, game, Vec::new(), csrf, lang).await.map_err(Error::from)?)
+    Ok(
+        game_page(transaction, me, &uri, game, Vec::new(), csrf, lang)
+            .await
+            .map_err(Error::from)?,
+    )
 }
 
 #[allow(dead_code)]
@@ -411,26 +470,30 @@ pub(crate) async fn manage_admins(
     game_name: &str,
 ) -> Result<RawHtml<String>, StatusOrError<Error>> {
     let mut transaction = pool.begin().await.map_err(Error::from)?;
-    
+
     let game = Game::from_name(&mut transaction, game_name)
-        .await.map_err(Error::from)?
+        .await
+        .map_err(Error::from)?
         .ok_or(StatusOrError::Status(Status::NotFound))?;
-    
+
     let me = me.ok_or(StatusOrError::Status(Status::Forbidden))?;
-    
-    let is_game_admin = game.is_admin(&mut transaction, &me).await.map_err(Error::from)?;
+
+    let is_game_admin = game
+        .is_admin(&mut transaction, &me)
+        .await
+        .map_err(Error::from)?;
     let is_global_admin = me.is_global_admin();
-    
+
     if !is_game_admin && !is_global_admin {
         return Err(StatusOrError::Status(Status::Forbidden));
     }
-    
+
     let admins = game.admins(&mut transaction).await.map_err(Error::from)?;
-    
+
     let content = html! {
         article {
             h1 : format!("Manage Admins — {}", game.display_name);
-            
+
             h2 : "Current Admins";
             @if admins.is_empty() {
                 p : "No admins assigned to this game.";
@@ -461,7 +524,7 @@ pub(crate) async fn manage_admins(
                     }
                 }
             }
-            
+
             h3 : "Add Admin";
             @let mut errors = Vec::new();
             : full_form(uri!(add_game_admin(&game_name)), csrf.as_ref(), html! {
@@ -474,9 +537,9 @@ pub(crate) async fn manage_admins(
                     label(class = "help") : "(Start typing a username to search for users. The search will match display names, racetime.gg IDs, and Discord usernames.)";
                 });
             }, errors, "Add Admin");
-            
+
             script(src = static_url!("user-search.js")) {}
-            
+
             p {
                 a(href = uri!(get(&game_name, _))) : "← Back to Game";
             }
@@ -491,7 +554,8 @@ pub(crate) async fn manage_admins(
         &format!("Manage Admins — {}", game.display_name),
         content,
     )
-    .await.map_err(Error::from)?)
+    .await
+    .map_err(Error::from)?)
 }
 
 #[allow(dead_code)]
@@ -508,24 +572,41 @@ pub(crate) async fn manage_roles(
     let mut transaction = pool.begin().await.map_err(Error::from)?;
 
     let game = Game::from_name(&mut transaction, game_name)
-        .await.map_err(Error::from)?
+        .await
+        .map_err(Error::from)?
         .ok_or(StatusOrError::Status(Status::NotFound))?;
 
     let me = me.ok_or(StatusOrError::Status(Status::Forbidden))?;
 
-    let is_game_admin = game.is_admin(&mut transaction, &me).await.map_err(Error::from)?;
+    let is_game_admin = game
+        .is_admin(&mut transaction, &me)
+        .await
+        .map_err(Error::from)?;
     let is_global_admin = me.is_global_admin();
-    let is_game_restreamer = game.is_restreamer_any_language(&mut transaction, &me).await.map_err(Error::from)?;
+    let is_game_restreamer = game
+        .is_restreamer_any_language(&mut transaction, &me)
+        .await
+        .map_err(Error::from)?;
 
     if !is_game_admin && !is_global_admin && !is_game_restreamer {
         return Err(StatusOrError::Status(Status::Forbidden));
     }
 
-    let role_bindings = GameRoleBinding::for_game(&mut transaction, game.id).await.map_err(Error::from)?;
+    let role_bindings = GameRoleBinding::for_game(&mut transaction, game.id)
+        .await
+        .map_err(Error::from)?;
     let all_role_types = RoleType::all(&mut transaction).await.map_err(Error::from)?;
-    let all_role_requests = RoleRequest::for_game(&mut transaction, game.id).await.map_err(Error::from)?;
-    let pending_requests = all_role_requests.iter().filter(|req| matches!(req.status, RoleRequestStatus::Pending)).collect::<Vec<_>>();
-    let approved_requests = all_role_requests.iter().filter(|req| matches!(req.status, RoleRequestStatus::Approved)).collect::<Vec<_>>();
+    let all_role_requests = RoleRequest::for_game(&mut transaction, game.id)
+        .await
+        .map_err(Error::from)?;
+    let pending_requests = all_role_requests
+        .iter()
+        .filter(|req| matches!(req.status, RoleRequestStatus::Pending))
+        .collect::<Vec<_>>();
+    let approved_requests = all_role_requests
+        .iter()
+        .filter(|req| matches!(req.status, RoleRequestStatus::Approved))
+        .collect::<Vec<_>>();
 
     // Get active languages and filter bindings
     let active_languages: Vec<Language> = {
@@ -544,7 +625,10 @@ pub(crate) async fn manage_roles(
         .or_else(|| active_languages.iter().find(|&&l| l == English).copied())
         .or_else(|| active_languages.first().copied())
         .unwrap_or(English);
-    let filtered_bindings: Vec<&GameRoleBinding> = role_bindings.iter().filter(|b| b.language == current_language).collect();
+    let filtered_bindings: Vec<&GameRoleBinding> = role_bindings
+        .iter()
+        .filter(|b| b.language == current_language)
+        .collect();
     let base_url = format!("/games/{}/roles", game_name);
 
     let game_ping_workflows = sqlx::query!(
@@ -563,11 +647,15 @@ pub(crate) async fn manage_roles(
         game.id,
     )
     .fetch_all(&mut *transaction)
-    .await.map_err(Error::from)?;
+    .await
+    .map_err(Error::from)?;
 
     let mut game_ping_lead_times: HashMap<i32, Vec<i32>> = HashMap::new();
     for wf in &game_ping_workflows {
-        if matches!(wf.workflow_type, volunteer_pings::PingWorkflowTypeDb::PerRace) {
+        if matches!(
+            wf.workflow_type,
+            volunteer_pings::PingWorkflowTypeDb::PerRace
+        ) {
             let lts = sqlx::query_scalar!(
                 "SELECT lead_time_hours FROM volunteer_ping_lead_times WHERE workflow_id = $1 ORDER BY lead_time_hours",
                 wf.id
@@ -735,7 +823,7 @@ pub(crate) async fn manage_roles(
                                     );
                                     : errors;
                                     div(class = "button-row") : approve_button;
-                                    
+
                                     @let (errors, reject_button) = button_form(
                                         uri!(reject_game_role_request(&game_name, request.id)),
                                         csrf.as_ref(),
@@ -1003,7 +1091,8 @@ pub(crate) async fn manage_roles(
         &format!("Manage Roles — {}", game.display_name),
         content,
     )
-    .await.map_err(Error::from)?)
+    .await
+    .map_err(Error::from)?)
 }
 
 #[derive(FromForm, CsrfForm)]
@@ -1044,11 +1133,15 @@ pub(crate) async fn apply_for_game_role(
         let mut transaction = pool.begin().await.map_err(Error::from)?;
 
         let game = Game::from_name(&mut transaction, game_name)
-            .await.map_err(Error::from)?
+            .await
+            .map_err(Error::from)?
             .ok_or(StatusOrError::Status(Status::NotFound))?;
 
         // Check if user already has an active request for this role binding
-        if RoleRequest::active_for_user(&mut transaction, value.role_binding_id, me.id).await.map_err(Error::from)? {
+        if RoleRequest::active_for_user(&mut transaction, value.role_binding_id, me.id)
+            .await
+            .map_err(Error::from)?
+        {
             let redirect_path = match lang {
                 Some(language) => format!("/games/{}?lang={}", game_name, language.short_code()),
                 None => format!("/games/{}", game_name),
@@ -1057,7 +1150,9 @@ pub(crate) async fn apply_for_game_role(
         }
 
         // Look up the role binding to check auto_approve and language
-        let role_bindings = GameRoleBinding::for_game(&mut transaction, game.id).await.map_err(Error::from)?;
+        let role_bindings = GameRoleBinding::for_game(&mut transaction, game.id)
+            .await
+            .map_err(Error::from)?;
         let role_binding = role_bindings.iter().find(|b| b.id == value.role_binding_id);
 
         // Create the role request
@@ -1072,7 +1167,9 @@ pub(crate) async fn apply_for_game_role(
             value.role_binding_id,
             me.id,
             notes.clone(),
-        ).await.map_err(Error::from)?;
+        )
+        .await
+        .map_err(Error::from)?;
 
         // Send Discord notification for non-auto-approve roles, and assign override discord roles if auto-approved
         if let Some(binding) = role_binding {
@@ -1085,7 +1182,9 @@ pub(crate) async fn apply_for_game_role(
                         &game,
                         value.role_binding_id,
                         discord_user.id,
-                    ).await {
+                    )
+                    .await
+                    {
                         eprintln!("Failed to assign game Discord role for game binding: {}", e);
                     }
                     if let Err(e) = assign_event_override_discord_roles(
@@ -1093,12 +1192,20 @@ pub(crate) async fn apply_for_game_role(
                         &*discord_ctx_guard,
                         value.role_binding_id,
                         discord_user.id,
-                    ).await {
-                        eprintln!("Failed to assign event override Discord roles for game binding: {}", e);
+                    )
+                    .await
+                    {
+                        eprintln!(
+                            "Failed to assign event override Discord roles for game binding: {}",
+                            e
+                        );
                     }
                 }
             } else if !binding.auto_approve {
-                if let Ok(Some((_guild_id, channel_id))) = game.notification_channel(&mut transaction, binding.language).await {
+                if let Ok(Some((_guild_id, channel_id))) = game
+                    .notification_channel(&mut transaction, binding.language)
+                    .await
+                {
                     let discord_ctx = discord_ctx.read().await;
                     let mut msg = MessageBuilder::default();
                     msg.push("New volunteer application: ");
@@ -1117,13 +1224,16 @@ pub(crate) async fn apply_for_game_role(
                     }
 
                     msg.push("\n\nClick here to review and manage role requests: ");
-                    msg.push_named_link_no_preview("Manage Roles", format!("{}/games/{}/roles",
-                        base_uri(),
-                        game.name
-                    ));
+                    msg.push_named_link_no_preview(
+                        "Manage Roles",
+                        format!("{}/games/{}/roles", base_uri(), game.name),
+                    );
 
                     if let Err(e) = channel_id.say(&*discord_ctx, msg.build()).await {
-                        eprintln!("Failed to send Discord notification for game role request: {}", e);
+                        eprintln!(
+                            "Failed to send Discord notification for game role request: {}",
+                            e
+                        );
                     }
                 }
             }
@@ -1138,11 +1248,14 @@ pub(crate) async fn apply_for_game_role(
     } else {
         let mut transaction = pool.begin().await.map_err(Error::from)?;
         let game = Game::from_name(&mut transaction, game_name)
-            .await.map_err(Error::from)?
+            .await
+            .map_err(Error::from)?
             .ok_or(StatusOrError::Status(Status::NotFound))?;
         let errors = form.context.errors().map(|e| e.clone()).collect::<Vec<_>>();
         RedirectOrContent::Content(
-            game_page(transaction, Some(me), &uri, game, errors, csrf, lang).await.map_err(Error::from)?
+            game_page(transaction, Some(me), &uri, game, errors, csrf, lang)
+                .await
+                .map_err(Error::from)?,
         )
     })
 }
@@ -1163,7 +1276,8 @@ pub(crate) async fn forfeit_game_role(
 
     let mut transaction = pool.begin().await.map_err(Error::from)?;
     let game = Game::from_name(&mut transaction, game_name)
-        .await.map_err(Error::from)?
+        .await
+        .map_err(Error::from)?
         .ok_or(StatusOrError::Status(Status::NotFound))?;
 
     Ok(if let Some(ref value) = form.value {
@@ -1200,7 +1314,9 @@ pub(crate) async fn forfeit_game_role(
 
         if let Some(request) = role_request {
             // Update the status to aborted
-            RoleRequest::update_status(&mut transaction, request.id, RoleRequestStatus::Aborted).await.map_err(Error::from)?;
+            RoleRequest::update_status(&mut transaction, request.id, RoleRequestStatus::Aborted)
+                .await
+                .map_err(Error::from)?;
 
             if let Some(discord_user) = me.discord.as_ref() {
                 let discord_ctx_guard = discord_ctx.read().await;
@@ -1210,7 +1326,9 @@ pub(crate) async fn forfeit_game_role(
                     &game,
                     value.role_binding_id,
                     discord_user.id,
-                ).await {
+                )
+                .await
+                {
                     eprintln!("Failed to remove game Discord role on forfeit: {}", e);
                 }
                 if let Err(e) = remove_event_override_discord_roles(
@@ -1218,8 +1336,13 @@ pub(crate) async fn forfeit_game_role(
                     &*discord_ctx_guard,
                     value.role_binding_id,
                     discord_user.id,
-                ).await {
-                    eprintln!("Failed to remove event override Discord roles on forfeit: {}", e);
+                )
+                .await
+                {
+                    eprintln!(
+                        "Failed to remove event override Discord roles on forfeit: {}",
+                        e
+                    );
                 }
             }
 
@@ -1231,13 +1354,17 @@ pub(crate) async fn forfeit_game_role(
             ));
             let errors = form.context.errors().map(|e| e.clone()).collect::<Vec<_>>();
             RedirectOrContent::Content(
-                game_page(transaction, Some(me), &uri, game, errors, csrf, None).await.map_err(Error::from)?
+                game_page(transaction, Some(me), &uri, game, errors, csrf, None)
+                    .await
+                    .map_err(Error::from)?,
             )
         }
     } else {
         let errors = form.context.errors().map(|e| e.clone()).collect::<Vec<_>>();
         RedirectOrContent::Content(
-            game_page(transaction, Some(me), &uri, game, errors, csrf, None).await.map_err(Error::from)?
+            game_page(transaction, Some(me), &uri, game, errors, csrf, None)
+                .await
+                .map_err(Error::from)?,
         )
     })
 }
@@ -1301,20 +1428,24 @@ pub(crate) async fn add_game_role_binding(
     let me = me.ok_or(StatusOrError::Status(Status::Forbidden))?;
     let mut form = form.into_inner();
     form.verify(&csrf);
-    
+
     if let Some(ref value) = form.value {
         let mut transaction = pool.begin().await.map_err(Error::from)?;
         let game = Game::from_name(&mut transaction, game_name)
-            .await.map_err(Error::from)?
+            .await
+            .map_err(Error::from)?
             .ok_or(StatusOrError::Status(Status::NotFound))?;
-        
-        let is_game_admin = game.is_admin(&mut transaction, &me).await.map_err(Error::from)?;
+
+        let is_game_admin = game
+            .is_admin(&mut transaction, &me)
+            .await
+            .map_err(Error::from)?;
         let is_global_admin = me.is_global_admin();
-        
+
         if !is_game_admin && !is_global_admin {
             return Err(StatusOrError::Status(Status::Forbidden));
         }
-        
+
         // Parse discord_role_id (optional)
         let discord_role_id = if value.discord_role_id.trim().is_empty() {
             None
@@ -1324,9 +1455,17 @@ pub(crate) async fn add_game_role_binding(
                 Err(_) => None,
             }
         };
-        
+
         // Check if role binding already exists
-        if GameRoleBinding::exists_for_role_type(&mut transaction, game.id, value.role_type_id, value.language).await.map_err(Error::from)? {
+        if GameRoleBinding::exists_for_role_type(
+            &mut transaction,
+            game.id,
+            value.role_type_id,
+            value.language,
+        )
+        .await
+        .map_err(Error::from)?
+        {
             return Ok(Redirect::to(uri!(manage_roles(game_name, _, _))));
         }
 
@@ -1340,15 +1479,20 @@ pub(crate) async fn add_game_role_binding(
             discord_role_id,
             value.auto_approve,
             value.language,
-        ).await.map_err(Error::from)?;
-        
+        )
+        .await
+        .map_err(Error::from)?;
+
         transaction.commit().await.map_err(Error::from)?;
     }
-    
+
     Ok(Redirect::to(uri!(manage_roles(game_name, _, _))))
 }
 
-#[rocket::post("/games/<game_name>/role-bindings/<binding_id>/remove", data = "<form>")]
+#[rocket::post(
+    "/games/<game_name>/role-bindings/<binding_id>/remove",
+    data = "<form>"
+)]
 pub(crate) async fn remove_game_role_binding(
     pool: &State<PgPool>,
     me: Option<User>,
@@ -1360,26 +1504,32 @@ pub(crate) async fn remove_game_role_binding(
     let me = me.ok_or(StatusOrError::Status(Status::Forbidden))?;
     let mut form = form.into_inner();
     form.verify(&csrf);
-    
+
     if form.value.is_some() {
         let mut transaction = pool.begin().await.map_err(Error::from)?;
         let game = Game::from_name(&mut transaction, game_name)
-            .await.map_err(Error::from)?
+            .await
+            .map_err(Error::from)?
             .ok_or(StatusOrError::Status(Status::NotFound))?;
-        
-        let is_game_admin = game.is_admin(&mut transaction, &me).await.map_err(Error::from)?;
+
+        let is_game_admin = game
+            .is_admin(&mut transaction, &me)
+            .await
+            .map_err(Error::from)?;
         let is_global_admin = me.is_global_admin();
-        
+
         if !is_game_admin && !is_global_admin {
             return Err(StatusOrError::Status(Status::Forbidden));
         }
-        
+
         // Delete the role binding
-        GameRoleBinding::delete(&mut transaction, binding_id).await.map_err(Error::from)?;
-        
+        GameRoleBinding::delete(&mut transaction, binding_id)
+            .await
+            .map_err(Error::from)?;
+
         transaction.commit().await.map_err(Error::from)?;
     }
-    
+
     Ok(Redirect::to(uri!(manage_roles(game_name, _, _))))
 }
 
@@ -1400,14 +1550,19 @@ pub(crate) async fn approve_game_role_request(
     if form.value.is_some() {
         let mut transaction = pool.begin().await.map_err(Error::from)?;
         let game = Game::from_name(&mut transaction, game_name)
-            .await.map_err(Error::from)?
+            .await
+            .map_err(Error::from)?
             .ok_or(StatusOrError::Status(Status::NotFound))?;
 
-        let is_game_admin = game.is_admin(&mut transaction, &me).await.map_err(Error::from)?;
+        let is_game_admin = game
+            .is_admin(&mut transaction, &me)
+            .await
+            .map_err(Error::from)?;
         let is_global_admin = me.is_global_admin();
 
         let role_request = RoleRequest::from_id(&mut transaction, request)
-            .await.map_err(Error::from)?
+            .await
+            .map_err(Error::from)?
             .ok_or(StatusOrError::Status(Status::NotFound))?;
 
         // Look up the role binding language for restreamer permission check
@@ -1421,16 +1576,24 @@ pub(crate) async fn approve_game_role_request(
         let Some(role_binding_language) = role_binding_language else {
             return Err(StatusOrError::Status(Status::NotFound));
         };
-        let is_game_restreamer = game.is_restreamer(&mut transaction, &me, role_binding_language).await.map_err(Error::from)?;
+        let is_game_restreamer = game
+            .is_restreamer(&mut transaction, &me, role_binding_language)
+            .await
+            .map_err(Error::from)?;
 
         if !is_game_admin && !is_global_admin && !is_game_restreamer {
             return Err(StatusOrError::Status(Status::Forbidden));
         }
 
         // Update the role request status
-        RoleRequest::update_status(&mut transaction, request, RoleRequestStatus::Approved).await.map_err(Error::from)?;
+        RoleRequest::update_status(&mut transaction, request, RoleRequestStatus::Approved)
+            .await
+            .map_err(Error::from)?;
 
-        if let Some(user) = User::from_id(&mut *transaction, role_request.user_id).await.map_err(Error::from)? {
+        if let Some(user) = User::from_id(&mut *transaction, role_request.user_id)
+            .await
+            .map_err(Error::from)?
+        {
             if let Some(discord_user) = user.discord {
                 let discord_ctx = discord_ctx.read().await;
                 if let Err(e) = assign_game_discord_role(
@@ -1439,16 +1602,26 @@ pub(crate) async fn approve_game_role_request(
                     &game,
                     role_request.role_binding_id,
                     discord_user.id,
-                ).await {
-                    eprintln!("Failed to assign game Discord role for approved request: {}", e);
+                )
+                .await
+                {
+                    eprintln!(
+                        "Failed to assign game Discord role for approved request: {}",
+                        e
+                    );
                 }
                 if let Err(e) = assign_event_override_discord_roles(
                     &mut transaction,
                     &*discord_ctx,
                     role_request.role_binding_id,
                     discord_user.id,
-                ).await {
-                    eprintln!("Failed to assign event override Discord roles for approved game request: {}", e);
+                )
+                .await
+                {
+                    eprintln!(
+                        "Failed to assign event override Discord roles for approved game request: {}",
+                        e
+                    );
                 }
             }
         }
@@ -1456,7 +1629,11 @@ pub(crate) async fn approve_game_role_request(
         transaction.commit().await.map_err(Error::from)?;
     }
 
-    let redirect_url = format!("/games/{}/roles?msg={}", game_name, urlencoding::encode("Role request approved successfully."));
+    let redirect_url = format!(
+        "/games/{}/roles?msg={}",
+        game_name,
+        urlencoding::encode("Role request approved successfully.")
+    );
     Ok(Redirect::to(redirect_url))
 }
 
@@ -1476,10 +1653,14 @@ pub(crate) async fn reject_game_role_request(
     if form.value.is_some() {
         let mut transaction = pool.begin().await.map_err(Error::from)?;
         let game = Game::from_name(&mut transaction, game_name)
-            .await.map_err(Error::from)?
+            .await
+            .map_err(Error::from)?
             .ok_or(StatusOrError::Status(Status::NotFound))?;
 
-        let is_game_admin = game.is_admin(&mut transaction, &me).await.map_err(Error::from)?;
+        let is_game_admin = game
+            .is_admin(&mut transaction, &me)
+            .await
+            .map_err(Error::from)?;
         let is_global_admin = me.is_global_admin();
 
         let role_binding_language = sqlx::query_scalar!(
@@ -1490,7 +1671,9 @@ pub(crate) async fn reject_game_role_request(
         .await.map_err(Error::from)?;
 
         let is_game_restreamer = if let Some(lang) = role_binding_language {
-            game.is_restreamer(&mut transaction, &me, lang).await.map_err(Error::from)?
+            game.is_restreamer(&mut transaction, &me, lang)
+                .await
+                .map_err(Error::from)?
         } else {
             false
         };
@@ -1500,12 +1683,18 @@ pub(crate) async fn reject_game_role_request(
         }
 
         // Update the role request status
-        RoleRequest::update_status(&mut transaction, request, RoleRequestStatus::Rejected).await.map_err(Error::from)?;
+        RoleRequest::update_status(&mut transaction, request, RoleRequestStatus::Rejected)
+            .await
+            .map_err(Error::from)?;
 
         transaction.commit().await.map_err(Error::from)?;
     }
 
-    let redirect_url = format!("/games/{}/roles?msg={}", game_name, urlencoding::encode("Role request rejected."));
+    let redirect_url = format!(
+        "/games/{}/roles?msg={}",
+        game_name,
+        urlencoding::encode("Role request rejected.")
+    );
     Ok(Redirect::to(redirect_url))
 }
 
@@ -1526,14 +1715,19 @@ pub(crate) async fn revoke_game_role_request(
     if form.value.is_some() {
         let mut transaction = pool.begin().await.map_err(Error::from)?;
         let game = Game::from_name(&mut transaction, game_name)
-            .await.map_err(Error::from)?
+            .await
+            .map_err(Error::from)?
             .ok_or(StatusOrError::Status(Status::NotFound))?;
 
-        let is_game_admin = game.is_admin(&mut transaction, &me).await.map_err(Error::from)?;
+        let is_game_admin = game
+            .is_admin(&mut transaction, &me)
+            .await
+            .map_err(Error::from)?;
         let is_global_admin = me.is_global_admin();
 
         let role_request = RoleRequest::from_id(&mut transaction, request)
-            .await.map_err(Error::from)?
+            .await
+            .map_err(Error::from)?
             .ok_or(StatusOrError::Status(Status::NotFound))?;
 
         let role_binding_language = sqlx::query_scalar!(
@@ -1546,16 +1740,24 @@ pub(crate) async fn revoke_game_role_request(
         let Some(role_binding_language) = role_binding_language else {
             return Err(StatusOrError::Status(Status::NotFound));
         };
-        let is_game_restreamer = game.is_restreamer(&mut transaction, &me, role_binding_language).await.map_err(Error::from)?;
+        let is_game_restreamer = game
+            .is_restreamer(&mut transaction, &me, role_binding_language)
+            .await
+            .map_err(Error::from)?;
 
         if !is_game_admin && !is_global_admin && !is_game_restreamer {
             return Err(StatusOrError::Status(Status::Forbidden));
         }
 
         // Update the role request status to Aborted
-        RoleRequest::update_status(&mut transaction, request, RoleRequestStatus::Aborted).await.map_err(Error::from)?;
+        RoleRequest::update_status(&mut transaction, request, RoleRequestStatus::Aborted)
+            .await
+            .map_err(Error::from)?;
 
-        if let Some(user) = User::from_id(&mut *transaction, role_request.user_id).await.map_err(Error::from)? {
+        if let Some(user) = User::from_id(&mut *transaction, role_request.user_id)
+            .await
+            .map_err(Error::from)?
+        {
             if let Some(discord_user) = user.discord {
                 let discord_ctx = discord_ctx.read().await;
                 if let Err(e) = remove_game_discord_role(
@@ -1564,16 +1766,26 @@ pub(crate) async fn revoke_game_role_request(
                     &game,
                     role_request.role_binding_id,
                     discord_user.id,
-                ).await {
-                    eprintln!("Failed to remove game Discord role for revoked request: {}", e);
+                )
+                .await
+                {
+                    eprintln!(
+                        "Failed to remove game Discord role for revoked request: {}",
+                        e
+                    );
                 }
                 if let Err(e) = remove_event_override_discord_roles(
                     &mut transaction,
                     &*discord_ctx,
                     role_request.role_binding_id,
                     discord_user.id,
-                ).await {
-                    eprintln!("Failed to remove event override Discord roles for revoked game request: {}", e);
+                )
+                .await
+                {
+                    eprintln!(
+                        "Failed to remove event override Discord roles for revoked game request: {}",
+                        e
+                    );
                 }
             }
         }
@@ -1581,7 +1793,11 @@ pub(crate) async fn revoke_game_role_request(
         transaction.commit().await.map_err(Error::from)?;
     }
 
-    let redirect_url = format!("/games/{}/roles?msg={}", game_name, urlencoding::encode("Role assignment revoked."));
+    let redirect_url = format!(
+        "/games/{}/roles?msg={}",
+        game_name,
+        urlencoding::encode("Role assignment revoked.")
+    );
     Ok(Redirect::to(redirect_url))
 }
 
@@ -1598,14 +1814,21 @@ pub(crate) async fn edit_game_role_binding(
     let me = me.ok_or(StatusOrError::Status(Status::Forbidden))?;
     let form = form.into_inner();
 
-    let value = form.value.as_ref().ok_or(StatusOrError::Status(Status::BadRequest))?;
+    let value = form
+        .value
+        .as_ref()
+        .ok_or(StatusOrError::Status(Status::BadRequest))?;
 
     let mut transaction = pool.begin().await.map_err(Error::from)?;
     let game = Game::from_name(&mut transaction, game_name)
-        .await.map_err(Error::from)?
+        .await
+        .map_err(Error::from)?
         .ok_or(StatusOrError::Status(Status::NotFound))?;
 
-    let is_game_admin = game.is_admin(&mut transaction, &me).await.map_err(Error::from)?;
+    let is_game_admin = game
+        .is_admin(&mut transaction, &me)
+        .await
+        .map_err(Error::from)?;
     let is_global_admin = me.is_global_admin();
 
     if !is_game_admin && !is_global_admin {
@@ -1624,7 +1847,12 @@ pub(crate) async fn edit_game_role_binding(
     let discord_role_id = if value.discord_role_id.trim().is_empty() {
         None
     } else {
-        Some(value.discord_role_id.parse::<i64>().map_err(|_| StatusOrError::Status(Status::BadRequest))?)
+        Some(
+            value
+                .discord_role_id
+                .parse::<i64>()
+                .map_err(|_| StatusOrError::Status(Status::BadRequest))?,
+        )
     };
 
     // Update the role binding
@@ -1640,7 +1868,8 @@ pub(crate) async fn edit_game_role_binding(
         game.id
     )
     .execute(&mut *transaction)
-    .await.map_err(Error::from)?;
+    .await
+    .map_err(Error::from)?;
 
     transaction.commit().await.map_err(Error::from)?;
 
@@ -1669,7 +1898,8 @@ pub(crate) async fn edit_game_role_binding(
                     &*discord,
                     row.series,
                     &row.event,
-                ).await;
+                )
+                .await;
             }
         });
     }
@@ -1701,20 +1931,24 @@ pub(crate) async fn add_game_admin(
     let me = me.ok_or(StatusOrError::Status(Status::Forbidden))?;
     let mut form = form.into_inner();
     form.verify(&csrf);
-    
+
     if let Some(ref value) = form.value {
         let mut transaction = pool.begin().await.map_err(Error::from)?;
         let game = Game::from_name(&mut transaction, game_name)
-            .await.map_err(Error::from)?
+            .await
+            .map_err(Error::from)?
             .ok_or(StatusOrError::Status(Status::NotFound))?;
-        
-        let is_game_admin = game.is_admin(&mut transaction, &me).await.map_err(Error::from)?;
+
+        let is_game_admin = game
+            .is_admin(&mut transaction, &me)
+            .await
+            .map_err(Error::from)?;
         let is_global_admin = me.is_global_admin();
-        
+
         if !is_game_admin && !is_global_admin {
             return Err(StatusOrError::Status(Status::Forbidden));
         }
-        
+
         // Parse user ID from form
         let admin_id = match value.admin.parse::<u64>() {
             Ok(id) => Id::<Users>::from(id),
@@ -1722,21 +1956,24 @@ pub(crate) async fn add_game_admin(
                 return Ok(Redirect::to(uri!(manage_admins(game_name))));
             }
         };
-        
+
         // Check if user exists
-        let _user = match User::from_id(&mut *transaction, admin_id).await.map_err(Error::from)? {
+        let _user = match User::from_id(&mut *transaction, admin_id)
+            .await
+            .map_err(Error::from)?
+        {
             Some(u) => u,
             None => {
                 return Ok(Redirect::to(uri!(manage_admins(game_name))));
             }
         };
-        
+
         // Check if already admin
         let admins = game.admins(&mut transaction).await.map_err(Error::from)?;
         if admins.iter().any(|u| u.id == admin_id) {
             return Ok(Redirect::to(uri!(manage_admins(game_name))));
         }
-        
+
         // Add user as admin
         sqlx::query!(
             r#"INSERT INTO game_admins (game_id, admin_id) VALUES ($1, $2)"#,
@@ -1744,11 +1981,12 @@ pub(crate) async fn add_game_admin(
             i64::from(admin_id)
         )
         .execute(&mut *transaction)
-        .await.map_err(Error::from)?;
-        
+        .await
+        .map_err(Error::from)?;
+
         transaction.commit().await.map_err(Error::from)?;
     }
-    
+
     Ok(Redirect::to(uri!(manage_admins(game_name))))
 }
 
@@ -1764,20 +2002,24 @@ pub(crate) async fn remove_game_admin(
     let me = me.ok_or(StatusOrError::Status(Status::Forbidden))?;
     let mut form = form.into_inner();
     form.verify(&csrf);
-    
+
     if form.value.is_some() {
         let mut transaction = pool.begin().await.map_err(Error::from)?;
         let game = Game::from_name(&mut transaction, game_name)
-            .await.map_err(Error::from)?
+            .await
+            .map_err(Error::from)?
             .ok_or(StatusOrError::Status(Status::NotFound))?;
-        
-        let is_game_admin = game.is_admin(&mut transaction, &me).await.map_err(Error::from)?;
+
+        let is_game_admin = game
+            .is_admin(&mut transaction, &me)
+            .await
+            .map_err(Error::from)?;
         let is_global_admin = me.is_global_admin();
-        
+
         if !is_game_admin && !is_global_admin {
             return Err(StatusOrError::Status(Status::Forbidden));
         }
-        
+
         // Remove user as admin
         sqlx::query!(
             r#"DELETE FROM game_admins WHERE game_id = $1 AND admin_id = $2"#,
@@ -1785,7 +2027,8 @@ pub(crate) async fn remove_game_admin(
             i64::from(admin_id)
         )
         .execute(&mut *transaction)
-        .await.map_err(Error::from)?;
+        .await
+        .map_err(Error::from)?;
 
         transaction.commit().await.map_err(Error::from)?;
     }
@@ -1829,24 +2072,33 @@ pub(crate) async fn manage_restreamers(
     let mut transaction = pool.begin().await.map_err(Error::from)?;
 
     let game = Game::from_name(&mut transaction, game_name)
-        .await.map_err(Error::from)?
+        .await
+        .map_err(Error::from)?
         .ok_or(StatusOrError::Status(Status::NotFound))?;
 
     let me = me.ok_or(StatusOrError::Status(Status::Forbidden))?;
 
-    let is_game_admin = game.is_admin(&mut transaction, &me).await.map_err(Error::from)?;
+    let is_game_admin = game
+        .is_admin(&mut transaction, &me)
+        .await
+        .map_err(Error::from)?;
     let is_global_admin = me.is_global_admin();
 
     if !is_game_admin && !is_global_admin {
         return Err(StatusOrError::Status(Status::Forbidden));
     }
 
-    let restreamers = game.restreamers(&mut transaction).await.map_err(Error::from)?;
+    let restreamers = game
+        .restreamers(&mut transaction)
+        .await
+        .map_err(Error::from)?;
 
     // Group restreamers by user
-    let mut grouped: std::collections::BTreeMap<i64, (User, Vec<Language>)> = std::collections::BTreeMap::new();
+    let mut grouped: std::collections::BTreeMap<i64, (User, Vec<Language>)> =
+        std::collections::BTreeMap::new();
     for (user, lang) in restreamers {
-        grouped.entry(i64::from(user.id))
+        grouped
+            .entry(i64::from(user.id))
             .and_modify(|(_, langs)| langs.push(lang))
             .or_insert((user, vec![lang]));
     }
@@ -1957,7 +2209,8 @@ pub(crate) async fn manage_restreamers(
         &format!("Manage Restream Coordinators — {}", game.display_name),
         content,
     )
-    .await.map_err(Error::from)?)
+    .await
+    .map_err(Error::from)?)
 }
 
 #[rocket::post("/games/<game_name>/restreamers", data = "<form>")]
@@ -1975,10 +2228,14 @@ pub(crate) async fn add_game_restreamer(
     if let Some(ref value) = form.value {
         let mut transaction = pool.begin().await.map_err(Error::from)?;
         let game = Game::from_name(&mut transaction, game_name)
-            .await.map_err(Error::from)?
+            .await
+            .map_err(Error::from)?
             .ok_or(StatusOrError::Status(Status::NotFound))?;
 
-        let is_game_admin = game.is_admin(&mut transaction, &me).await.map_err(Error::from)?;
+        let is_game_admin = game
+            .is_admin(&mut transaction, &me)
+            .await
+            .map_err(Error::from)?;
         let is_global_admin = me.is_global_admin();
 
         if !is_game_admin && !is_global_admin {
@@ -1993,7 +2250,11 @@ pub(crate) async fn add_game_restreamer(
         };
 
         // Check if user exists
-        if User::from_id(&mut *transaction, restreamer_id).await.map_err(Error::from)?.is_none() {
+        if User::from_id(&mut *transaction, restreamer_id)
+            .await
+            .map_err(Error::from)?
+            .is_none()
+        {
             return Ok(Redirect::to(uri!(manage_restreamers(game_name))));
         }
 
@@ -2031,10 +2292,14 @@ pub(crate) async fn remove_game_restreamer(
     if form.value.is_some() {
         let mut transaction = pool.begin().await.map_err(Error::from)?;
         let game = Game::from_name(&mut transaction, game_name)
-            .await.map_err(Error::from)?
+            .await
+            .map_err(Error::from)?
             .ok_or(StatusOrError::Status(Status::NotFound))?;
 
-        let is_game_admin = game.is_admin(&mut transaction, &me).await.map_err(Error::from)?;
+        let is_game_admin = game
+            .is_admin(&mut transaction, &me)
+            .await
+            .map_err(Error::from)?;
         let is_global_admin = me.is_global_admin();
 
         if !is_game_admin && !is_global_admin {
@@ -2047,7 +2312,8 @@ pub(crate) async fn remove_game_restreamer(
             i64::from(user_id)
         )
         .execute(&mut *transaction)
-        .await.map_err(Error::from)?;
+        .await
+        .map_err(Error::from)?;
 
         transaction.commit().await.map_err(Error::from)?;
     }
@@ -2055,7 +2321,10 @@ pub(crate) async fn remove_game_restreamer(
     Ok(Redirect::to(uri!(manage_restreamers(game_name))))
 }
 
-#[rocket::post("/games/<game_name>/restreamers/<user_id>/remove-language", data = "<form>")]
+#[rocket::post(
+    "/games/<game_name>/restreamers/<user_id>/remove-language",
+    data = "<form>"
+)]
 pub(crate) async fn remove_game_restreamer_language(
     pool: &State<PgPool>,
     me: Option<User>,
@@ -2071,10 +2340,14 @@ pub(crate) async fn remove_game_restreamer_language(
     if let Some(ref value) = form.value {
         let mut transaction = pool.begin().await.map_err(Error::from)?;
         let game = Game::from_name(&mut transaction, game_name)
-            .await.map_err(Error::from)?
+            .await
+            .map_err(Error::from)?
             .ok_or(StatusOrError::Status(Status::NotFound))?;
 
-        let is_game_admin = game.is_admin(&mut transaction, &me).await.map_err(Error::from)?;
+        let is_game_admin = game
+            .is_admin(&mut transaction, &me)
+            .await
+            .map_err(Error::from)?;
         let is_global_admin = me.is_global_admin();
 
         if !is_game_admin && !is_global_admin {
@@ -2104,7 +2377,10 @@ pub(crate) struct UpdateGameRestreamerLanguagesForm {
     languages: Vec<Language>,
 }
 
-#[rocket::post("/games/<game_name>/restreamers/<user_id>/update-languages", data = "<form>")]
+#[rocket::post(
+    "/games/<game_name>/restreamers/<user_id>/update-languages",
+    data = "<form>"
+)]
 pub(crate) async fn update_game_restreamer_languages(
     pool: &State<PgPool>,
     me: Option<User>,
@@ -2120,10 +2396,14 @@ pub(crate) async fn update_game_restreamer_languages(
     if let Some(ref value) = form.value {
         let mut transaction = pool.begin().await.map_err(Error::from)?;
         let game = Game::from_name(&mut transaction, game_name)
-            .await.map_err(Error::from)?
+            .await
+            .map_err(Error::from)?
             .ok_or(StatusOrError::Status(Status::NotFound))?;
 
-        let is_game_admin = game.is_admin(&mut transaction, &me).await.map_err(Error::from)?;
+        let is_game_admin = game
+            .is_admin(&mut transaction, &me)
+            .await
+            .map_err(Error::from)?;
         let is_global_admin = me.is_global_admin();
 
         if !is_game_admin && !is_global_admin {
@@ -2137,7 +2417,8 @@ pub(crate) async fn update_game_restreamer_languages(
             i64::from(user_id)
         )
         .execute(&mut *transaction)
-        .await.map_err(Error::from)?;
+        .await
+        .map_err(Error::from)?;
 
         // Insert new entries for each selected language
         for lang in &value.languages {
@@ -2186,12 +2467,16 @@ pub(crate) async fn manage_notification_channels(
     let mut transaction = pool.begin().await.map_err(Error::from)?;
 
     let game = Game::from_name(&mut transaction, game_name)
-        .await.map_err(Error::from)?
+        .await
+        .map_err(Error::from)?
         .ok_or(StatusOrError::Status(Status::NotFound))?;
 
     let me = me.ok_or(StatusOrError::Status(Status::Forbidden))?;
 
-    let is_game_admin = game.is_admin(&mut transaction, &me).await.map_err(Error::from)?;
+    let is_game_admin = game
+        .is_admin(&mut transaction, &me)
+        .await
+        .map_err(Error::from)?;
     let is_global_admin = me.is_global_admin();
 
     if !is_game_admin && !is_global_admin {
@@ -2283,7 +2568,8 @@ pub(crate) async fn manage_notification_channels(
         &format!("Manage Notification Channels — {}", game.display_name),
         content,
     )
-    .await.map_err(Error::from)?)
+    .await
+    .map_err(Error::from)?)
 }
 
 #[rocket::post("/games/<game_name>/notification-channels", data = "<form>")]
@@ -2301,10 +2587,14 @@ pub(crate) async fn add_notification_channel(
     if let Some(ref value) = form.value {
         let mut transaction = pool.begin().await.map_err(Error::from)?;
         let game = Game::from_name(&mut transaction, game_name)
-            .await.map_err(Error::from)?
+            .await
+            .map_err(Error::from)?
             .ok_or(StatusOrError::Status(Status::NotFound))?;
 
-        let is_game_admin = game.is_admin(&mut transaction, &me).await.map_err(Error::from)?;
+        let is_game_admin = game
+            .is_admin(&mut transaction, &me)
+            .await
+            .map_err(Error::from)?;
         let is_global_admin = me.is_global_admin();
 
         if !is_game_admin && !is_global_admin {
@@ -2342,7 +2632,10 @@ pub(crate) async fn add_notification_channel(
     Ok(Redirect::to(uri!(manage_notification_channels(game_name))))
 }
 
-#[rocket::post("/games/<game_name>/notification-channels/<language>/remove", data = "<form>")]
+#[rocket::post(
+    "/games/<game_name>/notification-channels/<language>/remove",
+    data = "<form>"
+)]
 pub(crate) async fn remove_notification_channel(
     pool: &State<PgPool>,
     me: Option<User>,
@@ -2358,10 +2651,14 @@ pub(crate) async fn remove_notification_channel(
     if form.value.is_some() {
         let mut transaction = pool.begin().await.map_err(Error::from)?;
         let game = Game::from_name(&mut transaction, game_name)
-            .await.map_err(Error::from)?
+            .await
+            .map_err(Error::from)?
             .ok_or(StatusOrError::Status(Status::NotFound))?;
 
-        let is_game_admin = game.is_admin(&mut transaction, &me).await.map_err(Error::from)?;
+        let is_game_admin = game
+            .is_admin(&mut transaction, &me)
+            .await
+            .map_err(Error::from)?;
         let is_global_admin = me.is_global_admin();
 
         if !is_game_admin && !is_global_admin {
@@ -2383,7 +2680,8 @@ pub(crate) async fn remove_notification_channel(
             lang as _
         )
         .execute(&mut *transaction)
-        .await.map_err(Error::from)?;
+        .await
+        .map_err(Error::from)?;
 
         transaction.commit().await.map_err(Error::from)?;
     }

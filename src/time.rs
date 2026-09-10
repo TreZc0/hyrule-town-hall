@@ -1,7 +1,4 @@
-use {
-    sqlx::postgres::types::PgInterval,
-    crate::prelude::*,
-};
+use {crate::prelude::*, sqlx::postgres::types::PgInterval};
 
 const NANOS_PER_SEC: u32 = 1_000_000_000;
 
@@ -25,7 +22,8 @@ impl TimeDeltaExt for TimeDelta {
     }
 
     fn from_secs_f64(secs: f64) -> Self {
-        Self::seconds(secs.trunc() as i64) + Self::nanoseconds((secs.fract() * (NANOS_PER_SEC as f64)) as i64)
+        Self::seconds(secs.trunc() as i64)
+            + Self::nanoseconds((secs.fract() * (NANOS_PER_SEC as f64)) as i64)
     }
 
     fn abs_diff(self, other: Self) -> Self {
@@ -35,14 +33,21 @@ impl TimeDeltaExt for TimeDelta {
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum PgIntervalDecodeError {
-    #[error(transparent)] TryFromInt(#[from] std::num::TryFromIntError),
+    #[error(transparent)]
+    TryFromInt(#[from] std::num::TryFromIntError),
     #[error("found PgInterval with nonzero months in database")]
     Months,
     #[error("PgInterval too long")]
     Range,
 }
 
-pub(crate) fn decode_pginterval(PgInterval { months, days, microseconds }: PgInterval) -> Result<Duration, PgIntervalDecodeError> {
+pub(crate) fn decode_pginterval(
+    PgInterval {
+        months,
+        days,
+        microseconds,
+    }: PgInterval,
+) -> Result<Duration, PgIntervalDecodeError> {
     if months == 0 {
         Duration::from_secs(u64::try_from(days)? * 60 * 60 * 24)
             .checked_add(Duration::from_micros(microseconds.try_into()?))
@@ -70,61 +75,72 @@ impl DurationUnit {
 }
 
 pub(crate) fn parse_duration(mut s: &str, default_unit: Option<DurationUnit>) -> Option<Duration> {
-    Some(if let Some((_, hours, minutes, seconds)) = regex_captures!("^ *([0-9]+):([0-9]+):([0-9]+) *$", s).filter(|_| default_unit.is_none()) {
-        Duration::from_secs(60 * 60 * hours.parse::<u64>().ok()? + 60 * minutes.parse::<u64>().ok()? + seconds.parse::<u64>().ok()?)
-    } else if let Some((_, minutes, seconds)) = regex_captures!("^ *([0-9]+):([0-9]+) *$", s).filter(|_| default_unit.is_none()) {
-        Duration::from_secs(60 * minutes.parse::<u64>().ok()? + seconds.parse::<u64>().ok()?)
-    } else {
-        let mut duration = Duration::default();
-        let mut default_unit = Some(default_unit.unwrap_or(DurationUnit::Hours));
-        let mut last_magnitude = None;
-        loop {
-            match s.chars().next() {
-                None => break,
-                Some(' ') => s = &s[1..],
-                Some('0'..='9') => {
-                    let (_, magnitude, rest) = regex_captures!("^([0-9]+)(.*)$", s)?; //TODO allow fractional magnitudes? (e.g. 2.5h = 2h30m)
-                    if last_magnitude.replace(magnitude.parse().ok()?).is_some() {
-                        return None // multiple whitespace-separated numbers
+    Some(
+        if let Some((_, hours, minutes, seconds)) =
+            regex_captures!("^ *([0-9]+):([0-9]+):([0-9]+) *$", s)
+                .filter(|_| default_unit.is_none())
+        {
+            Duration::from_secs(
+                60 * 60 * hours.parse::<u64>().ok()?
+                    + 60 * minutes.parse::<u64>().ok()?
+                    + seconds.parse::<u64>().ok()?,
+            )
+        } else if let Some((_, minutes, seconds)) =
+            regex_captures!("^ *([0-9]+):([0-9]+) *$", s).filter(|_| default_unit.is_none())
+        {
+            Duration::from_secs(60 * minutes.parse::<u64>().ok()? + seconds.parse::<u64>().ok()?)
+        } else {
+            let mut duration = Duration::default();
+            let mut default_unit = Some(default_unit.unwrap_or(DurationUnit::Hours));
+            let mut last_magnitude = None;
+            loop {
+                match s.chars().next() {
+                    None => break,
+                    Some(' ') => s = &s[1..],
+                    Some('0'..='9') => {
+                        let (_, magnitude, rest) = regex_captures!("^([0-9]+)(.*)$", s)?; //TODO allow fractional magnitudes? (e.g. 2.5h = 2h30m)
+                        if last_magnitude.replace(magnitude.parse().ok()?).is_some() {
+                            return None; // multiple whitespace-separated numbers
+                        }
+                        s = rest;
                     }
-                    s = rest;
+                    Some(':') => {
+                        let magnitude = last_magnitude.take()?;
+                        duration += default_unit?.with_magnitude(magnitude);
+                        default_unit = match default_unit? {
+                            DurationUnit::Hours => Some(DurationUnit::Minutes),
+                            DurationUnit::Minutes => Some(DurationUnit::Seconds),
+                            DurationUnit::Seconds => None,
+                        };
+                        s = &s[1..];
+                    }
+                    Some('H' | 'h') => {
+                        let magnitude = last_magnitude.take()?;
+                        duration += Duration::from_secs(60 * 60 * magnitude);
+                        default_unit = Some(DurationUnit::Minutes);
+                        (_, s) = regex_captures!("^h(?:(?:ou)?r)?s?(.*)$"i, s)?;
+                    }
+                    Some('M' | 'm') => {
+                        let magnitude = last_magnitude.take()?;
+                        duration += Duration::from_secs(60 * magnitude);
+                        default_unit = Some(DurationUnit::Seconds);
+                        (_, s) = regex_captures!("^m(?:n|in(?:ute)?)?s?(.*)$"i, s)?;
+                    }
+                    Some('S' | 's') => {
+                        let magnitude = last_magnitude.take()?;
+                        duration += Duration::from_secs(magnitude);
+                        default_unit = None;
+                        (_, s) = regex_captures!("^s(?:ec(?:ond)?)?s?(.*)$"i, s)?;
+                    }
+                    _ => return None,
                 }
-                Some(':') => {
-                    let magnitude = last_magnitude.take()?;
-                    duration += default_unit?.with_magnitude(magnitude);
-                    default_unit = match default_unit? {
-                        DurationUnit::Hours => Some(DurationUnit::Minutes),
-                        DurationUnit::Minutes => Some(DurationUnit::Seconds),
-                        DurationUnit::Seconds => None,
-                    };
-                    s = &s[1..];
-                }
-                Some('H' | 'h') => {
-                    let magnitude = last_magnitude.take()?;
-                    duration += Duration::from_secs(60 * 60 * magnitude);
-                    default_unit = Some(DurationUnit::Minutes);
-                    (_, s) = regex_captures!("^h(?:(?:ou)?r)?s?(.*)$"i, s)?;
-                }
-                Some('M' | 'm') => {
-                    let magnitude = last_magnitude.take()?;
-                    duration += Duration::from_secs(60 * magnitude);
-                    default_unit = Some(DurationUnit::Seconds);
-                    (_, s) = regex_captures!("^m(?:n|in(?:ute)?)?s?(.*)$"i, s)?;
-                }
-                Some('S' | 's') => {
-                    let magnitude = last_magnitude.take()?;
-                    duration += Duration::from_secs(magnitude);
-                    default_unit = None;
-                    (_, s) = regex_captures!("^s(?:ec(?:ond)?)?s?(.*)$"i, s)?;
-                }
-                _ => return None,
             }
-        }
-        if let Some(magnitude) = last_magnitude {
-            duration += default_unit?.with_magnitude(magnitude);
-        }
-        duration
-    })
+            if let Some(magnitude) = last_magnitude {
+                duration += default_unit?.with_magnitude(magnitude);
+            }
+            duration
+        },
+    )
 }
 
 pub(crate) fn unparse_duration(duration: Duration) -> String {
@@ -159,14 +175,24 @@ pub(crate) struct DateTimeFormat {
 
 fn format_datetime_in_timezone(datetime: DateTime<Utc>, timezone: Tz, long: bool) -> String {
     let local = datetime.with_timezone(&timezone);
-    local.format(if long { "%A, %B %-d, %Y, %H:%M:%S %Z" } else { "%b %-d, %Y, %H:%M %Z" }).to_string()
+    local
+        .format(if long {
+            "%A, %B %-d, %Y, %H:%M:%S %Z"
+        } else {
+            "%b %-d, %Y, %H:%M %Z"
+        })
+        .to_string()
 }
 
 fn format_date_range_in_timezone(start: DateTime<Utc>, end: DateTime<Utc>, timezone: Tz) -> String {
     let start = start.with_timezone(&timezone);
     let end = end.with_timezone(&timezone);
     if start.year() != end.year() {
-        format!("{}-{}", start.format("%B %-d, %Y"), end.format("%B %-d, %Y"))
+        format!(
+            "{}-{}",
+            start.format("%B %-d, %Y"),
+            end.format("%B %-d, %Y")
+        )
     } else if start.month() != end.month() {
         format!("{}-{}", start.format("%B %-d"), end.format("%B %-d, %Y"))
     } else if start.day() != end.day() {
@@ -177,7 +203,10 @@ fn format_date_range_in_timezone(start: DateTime<Utc>, end: DateTime<Utc>, timez
 }
 
 fn format_recurring_time_in_timezone(datetime: DateTime<Utc>, timezone: Tz) -> String {
-    datetime.with_timezone(&timezone).format("%A at %H:%M %Z").to_string()
+    datetime
+        .with_timezone(&timezone)
+        .format("%A at %H:%M %Z")
+        .to_string()
 }
 
 fn attr_value<'a>(tag: &'a str, attr: &str) -> Option<&'a str> {
@@ -187,7 +216,11 @@ fn attr_value<'a>(tag: &'a str, attr: &str) -> Option<&'a str> {
     Some(&tag[start..start + end])
 }
 
-fn rewrite_span_contents(mut html: String, class: &str, mut replacement: impl FnMut(&str) -> Option<String>) -> String {
+fn rewrite_span_contents(
+    mut html: String,
+    class: &str,
+    mut replacement: impl FnMut(&str) -> Option<String>,
+) -> String {
     let needle = format!(r#"<span class="{class}""#);
     let mut rewritten = String::with_capacity(html.len());
     while let Some(start) = html.find(&needle) {
@@ -195,13 +228,13 @@ fn rewrite_span_contents(mut html: String, class: &str, mut replacement: impl Fn
         let span = &html[start..];
         let Some(tag_end) = span.find('>') else {
             rewritten.push_str(span);
-            return rewritten
+            return rewritten;
         };
         let tag = &span[..=tag_end];
         let after_tag = &span[tag_end + 1..];
         let Some(end) = after_tag.find("</span>") else {
             rewritten.push_str(span);
-            return rewritten
+            return rewritten;
         };
         rewritten.push_str(tag);
         if let Some(replacement) = replacement(tag) {
@@ -216,8 +249,13 @@ fn rewrite_span_contents(mut html: String, class: &str, mut replacement: impl Fn
     rewritten
 }
 
-pub(crate) fn apply_profile_timezone_fallbacks(html: RawHtml<String>, timezone: Option<Tz>) -> RawHtml<String> {
-    let Some(timezone) = timezone else { return html };
+pub(crate) fn apply_profile_timezone_fallbacks(
+    html: RawHtml<String>,
+    timezone: Option<Tz>,
+) -> RawHtml<String> {
+    let Some(timezone) = timezone else {
+        return html;
+    };
     let mut html = html.0;
     html = rewrite_span_contents(html, "datetime", |tag| {
         let timestamp = attr_value(tag, "data-timestamp")?.parse().ok()?;
@@ -226,8 +264,10 @@ pub(crate) fn apply_profile_timezone_fallbacks(html: RawHtml<String>, timezone: 
             .map(|datetime| format_datetime_in_timezone(datetime, timezone, long))
     });
     html = rewrite_span_contents(html, "daterange", |tag| {
-        let start = DateTime::<Utc>::from_timestamp_millis(attr_value(tag, "data-start")?.parse().ok()?)?;
-        let end = DateTime::<Utc>::from_timestamp_millis(attr_value(tag, "data-end")?.parse().ok()?)?;
+        let start =
+            DateTime::<Utc>::from_timestamp_millis(attr_value(tag, "data-start")?.parse().ok()?)?;
+        let end =
+            DateTime::<Utc>::from_timestamp_millis(attr_value(tag, "data-end")?.parse().ok()?)?;
         Some(format_date_range_in_timezone(start, end, timezone))
     });
     html = rewrite_span_contents(html, "recurring-time", |tag| {
@@ -239,19 +279,30 @@ pub(crate) fn apply_profile_timezone_fallbacks(html: RawHtml<String>, timezone: 
     RawHtml(html)
 }
 
-pub(crate) fn format_datetime<Z: TimeZone>(datetime: DateTime<Z>, format: DateTimeFormat) -> RawHtml<String> {
+pub(crate) fn format_datetime<Z: TimeZone>(
+    datetime: DateTime<Z>,
+    format: DateTimeFormat,
+) -> RawHtml<String> {
     let utc = datetime.to_utc();
     let paris = datetime.with_timezone(&Europe::Paris);
     let new_york = datetime.with_timezone(&America::New_York);
     let paris_same_date = paris.date_naive() == utc.date_naive();
     let new_york_same_date = new_york.date_naive() == utc.date_naive();
-    let paris = paris.format(if paris_same_date { "%H:%M %Z" } else { "%A %H:%M %Z" }).to_string();
-    let new_york = new_york.format(match (new_york_same_date, new_york.minute() == 0) {
-        (false, false) => "%A %-I:%M %p %Z",
-        (false, true) => "%A %-I%p %Z",
-        (true, false) => "%-I:%M %p %Z",
-        (true, true) => "%-I%p %Z",
-    }).to_string();
+    let paris = paris
+        .format(if paris_same_date {
+            "%H:%M %Z"
+        } else {
+            "%A %H:%M %Z"
+        })
+        .to_string();
+    let new_york = new_york
+        .format(match (new_york_same_date, new_york.minute() == 0) {
+            (false, false) => "%A %-I:%M %p %Z",
+            (false, true) => "%A %-I%p %Z",
+            (true, false) => "%-I:%M %p %Z",
+            (true, true) => "%-I%p %Z",
+        })
+        .to_string();
     html! {
         //TODO once https://github.com/WentTheFox/SledgeHammerTime is out of beta and https://github.com/WentTheFox/SledgeHammerTime/issues/2 is fixed, format as a link, e.g. https://hammertime.cyou/?t=1723402800.000
         span(class = "datetime", data_timestamp = datetime.timestamp_millis(), data_long = format.long.to_string()) {
@@ -283,8 +334,13 @@ pub(crate) fn format_datetime<Z: TimeZone>(datetime: DateTime<Z>, format: DateTi
     }
 }
 
-pub(crate) fn format_date_range<Z: TimeZone>(start: DateTime<Z>, end: DateTime<Z>) -> RawHtml<String>
-where Z::Offset: fmt::Display {
+pub(crate) fn format_date_range<Z: TimeZone>(
+    start: DateTime<Z>,
+    end: DateTime<Z>,
+) -> RawHtml<String>
+where
+    Z::Offset: fmt::Display,
+{
     html! {
         span(class = "daterange", data_start = start.timestamp_millis(), data_end = end.timestamp_millis()) {
             @if start.year() != end.year() {

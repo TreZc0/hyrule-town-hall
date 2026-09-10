@@ -53,7 +53,11 @@ pub(crate) async fn index(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_
 }
 
 #[rocket::get("/mw/platforms")]
-pub(crate) async fn platforms(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>) -> PageResult {
+pub(crate) async fn platforms(
+    pool: &State<PgPool>,
+    me: Option<User>,
+    uri: Origin<'_>,
+) -> PageResult {
     let transaction = pool.begin().await?;
     page(transaction, &me, &uri, PageStyle { kind: PageKind::Center, ..PageStyle::default() }, "platform support — HTH Multiworld", html! {
         h1 {
@@ -153,7 +157,11 @@ pub(crate) async fn platforms(pool: &State<PgPool>, me: Option<User>, uri: Origi
 }
 
 #[rocket::get("/mw/install/macos")]
-pub(crate) async fn install_macos(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>) -> PageResult {
+pub(crate) async fn install_macos(
+    pool: &State<PgPool>,
+    me: Option<User>,
+    uri: Origin<'_>,
+) -> PageResult {
     let transaction = pool.begin().await?;
     page(transaction, &me, &uri, PageStyle { ..PageStyle::default() }, "macOS install instructions — HTH Multiworld", html! {
         h1 {

@@ -2,8 +2,11 @@ use crate::prelude::*;
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum Error {
-    #[cfg(windows)] #[error(transparent)] Json(#[from] serde_json::Error),
-    #[error(transparent)] Wheel(#[from] wheel::Error),
+    #[cfg(windows)]
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error(transparent)]
+    Wheel(#[from] wheel::Error),
     #[cfg(unix)]
     #[error("missing config file")]
     Missing,
@@ -35,14 +38,22 @@ pub(crate) struct Config {
 
 impl Config {
     pub(crate) async fn load() -> Result<Self, Error> {
-        #[cfg(unix)] {
-            if let Some(config_path) = BaseDirectories::new().find_config_file(if Environment::default().is_dev() { "midos-house-dev.json" } else { "midos-house.json" }) {
+        #[cfg(unix)]
+        {
+            if let Some(config_path) =
+                BaseDirectories::new().find_config_file(if Environment::default().is_dev() {
+                    "midos-house-dev.json"
+                } else {
+                    "midos-house.json"
+                })
+            {
                 Ok(fs::read_json(config_path).await?)
             } else {
                 Err(Error::Missing)
             }
         }
-        #[cfg(windows)] {
+        #[cfg(windows)]
+        {
             Ok(fs::read_json("cfg/hth.json").await?)
         }
     }

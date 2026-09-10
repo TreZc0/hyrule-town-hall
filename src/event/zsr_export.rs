@@ -1,23 +1,18 @@
 //! ZSR Export configuration tab for events (global admin only)
 
 use {
-    rocket::{
-        form::Form,
-        http::Status,
-        response::Redirect,
-        State,
-    },
-    rocket_util::Origin,
-    rocket_csrf::CsrfToken,
     crate::{
         event::{self, Data, Tab},
-        form::{full_form, form_field},
-        http::{page, PageError, PageStyle, StatusOrError},
+        form::{form_field, full_form},
+        http::{PageError, PageStyle, StatusOrError, page},
         prelude::*,
         series::Series,
         user::User,
         zsr_export::{self, ExportConfig, ExportTrigger, RestreamingBackend},
     },
+    rocket::{State, form::Form, http::Status, response::Redirect},
+    rocket_csrf::CsrfToken,
+    rocket_util::Origin,
 };
 
 // ============================================================================
@@ -27,10 +22,14 @@ use {
 #[allow(dead_code)]
 #[derive(Debug, thiserror::Error, rocket_util::Error)]
 pub(crate) enum Error {
-    #[error(transparent)] Event(#[from] event::Error),
-    #[error(transparent)] ZsrExport(#[from] zsr_export::Error),
-    #[error(transparent)] Page(#[from] PageError),
-    #[error(transparent)] Sql(#[from] sqlx::Error),
+    #[error(transparent)]
+    Event(#[from] event::Error),
+    #[error(transparent)]
+    ZsrExport(#[from] zsr_export::Error),
+    #[error(transparent)]
+    Page(#[from] PageError),
+    #[error(transparent)]
+    Sql(#[from] sqlx::Error),
     #[error("unauthorized")]
     Unauthorized,
 }
@@ -101,11 +100,14 @@ pub(crate) async fn get(
     }
 
     let mut transaction = pool.begin().await?;
-    let event_data = Data::new(&mut transaction, series, &event).await
+    let event_data = Data::new(&mut transaction, series, &event)
+        .await
         .map_err(event::Error::from)?
         .ok_or(StatusOrError::Status(Status::NotFound))?;
 
-    let header = event_data.header(&mut transaction, Some(&me), Tab::ZsrExport, false).await
+    let header = event_data
+        .header(&mut transaction, Some(&me), Tab::ZsrExport, false)
+        .await
         .map_err(event::Error::from)?;
 
     // Get existing exports for this event
@@ -117,7 +119,8 @@ pub(crate) async fn get(
     // Get backend names for display
     let mut export_displays = Vec::new();
     for export in &exports {
-        let backend_name = backends.iter()
+        let backend_name = backends
+            .iter()
             .find(|b| b.id == export.backend_id)
             .map(|b| b.name.clone())
             .unwrap_or_else(|| format!("Backend {}", export.backend_id));
@@ -126,7 +129,8 @@ pub(crate) async fn get(
 
     // Find backends not yet configured for this event
     let used_backend_ids: Vec<i32> = exports.iter().map(|e| e.backend_id).collect();
-    let available_backends: Vec<_> = backends.iter()
+    let available_backends: Vec<_> = backends
+        .iter()
         .filter(|b| !used_backend_ids.contains(&b.id))
         .collect();
 
@@ -141,8 +145,14 @@ pub(crate) async fn get(
     .fetch_optional(&mut *transaction)
     .await?;
 
-    let sample_phase = sample_race.as_ref().and_then(|r| r.phase.clone()).unwrap_or_else(|| "Main Bracket".to_owned());
-    let sample_round = sample_race.as_ref().and_then(|r| r.round.clone()).unwrap_or_else(|| "Round 1".to_owned());
+    let sample_phase = sample_race
+        .as_ref()
+        .and_then(|r| r.phase.clone())
+        .unwrap_or_else(|| "Main Bracket".to_owned());
+    let sample_round = sample_race
+        .as_ref()
+        .and_then(|r| r.round.clone())
+        .unwrap_or_else(|| "Round 1".to_owned());
 
     let content = html! {
         : header;
@@ -287,10 +297,14 @@ pub(crate) async fn get(
         pool.begin().await?,
         &Some(me),
         &uri,
-        PageStyle { kind: PageKind::Other, ..PageStyle::default() },
+        PageStyle {
+            kind: PageKind::Other,
+            ..PageStyle::default()
+        },
         &format!("ZSR Export — {}", event_data.display_name),
         content,
-    ).await?)
+    )
+    .await?)
 }
 
 // ============================================================================
@@ -337,9 +351,21 @@ pub(crate) async fn add_export(
             _ => return Err(StatusOrError::Status(Status::BadRequest)),
         };
 
-        let title = value.title.as_ref().filter(|s| !s.is_empty()).map(|s| s.as_str());
-        let description = value.description.as_ref().filter(|s| !s.is_empty()).map(|s| s.as_str());
-        let estimate_override = value.estimate_override.as_ref().filter(|s| !s.is_empty()).map(|s| s.as_str());
+        let title = value
+            .title
+            .as_ref()
+            .filter(|s| !s.is_empty())
+            .map(|s| s.as_str());
+        let description = value
+            .description
+            .as_ref()
+            .filter(|s| !s.is_empty())
+            .map(|s| s.as_str());
+        let estimate_override = value
+            .estimate_override
+            .as_ref()
+            .filter(|s| !s.is_empty())
+            .map(|s| s.as_str());
 
         let mut transaction = pool.begin().await?;
 
@@ -356,11 +382,15 @@ pub(crate) async fn add_export(
             trigger,
             value.append_mode,
             value.include_phase,
-        ).await?;
+        )
+        .await?;
 
         // Get backend and event data to ensure description entry exists
-        if let Some(backend) = RestreamingBackend::from_id(&mut transaction, value.backend_id).await? {
-            if let Some(event_data) = Data::new(&mut transaction, series, event).await
+        if let Some(backend) =
+            RestreamingBackend::from_id(&mut transaction, value.backend_id).await?
+        {
+            if let Some(event_data) = Data::new(&mut transaction, series, event)
+                .await
                 .map_err(event::Error::from)?
             {
                 // Ensure the description entry exists in the Descriptions sheet
@@ -370,7 +400,8 @@ pub(crate) async fn add_export(
                     &backend,
                     &event_data.display_name,
                     2, // default runner count
-                ).await?;
+                )
+                .await?;
             }
         }
 
@@ -401,17 +432,22 @@ pub(crate) async fn edit_export(
     }
 
     let mut transaction = pool.begin().await?;
-    let event_data = Data::new(&mut transaction, series, &event).await
+    let event_data = Data::new(&mut transaction, series, &event)
+        .await
         .map_err(event::Error::from)?
         .ok_or(StatusOrError::Status(Status::NotFound))?;
 
-    let header = event_data.header(&mut transaction, Some(&me), Tab::ZsrExport, true).await
+    let header = event_data
+        .header(&mut transaction, Some(&me), Tab::ZsrExport, true)
+        .await
         .map_err(event::Error::from)?;
 
-    let export = ExportConfig::from_id(&mut transaction, export_id).await?
+    let export = ExportConfig::from_id(&mut transaction, export_id)
+        .await?
         .ok_or(StatusOrError::Status(Status::NotFound))?;
 
-    let backend = RestreamingBackend::from_id(&mut transaction, export.backend_id).await?
+    let backend = RestreamingBackend::from_id(&mut transaction, export.backend_id)
+        .await?
         .ok_or(StatusOrError::Status(Status::NotFound))?;
 
     let sample_race = sqlx::query!(
@@ -425,8 +461,14 @@ pub(crate) async fn edit_export(
     .fetch_optional(&mut *transaction)
     .await?;
 
-    let sample_phase = sample_race.as_ref().and_then(|r| r.phase.clone()).unwrap_or_else(|| "Main Bracket".to_owned());
-    let sample_round = sample_race.as_ref().and_then(|r| r.round.clone()).unwrap_or_else(|| "Round 1".to_owned());
+    let sample_phase = sample_race
+        .as_ref()
+        .and_then(|r| r.phase.clone())
+        .unwrap_or_else(|| "Main Bracket".to_owned());
+    let sample_round = sample_race
+        .as_ref()
+        .and_then(|r| r.round.clone())
+        .unwrap_or_else(|| "Round 1".to_owned());
 
     let content = html! {
         : header;
@@ -515,10 +557,14 @@ pub(crate) async fn edit_export(
         pool.begin().await?,
         &Some(me),
         &uri,
-        PageStyle { kind: PageKind::Other, ..PageStyle::default() },
+        PageStyle {
+            kind: PageKind::Other,
+            ..PageStyle::default()
+        },
         &format!("Edit Export — {}", event_data.display_name),
         content,
-    ).await?)
+    )
+    .await?)
 }
 
 #[derive(Debug, FromForm, CsrfForm)]
@@ -561,9 +607,21 @@ pub(crate) async fn update_export(
             _ => return Err(StatusOrError::Status(Status::BadRequest)),
         };
 
-        let title = value.title.as_ref().filter(|s| !s.is_empty()).map(|s| s.as_str());
-        let description = value.description.as_ref().filter(|s| !s.is_empty()).map(|s| s.as_str());
-        let estimate_override = value.estimate_override.as_ref().filter(|s| !s.is_empty()).map(|s| s.as_str());
+        let title = value
+            .title
+            .as_ref()
+            .filter(|s| !s.is_empty())
+            .map(|s| s.as_str());
+        let description = value
+            .description
+            .as_ref()
+            .filter(|s| !s.is_empty())
+            .map(|s| s.as_str());
+        let estimate_override = value
+            .estimate_override
+            .as_ref()
+            .filter(|s| !s.is_empty())
+            .map(|s| s.as_str());
 
         let mut transaction = pool.begin().await?;
 
@@ -579,7 +637,8 @@ pub(crate) async fn update_export(
             value.enabled,
             value.append_mode,
             value.include_phase,
-        ).await?;
+        )
+        .await?;
 
         transaction.commit().await?;
     }
@@ -597,7 +656,10 @@ pub(crate) struct DeleteExportForm {
     csrf: String,
 }
 
-#[rocket::post("/event/<series>/<event>/zsr-export/<export_id>/delete", data = "<form>")]
+#[rocket::post(
+    "/event/<series>/<event>/zsr-export/<export_id>/delete",
+    data = "<form>"
+)]
 pub(crate) async fn delete_export(
     pool: &State<PgPool>,
     me: User,
@@ -655,10 +717,12 @@ pub(crate) async fn sync_export(
         let _guard = zsr_export::SYNC_LOCK.lock().await;
         let mut transaction = pool.begin().await?;
 
-        let export = ExportConfig::from_id(&mut transaction, export_id).await?
+        let export = ExportConfig::from_id(&mut transaction, export_id)
+            .await?
             .ok_or(StatusOrError::Status(Status::NotFound))?;
 
-        let errors = zsr_export::sync_all_races(&mut transaction, http_client.inner(), &export).await?;
+        let errors =
+            zsr_export::sync_all_races(&mut transaction, http_client.inner(), &export).await?;
 
         transaction.commit().await?;
 
@@ -695,7 +759,9 @@ pub(crate) async fn sync_all(
 
         for export in exports {
             if export.enabled {
-                let errors = zsr_export::sync_all_races(&mut transaction, http_client.inner(), &export).await?;
+                let errors =
+                    zsr_export::sync_all_races(&mut transaction, http_client.inner(), &export)
+                        .await?;
                 for err in &errors {
                     eprintln!("Manual sync to backend {}: {}", export.backend_id, err);
                 }

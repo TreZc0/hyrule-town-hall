@@ -1,17 +1,10 @@
 use {
-    convert_case::{
-        Case,
-        Casing as _,
-    },
-    sqlx::PgExecutor,
     crate::{
-        auth::{
-            DiscordUser,
-            Discriminator,
-            RaceTimeUser,
-        },
+        auth::{DiscordUser, Discriminator, RaceTimeUser},
         prelude::*,
     },
+    convert_case::{Case, Casing as _},
+    sqlx::PgExecutor,
 };
 
 /// User preference that determines which external account a user's display name is be based on.
@@ -71,14 +64,15 @@ pub(crate) struct User {
 }
 
 impl User {
-    pub(crate) const GLOBAL_ADMIN_USER_IDS: &[u64] = &[
-        16287394041462225947_u64,
-    ];
+    pub(crate) const GLOBAL_ADMIN_USER_IDS: &[u64] = &[16287394041462225947_u64];
 
     #[inline]
     pub(crate) fn is_global_admin(&self) -> bool {
         let my_id = u64::from(self.id);
-        Self::GLOBAL_ADMIN_USER_IDS.iter().copied().any(|admin_id| admin_id == my_id)
+        Self::GLOBAL_ADMIN_USER_IDS
+            .iter()
+            .copied()
+            .any(|admin_id| admin_id == my_id)
     }
 
     pub(crate) async fn primary_global_admin<E>(executor: &mut E) -> sqlx::Result<Option<Self>>
@@ -87,12 +81,12 @@ impl User {
     {
         for admin_id in Self::GLOBAL_ADMIN_USER_IDS {
             if let Some(user) = Self::from_id(&mut *executor, Id::<Users>::from(*admin_id)).await? {
-					return Ok(Some(user));
-				}
-			}
-			Ok(None)
+                return Ok(Some(user));
+            }
+        }
+        Ok(None)
     }
-    
+
     fn from_row(
         id: Id<Users>,
         display_source: DisplaySource,
@@ -114,7 +108,8 @@ impl User {
                 (Some(id), Some(display_name)) => Some(UserRaceTime {
                     discriminator: racetime_discriminator,
                     pronouns: racetime_pronouns,
-                    id, display_name,
+                    id,
+                    display_name,
                 }),
                 (None, None) => None,
                 (_, _) => unreachable!("database constraint"),
@@ -126,19 +121,31 @@ impl User {
                         (None, Some(discriminator)) => Either::Right(discriminator),
                         (_, _) => unreachable!("database constraint"),
                     },
-                    id, display_name,
+                    id,
+                    display_name,
                 }),
                 (None, None) => None,
                 (_, _) => unreachable!("database constraint"),
             },
-            timezone: timezone.as_deref().map(Tz::from_str).transpose().expect("invalid timezone in database"),
-            id, display_source, challonge_id, startgg_id, is_archivist,
+            timezone: timezone
+                .as_deref()
+                .map(Tz::from_str)
+                .transpose()
+                .expect("invalid timezone in database"),
+            id,
+            display_source,
+            challonge_id,
+            startgg_id,
+            is_archivist,
         }
     }
 
-    pub(crate) async fn from_id(pool: impl PgExecutor<'_>, id: Id<Users>) -> sqlx::Result<Option<Self>> {
-        Ok(
-            sqlx::query!(r#"SELECT
+    pub(crate) async fn from_id(
+        pool: impl PgExecutor<'_>,
+        id: Id<Users>,
+    ) -> sqlx::Result<Option<Self>> {
+        Ok(sqlx::query!(
+            r#"SELECT
                 display_source AS "display_source: DisplaySource",
                 racetime_id,
                 racetime_display_name,
@@ -152,8 +159,13 @@ impl User {
                 startgg_id AS "startgg_id: startgg::ID",
                 timezone,
                 is_archivist
-            FROM users WHERE id = $1"#, id as _).fetch_optional(pool).await?
-            .map(|row| Self::from_row(
+            FROM users WHERE id = $1"#,
+            id as _
+        )
+        .fetch_optional(pool)
+        .await?
+        .map(|row| {
+            Self::from_row(
                 id,
                 row.display_source,
                 row.racetime_id,
@@ -168,13 +180,16 @@ impl User {
                 row.startgg_id,
                 row.timezone,
                 row.is_archivist,
-            ))
-        )
+            )
+        }))
     }
 
-    pub(crate) async fn from_racetime(pool: impl PgExecutor<'_>, racetime_id: &str) -> sqlx::Result<Option<Self>> {
-        Ok(
-            sqlx::query!(r#"SELECT
+    pub(crate) async fn from_racetime(
+        pool: impl PgExecutor<'_>,
+        racetime_id: &str,
+    ) -> sqlx::Result<Option<Self>> {
+        Ok(sqlx::query!(
+            r#"SELECT
                 id AS "id: Id<Users>",
                 display_source AS "display_source: DisplaySource",
                 racetime_display_name,
@@ -188,8 +203,13 @@ impl User {
                 startgg_id AS "startgg_id: startgg::ID",
                 timezone,
                 is_archivist
-            FROM users WHERE racetime_id = $1"#, racetime_id).fetch_optional(pool).await?
-            .map(|row| Self::from_row(
+            FROM users WHERE racetime_id = $1"#,
+            racetime_id
+        )
+        .fetch_optional(pool)
+        .await?
+        .map(|row| {
+            Self::from_row(
                 row.id,
                 row.display_source,
                 Some(racetime_id.to_owned()),
@@ -204,13 +224,16 @@ impl User {
                 row.startgg_id,
                 row.timezone,
                 row.is_archivist,
-            ))
-        )
+            )
+        }))
     }
 
-    pub(crate) async fn from_discord(pool: impl PgExecutor<'_>, discord_id: UserId) -> sqlx::Result<Option<Self>> {
-        Ok(
-            sqlx::query!(r#"SELECT
+    pub(crate) async fn from_discord(
+        pool: impl PgExecutor<'_>,
+        discord_id: UserId,
+    ) -> sqlx::Result<Option<Self>> {
+        Ok(sqlx::query!(
+            r#"SELECT
                 id AS "id: Id<Users>",
                 display_source AS "display_source: DisplaySource",
                 racetime_id,
@@ -224,8 +247,13 @@ impl User {
                 startgg_id AS "startgg_id: startgg::ID",
                 timezone,
                 is_archivist
-            FROM users WHERE discord_id = $1"#, PgSnowflake(discord_id) as _).fetch_optional(pool).await?
-            .map(|row| Self::from_row(
+            FROM users WHERE discord_id = $1"#,
+            PgSnowflake(discord_id) as _
+        )
+        .fetch_optional(pool)
+        .await?
+        .map(|row| {
+            Self::from_row(
                 row.id,
                 row.display_source,
                 row.racetime_id,
@@ -240,13 +268,16 @@ impl User {
                 row.startgg_id,
                 row.timezone,
                 row.is_archivist,
-            ))
-        )
+            )
+        }))
     }
 
-    pub(crate) async fn from_startgg(pool: impl PgExecutor<'_>, startgg_id: startgg::ID) -> sqlx::Result<Option<Self>> {
-        Ok(
-            sqlx::query!(r#"SELECT
+    pub(crate) async fn from_startgg(
+        pool: impl PgExecutor<'_>,
+        startgg_id: startgg::ID,
+    ) -> sqlx::Result<Option<Self>> {
+        Ok(sqlx::query!(
+            r#"SELECT
                 id AS "id: Id<Users>",
                 display_source AS "display_source: DisplaySource",
                 racetime_id,
@@ -260,8 +291,13 @@ impl User {
                 challonge_id,
                 timezone,
                 is_archivist
-            FROM users WHERE startgg_id = $1"#, startgg_id as _).fetch_optional(pool).await?
-            .map(|row| Self::from_row(
+            FROM users WHERE startgg_id = $1"#,
+            startgg_id as _
+        )
+        .fetch_optional(pool)
+        .await?
+        .map(|row| {
+            Self::from_row(
                 row.id,
                 row.display_source,
                 row.racetime_id,
@@ -276,51 +312,92 @@ impl User {
                 Some(startgg_id),
                 row.timezone,
                 row.is_archivist,
-            ))
-        )
+            )
+        }))
     }
 
     pub(crate) fn display_name(&self) -> &str {
         match self.display_source {
-            DisplaySource::RaceTime => &self.racetime.as_ref().expect("user with racetime.gg display preference but no racetime.gg display name").display_name,
-            DisplaySource::Discord => &self.discord.as_ref().expect("user with Discord display preference but no Discord display name").display_name,
+            DisplaySource::RaceTime => {
+                &self
+                    .racetime
+                    .as_ref()
+                    .expect(
+                        "user with racetime.gg display preference but no racetime.gg display name",
+                    )
+                    .display_name
+            }
+            DisplaySource::Discord => {
+                &self
+                    .discord
+                    .as_ref()
+                    .expect("user with Discord display preference but no Discord display name")
+                    .display_name
+            }
         }
     }
 
-    pub(crate) fn subjective_pronoun(&self) -> &'static str { //TODO also check start.gg genderPronoun field
-        match self.racetime.as_ref().and_then(|racetime| racetime.pronouns) {
+    pub(crate) fn subjective_pronoun(&self) -> &'static str {
+        //TODO also check start.gg genderPronoun field
+        match self
+            .racetime
+            .as_ref()
+            .and_then(|racetime| racetime.pronouns)
+        {
             Some(RaceTimePronouns::He | RaceTimePronouns::HeThey) => "he",
             Some(RaceTimePronouns::She | RaceTimePronouns::SheThey) => "she",
-            Some(RaceTimePronouns::They | RaceTimePronouns::AnyAll | RaceTimePronouns::Other) | None => "they",
+            Some(RaceTimePronouns::They | RaceTimePronouns::AnyAll | RaceTimePronouns::Other)
+            | None => "they",
         }
     }
 
-    pub(crate) fn subjective_pronoun_uses_plural_form(&self) -> bool { //TODO also check start.gg genderPronoun field
-        match self.racetime.as_ref().and_then(|racetime| racetime.pronouns) {
+    pub(crate) fn subjective_pronoun_uses_plural_form(&self) -> bool {
+        //TODO also check start.gg genderPronoun field
+        match self
+            .racetime
+            .as_ref()
+            .and_then(|racetime| racetime.pronouns)
+        {
             Some(RaceTimePronouns::He | RaceTimePronouns::HeThey) => false,
             Some(RaceTimePronouns::She | RaceTimePronouns::SheThey) => false,
-            Some(RaceTimePronouns::They | RaceTimePronouns::AnyAll | RaceTimePronouns::Other) | None => true,
+            Some(RaceTimePronouns::They | RaceTimePronouns::AnyAll | RaceTimePronouns::Other)
+            | None => true,
         }
     }
 
-    pub(crate) fn objective_pronoun(&self) -> &'static str { //TODO also check start.gg genderPronoun field
-        match self.racetime.as_ref().and_then(|racetime| racetime.pronouns) {
+    pub(crate) fn objective_pronoun(&self) -> &'static str {
+        //TODO also check start.gg genderPronoun field
+        match self
+            .racetime
+            .as_ref()
+            .and_then(|racetime| racetime.pronouns)
+        {
             Some(RaceTimePronouns::He | RaceTimePronouns::HeThey) => "him",
             Some(RaceTimePronouns::She | RaceTimePronouns::SheThey) => "her",
-            Some(RaceTimePronouns::They | RaceTimePronouns::AnyAll | RaceTimePronouns::Other) | None => "them",
+            Some(RaceTimePronouns::They | RaceTimePronouns::AnyAll | RaceTimePronouns::Other)
+            | None => "them",
         }
     }
 
-    pub(crate) fn possessive_determiner(&self) -> &'static str { //TODO also check start.gg genderPronoun field
-        match self.racetime.as_ref().and_then(|racetime| racetime.pronouns) {
+    pub(crate) fn possessive_determiner(&self) -> &'static str {
+        //TODO also check start.gg genderPronoun field
+        match self
+            .racetime
+            .as_ref()
+            .and_then(|racetime| racetime.pronouns)
+        {
             Some(RaceTimePronouns::He | RaceTimePronouns::HeThey) => "his",
             Some(RaceTimePronouns::She | RaceTimePronouns::SheThey) => "her",
-            Some(RaceTimePronouns::They | RaceTimePronouns::AnyAll | RaceTimePronouns::Other) | None => "their",
+            Some(RaceTimePronouns::They | RaceTimePronouns::AnyAll | RaceTimePronouns::Other)
+            | None => "their",
         }
     }
 
     /// Returns `Some(None)` if the user data can't be accessed. This may be because the user ID does not exist, or because the user profile is not public, see https://github.com/racetimeGG/racetime-app/blob/5892f8f80eb1bd9619244becc48bbc4607b76844/racetime/models/user.py#L274-L296
-    pub(crate) async fn racetime_user_data(&self, http_client: &reqwest::Client) -> wheel::Result<Option<Option<racetime::model::UserProfile>>> {
+    pub(crate) async fn racetime_user_data(
+        &self,
+        http_client: &reqwest::Client,
+    ) -> wheel::Result<Option<Option<racetime::model::UserProfile>>> {
         Ok(if let Some(ref racetime) = self.racetime {
             Some(racetime_bot::user_data(http_client, &racetime.id).await?)
         } else {
@@ -328,16 +405,31 @@ impl User {
         })
     }
 
-    async fn events_organized(&self, transaction: &mut Transaction<'_, Postgres>) -> Result<Vec<event::Data<'_>>, event::DataError> {
-        let ids = sqlx::query!(r#"SELECT series AS "series: Series", event FROM organizers WHERE organizer = $1"#, self.id as _).fetch_all(&mut **transaction).await?;
+    async fn events_organized(
+        &self,
+        transaction: &mut Transaction<'_, Postgres>,
+    ) -> Result<Vec<event::Data<'_>>, event::DataError> {
+        let ids = sqlx::query!(
+            r#"SELECT series AS "series: Series", event FROM organizers WHERE organizer = $1"#,
+            self.id as _
+        )
+        .fetch_all(&mut **transaction)
+        .await?;
         let mut buf = Vec::with_capacity(ids.len());
         for row in ids {
-            buf.push(event::Data::new(&mut *transaction, row.series, row.event).await?.expect("event disappeared during transaction"));
+            buf.push(
+                event::Data::new(&mut *transaction, row.series, row.event)
+                    .await?
+                    .expect("event disappeared during transaction"),
+            );
         }
         Ok(buf)
     }
 
-    async fn events_participated(&self, transaction: &mut Transaction<'_, Postgres>) -> Result<Vec<event::Data<'static>>, event::DataError> {
+    async fn events_participated(
+        &self,
+        transaction: &mut Transaction<'_, Postgres>,
+    ) -> Result<Vec<event::Data<'static>>, event::DataError> {
         let teams = Team::for_member(&mut *transaction, self.id).await?;
         let mut buf = Vec::with_capacity(teams.len());
         for team in teams {
@@ -379,9 +471,15 @@ pub(crate) struct TimezoneForm {
 }
 
 #[rocket::post("/user/<id>/timezone", data = "<form>")]
-pub(crate) async fn set_timezone(pool: &State<PgPool>, me: User, csrf: Option<CsrfToken>, id: Id<Users>, form: Form<Contextual<'_, TimezoneForm>>) -> Result<Redirect, StatusOrError<PageError>> {
+pub(crate) async fn set_timezone(
+    pool: &State<PgPool>,
+    me: User,
+    csrf: Option<CsrfToken>,
+    id: Id<Users>,
+    form: Form<Contextual<'_, TimezoneForm>>,
+) -> Result<Redirect, StatusOrError<PageError>> {
     if me.id != id {
-        return Err(StatusOrError::Status(Status::Forbidden))
+        return Err(StatusOrError::Status(Status::Forbidden));
     }
     let mut form = form.into_inner();
     form.verify(&csrf);
@@ -389,22 +487,40 @@ pub(crate) async fn set_timezone(pool: &State<PgPool>, me: User, csrf: Option<Cs
         let timezone = if value.timezone.is_empty() {
             None
         } else {
-            Some(value.timezone.parse::<Tz>()
-                .map_err(|_| StatusOrError::Status(Status::BadRequest))?
-                .to_string())
+            Some(
+                value
+                    .timezone
+                    .parse::<Tz>()
+                    .map_err(|_| StatusOrError::Status(Status::BadRequest))?
+                    .to_string(),
+            )
         };
-        sqlx::query!("UPDATE users SET timezone = $1 WHERE id = $2", timezone, me.id as _).execute(&**pool).await?;
+        sqlx::query!(
+            "UPDATE users SET timezone = $1 WHERE id = $2",
+            timezone,
+            me.id as _
+        )
+        .execute(&**pool)
+        .await?;
     }
     Ok(Redirect::to(uri!(profile(me.id))))
 }
 
 #[rocket::get("/user/<id>")]
-pub(crate) async fn profile(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>, csrf: Option<CsrfToken>, racetime_user: Option<RaceTimeUser>, discord_user: Option<DiscordUser>, id: Id<Users>) -> Result<RawHtml<String>, StatusOrError<PageError>> {
+pub(crate) async fn profile(
+    pool: &State<PgPool>,
+    me: Option<User>,
+    uri: Origin<'_>,
+    csrf: Option<CsrfToken>,
+    racetime_user: Option<RaceTimeUser>,
+    discord_user: Option<DiscordUser>,
+    id: Id<Users>,
+) -> Result<RawHtml<String>, StatusOrError<PageError>> {
     let mut transaction = pool.begin().await?;
     let user = if let Some(user) = User::from_id(&mut *transaction, id).await? {
         user
     } else {
-        return Err(StatusOrError::Status(Status::NotFound))
+        return Err(StatusOrError::Status(Status::NotFound));
     };
     let racetime = if let Some(ref racetime) = user.racetime {
         html! {
@@ -428,8 +544,13 @@ pub(crate) async fn profile(pool: &State<PgPool>, me: Option<User>, uri: Origin<
         }
     } else if me.as_ref().is_some_and(|me| me.id == user.id) {
         if let Some(racetime_user) = racetime_user {
-            if let Some(racetime_user) = User::from_racetime(&mut *transaction, &racetime_user.id).await? {
-                let admin_user = User::from_id(&mut *transaction, Id::from(16287394041462225947_u64)).await?.ok_or(PageError::AdminUserData(3))?;
+            if let Some(racetime_user) =
+                User::from_racetime(&mut *transaction, &racetime_user.id).await?
+            {
+                let admin_user =
+                    User::from_id(&mut *transaction, Id::from(16287394041462225947_u64))
+                        .await?
+                        .ok_or(PageError::AdminUserData(3))?;
                 html! {
                     p {
                         @let racetime = racetime_user.racetime.expect("racetime.gg user without racetime.gg ID");
@@ -511,8 +632,13 @@ pub(crate) async fn profile(pool: &State<PgPool>, me: Option<User>, uri: Origin<
         }
     } else if me.as_ref().is_some_and(|me| me.id == user.id) {
         if let Some(discord_user) = discord_user {
-            if let Some(discord_user) = User::from_discord(&mut *transaction, discord_user.id).await? {
-                let admin_user = User::from_id(&mut *transaction, Id::from(16287394041462225947_u64)).await?.ok_or(PageError::AdminUserData(4))?;
+            if let Some(discord_user) =
+                User::from_discord(&mut *transaction, discord_user.id).await?
+            {
+                let admin_user =
+                    User::from_id(&mut *transaction, Id::from(16287394041462225947_u64))
+                        .await?
+                        .ok_or(PageError::AdminUserData(4))?;
                 html! {
                     p {
                         @let discord = discord_user.discord.expect("Discord user without Discord ID");
@@ -626,9 +752,14 @@ pub(crate) async fn profile(pool: &State<PgPool>, me: Option<User>, uri: Origin<
     events_organized.sort_by_key(|event| (event.base_start.is_some(), Reverse(event.base_start)));
     let mut events_participated = user.events_participated(&mut transaction).await?;
     events_participated.retain(|event| event.listed);
-    events_participated.sort_by_key(|event| (event.base_start.is_some(), Reverse(event.base_start)));
+    events_participated
+        .sort_by_key(|event| (event.base_start.is_some(), Reverse(event.base_start)));
     let timezone_form = if me.as_ref().is_some_and(|me| me.id == user.id) {
-        let timezones = chrono_tz::TZ_VARIANTS.iter().map(ToString::to_string).sorted().collect_vec();
+        let timezones = chrono_tz::TZ_VARIANTS
+            .iter()
+            .map(ToString::to_string)
+            .sorted()
+            .collect_vec();
         html! {
             form(method = "post", action = uri!(set_timezone(user.id))) {
                 : csrf;
@@ -654,46 +785,61 @@ pub(crate) async fn profile(pool: &State<PgPool>, me: Option<User>, uri: Origin<
     } else {
         html! {}
     };
-    Ok(page(transaction, &me, &uri, PageStyle { kind: if me.as_ref().is_some_and(|me| *me == user) { PageKind::MyProfile } else { PageKind::Other }, ..PageStyle::default() }, &format!("{} — Hyrule Town Hall", user.display_name()), html! {
-        h1 {
-            bdi : user.display_name();
-        }
-        p {
-            : "Hyrule Town Hall user ID: ";
-            code : user.id.to_string();
-        }
-        : racetime;
-        : discord;
-        : startgg;
-        : challonge;
-        : timezone_form;
-        @if user.is_archivist {
+    Ok(page(
+        transaction,
+        &me,
+        &uri,
+        PageStyle {
+            kind: if me.as_ref().is_some_and(|me| *me == user) {
+                PageKind::MyProfile
+            } else {
+                PageKind::Other
+            },
+            ..PageStyle::default()
+        },
+        &format!("{} — Hyrule Town Hall", user.display_name()),
+        html! {
+            h1 {
+                bdi : user.display_name();
+            }
             p {
-                : "This user is an archivist: ";
-                : user.subjective_pronoun().to_case(Case::Title);
-                @if user.subjective_pronoun_uses_plural_form() {
-                    : " help";
-                } else {
-                    : " helps";
-                }
-                : " with adding data like race room and restream links to past races.";
+                : "Hyrule Town Hall user ID: ";
+                code : user.id.to_string();
             }
-        }
-        @if !events_organized.is_empty() {
-            p : "This user has organized the following events:";
-            ul {
-                @for event in events_organized {
-                    li : event;
-                }
-            }
-        }
-        @if !events_participated.is_empty() {
-            p : "This user has participated in the following events:";
-            ul {
-                @for event in events_participated {
-                    li : event;
+            : racetime;
+            : discord;
+            : startgg;
+            : challonge;
+            : timezone_form;
+            @if user.is_archivist {
+                p {
+                    : "This user is an archivist: ";
+                    : user.subjective_pronoun().to_case(Case::Title);
+                    @if user.subjective_pronoun_uses_plural_form() {
+                        : " help";
+                    } else {
+                        : " helps";
+                    }
+                    : " with adding data like race room and restream links to past races.";
                 }
             }
-        }
-    }).await?)
+            @if !events_organized.is_empty() {
+                p : "This user has organized the following events:";
+                ul {
+                    @for event in events_organized {
+                        li : event;
+                    }
+                }
+            }
+            @if !events_participated.is_empty() {
+                p : "This user has participated in the following events:";
+                ul {
+                    @for event in events_participated {
+                        li : event;
+                    }
+                }
+            }
+        },
+    )
+    .await?)
 }

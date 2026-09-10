@@ -1,8 +1,8 @@
 use {
-    graphql_client::GraphQLQuery,
-    typemap_rev::TypeMap,
     crate::prelude::*,
+    graphql_client::GraphQLQuery,
     std::collections::{HashMap, HashSet},
+    typemap_rev::TypeMap,
 };
 
 /// From https://dev.start.gg/docs/rate-limits:
@@ -10,10 +10,13 @@ use {
 /// > You may not average more than 80 requests per 60 seconds.
 const RATE_LIMIT: Duration = Duration::from_millis(60_000 / 80);
 
-static CACHE: LazyLock<Mutex<(Instant, TypeMap)>> = LazyLock::new(|| Mutex::new((Instant::now() + RATE_LIMIT, TypeMap::default())));
-static SWISS_STANDINGS_CACHE: LazyLock<Mutex<HashMap<String, Vec<SwissStanding>>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+static CACHE: LazyLock<Mutex<(Instant, TypeMap)>> =
+    LazyLock::new(|| Mutex::new((Instant::now() + RATE_LIMIT, TypeMap::default())));
+static SWISS_STANDINGS_CACHE: LazyLock<Mutex<HashMap<String, Vec<SwissStanding>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 /// Whether another refresh was requested while the current refresh for an event was running.
-static SWISS_STANDINGS_REFRESHES: LazyLock<Mutex<HashMap<String, bool>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+static SWISS_STANDINGS_REFRESHES: LazyLock<Mutex<HashMap<String, bool>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 
 pub(crate) async fn invalidate_cache() {
     lock!(cache = CACHE; {
@@ -27,14 +30,19 @@ struct QueryCache<T: GraphQLQuery> {
 }
 
 impl<T: GraphQLQuery + 'static> TypeMapKey for QueryCache<T>
-where T::Variables: Send + Sync, T::ResponseData: Send + Sync {
+where
+    T::Variables: Send + Sync,
+    T::ResponseData: Send + Sync,
+{
     type Value = HashMap<T::Variables, (Instant, T::ResponseData)>;
 }
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum Error {
-    #[error(transparent)] Reqwest(#[from] reqwest::Error),
-    #[error(transparent)] Wheel(#[from] wheel::Error),
+    #[error(transparent)]
+    Reqwest(#[from] reqwest::Error),
+    #[error(transparent)]
+    Wheel(#[from] wheel::Error),
     #[error("{} GraphQL errors: {}", .0.len(), .0.iter().map(|e| e.message.clone()).collect::<Vec<_>>().join("; "))]
     GraphQL(Vec<graphql_client::Error>),
     #[error("GraphQL response returned neither `data` nor `errors`")]
@@ -48,7 +56,11 @@ impl IsNetworkError for Error {
         match self {
             Self::Reqwest(e) => e.is_network_error(),
             Self::Wheel(e) => e.is_network_error(),
-            Self::GraphQL(errors) => errors.iter().all(|graphql_client::Error { message, .. }| message == "An unknown error has occurred"),
+            Self::GraphQL(errors) => {
+                errors.iter().all(|graphql_client::Error { message, .. }| {
+                    message == "An unknown error has occurred"
+                })
+            }
             Self::NoDataNoErrors | Self::NoQueryMatch(_) => false,
         }
     }
@@ -71,7 +83,9 @@ impl From<IdInner> for ID {
 }
 
 /// Workaround for <https://github.com/smashgg/developer-portal/issues/171>
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize, sqlx::Type)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize, sqlx::Type,
+)]
 #[serde(from = "IdInner", into = "String")]
 #[sqlx(transparent)]
 pub struct ID(pub(crate) String);
@@ -223,23 +237,39 @@ pub(crate) struct SetScoreQuery;
 pub(crate) struct EventRoundsQuery;
 
 /// Returns distinct round names (fullRoundText) for a start.gg event.
-pub(crate) async fn event_rounds(http_client: &reqwest::Client, config: &Config, event_slug: &str) -> Result<Vec<String>, Error> {
+pub(crate) async fn event_rounds(
+    http_client: &reqwest::Client,
+    config: &Config,
+    event_slug: &str,
+) -> Result<Vec<String>, Error> {
     let mut rounds = std::collections::HashSet::new();
     let mut page = 1i64;
     loop {
-        let response = query_cached::<EventRoundsQuery>(http_client, &config.startgg, event_rounds_query::Variables {
-            event_slug: event_slug.to_owned(),
-            page,
-        }).await?;
+        let response = query_cached::<EventRoundsQuery>(
+            http_client,
+            &config.startgg,
+            event_rounds_query::Variables {
+                event_slug: event_slug.to_owned(),
+                page,
+            },
+        )
+        .await?;
         let total_pages = match response.event {
             Some(event_rounds_query::EventRoundsQueryEvent {
-                sets: Some(event_rounds_query::EventRoundsQueryEventSets {
-                    page_info: Some(event_rounds_query::EventRoundsQueryEventSetsPageInfo { total_pages: Some(total_pages) }),
-                    nodes: Some(nodes),
-                }),
+                sets:
+                    Some(event_rounds_query::EventRoundsQueryEventSets {
+                        page_info:
+                            Some(event_rounds_query::EventRoundsQueryEventSetsPageInfo {
+                                total_pages: Some(total_pages),
+                            }),
+                        nodes: Some(nodes),
+                    }),
             }) => {
                 for node in nodes.into_iter().flatten() {
-                    if matches!(node.phase_group.and_then(|pg| pg.bracket_type), Some(event_rounds_query::BracketType::ROUND_ROBIN)) {
+                    if matches!(
+                        node.phase_group.and_then(|pg| pg.bracket_type),
+                        Some(event_rounds_query::BracketType::ROUND_ROBIN)
+                    ) {
                         continue;
                     }
                     if let Some(text) = node.full_round_text {
@@ -250,7 +280,9 @@ pub(crate) async fn event_rounds(http_client: &reqwest::Client, config: &Config,
             }
             _ => break,
         };
-        if page >= total_pages { break; }
+        if page >= total_pages {
+            break;
+        }
         page += 1;
     }
     let mut result: Vec<String> = rounds.into_iter().collect();
@@ -278,15 +310,31 @@ impl GameResult {
     }
 }
 
-async fn query_inner<T: GraphQLQuery + 'static>(http_client: &reqwest::Client, auth_token: &str, variables: T::Variables, next_request: &mut Instant) -> Result<T::ResponseData, Error>
-where T::Variables: Clone + Eq + Hash + Send + Sync, T::ResponseData: Clone + Send + Sync {
+async fn query_inner<T: GraphQLQuery + 'static>(
+    http_client: &reqwest::Client,
+    auth_token: &str,
+    variables: T::Variables,
+    next_request: &mut Instant,
+) -> Result<T::ResponseData, Error>
+where
+    T::Variables: Clone + Eq + Hash + Send + Sync,
+    T::ResponseData: Clone + Send + Sync,
+{
     sleep_until(*next_request).await;
-    let graphql_client::Response { data, errors, extensions: _ } = http_client.post("https://api.start.gg/gql/alpha")
+    let graphql_client::Response {
+        data,
+        errors,
+        extensions: _,
+    } = http_client
+        .post("https://api.start.gg/gql/alpha")
         .bearer_auth(auth_token)
         .json(&T::build_query(variables))
-        .send().await?
-        .detailed_error_for_status().await?
-        .json_with_text_in_error::<graphql_client::Response<T::ResponseData>>().await?;
+        .send()
+        .await?
+        .detailed_error_for_status()
+        .await?
+        .json_with_text_in_error::<graphql_client::Response<T::ResponseData>>()
+        .await?;
     *next_request = Instant::now() + RATE_LIMIT;
     match (data, errors) {
         (Some(_), Some(errors)) if !errors.is_empty() => Err(Error::GraphQL(errors)),
@@ -296,16 +344,30 @@ where T::Variables: Clone + Eq + Hash + Send + Sync, T::ResponseData: Clone + Se
     }
 }
 
-pub(crate) async fn query_uncached<T: GraphQLQuery + 'static>(http_client: &reqwest::Client, auth_token: &str, variables: T::Variables) -> Result<T::ResponseData, Error>
-where T::Variables: Clone + Eq + Hash + Send + Sync, T::ResponseData: Clone + Send + Sync {
+pub(crate) async fn query_uncached<T: GraphQLQuery + 'static>(
+    http_client: &reqwest::Client,
+    auth_token: &str,
+    variables: T::Variables,
+) -> Result<T::ResponseData, Error>
+where
+    T::Variables: Clone + Eq + Hash + Send + Sync,
+    T::ResponseData: Clone + Send + Sync,
+{
     lock!(cache = CACHE; {
         let (ref mut next_request, _) = *cache;
         query_inner::<T>(http_client, auth_token, variables, next_request).await
     })
 }
 
-pub(crate) async fn query_cached<T: GraphQLQuery + 'static>(http_client: &reqwest::Client, auth_token: &str, variables: T::Variables) -> Result<T::ResponseData, Error>
-where T::Variables: Clone + Eq + Hash + Send + Sync, T::ResponseData: Clone + Send + Sync {
+pub(crate) async fn query_cached<T: GraphQLQuery + 'static>(
+    http_client: &reqwest::Client,
+    auth_token: &str,
+    variables: T::Variables,
+) -> Result<T::ResponseData, Error>
+where
+    T::Variables: Clone + Eq + Hash + Send + Sync,
+    T::ResponseData: Clone + Send + Sync,
+{
     lock!(cache = CACHE; {
         let (ref mut next_request, ref mut cache) = *cache;
         Ok(match cache.entry::<QueryCache<T>>().or_default().entry(variables.clone()) {
@@ -331,26 +393,40 @@ where T::Variables: Clone + Eq + Hash + Send + Sync, T::ResponseData: Clone + Se
 /// The automatic race importer calls this before taking `race_import_lock`. A cold or expired
 /// start.gg cache can require many rate-limited HTTP requests, none of which should prevent
 /// existing racetime.gg room handlers from starting or scheduled rooms from opening.
-pub(crate) async fn preload_event_sets(http_client: &reqwest::Client, config: &Config, event_slug: &str) -> Result<(), Error> {
+pub(crate) async fn preload_event_sets(
+    http_client: &reqwest::Client,
+    config: &Config,
+    event_slug: &str,
+) -> Result<(), Error> {
     let mut page = 1;
     loop {
-        let response = query_cached::<EventSetsQuery>(http_client, &config.startgg, event_sets_query::Variables {
-            event_slug: event_slug.to_owned(),
-            page,
-        }).await?;
+        let response = query_cached::<EventSetsQuery>(
+            http_client,
+            &config.startgg,
+            event_sets_query::Variables {
+                event_slug: event_slug.to_owned(),
+                page,
+            },
+        )
+        .await?;
         let total_pages = match &response {
             event_sets_query::ResponseData {
-                event: Some(event_sets_query::EventSetsQueryEvent {
-                    sets: Some(event_sets_query::EventSetsQueryEventSets {
-                        page_info: Some(event_sets_query::EventSetsQueryEventSetsPageInfo { total_pages: Some(total_pages) }),
-                        ..
+                event:
+                    Some(event_sets_query::EventSetsQueryEvent {
+                        sets:
+                            Some(event_sets_query::EventSetsQueryEventSets {
+                                page_info:
+                                    Some(event_sets_query::EventSetsQueryEventSetsPageInfo {
+                                        total_pages: Some(total_pages),
+                                    }),
+                                ..
+                            }),
                     }),
-                }),
             } => *total_pages,
             _ => return Err(Error::NoQueryMatch(response)),
         };
         if page >= total_pages {
-            return Ok(())
+            return Ok(());
         }
         page += 1;
     }
@@ -398,7 +474,13 @@ pub(crate) fn expand_placeholders(
 ///   The caller is expected to duplicate this race to get the different games of the match, and create a single scheduling thread for the match.
 ///   A `game` value of `None` should be treated like `Some(1)`.
 /// * A list of start.gg set IDs that were not imported, along with the reasons they were skipped.
-pub(crate) async fn races_to_import(transaction: &mut Transaction<'_, Postgres>, http_client: &reqwest::Client, config: &Config, event: &event::Data<'_>, event_slug: &str) -> Result<(Vec<Race>, Vec<(ID, ImportSkipReason)>), cal::Error> {
+pub(crate) async fn races_to_import(
+    transaction: &mut Transaction<'_, Postgres>,
+    http_client: &reqwest::Client,
+    config: &Config,
+    event: &event::Data<'_>,
+    event_slug: &str,
+) -> Result<(Vec<Race>, Vec<(ID, ImportSkipReason)>), cal::Error> {
     async fn process_set(
         transaction: &mut Transaction<'_, Postgres>,
         http_client: &reqwest::Client,
@@ -417,16 +499,24 @@ pub(crate) async fn races_to_import(transaction: &mut Transaction<'_, Postgres>,
         bracket_type: Option<event_sets_query::BracketType>,
     ) -> Result<Option<ImportSkipReason>, cal::Error> {
         let pool = if let Some(ref identifier) = pool {
-            Some(sqlx::query_scalar!(
-                "SELECT mapped_name FROM startgg_pool_name_mappings \
+            Some(
+                sqlx::query_scalar!(
+                    "SELECT mapped_name FROM startgg_pool_name_mappings \
                  WHERE series = $1 AND event = $2 AND original_identifier = $3",
-                event.series as _, &event.event, identifier
-            ).fetch_optional(&mut **transaction).await?.unwrap_or_else(|| identifier.clone()))
+                    event.series as _,
+                    &event.event,
+                    identifier
+                )
+                .fetch_optional(&mut **transaction)
+                .await?
+                .unwrap_or_else(|| identifier.clone()),
+            )
         } else {
             None
         };
         let pre_mapping_round = round.clone();
-        if let Some(row) = sqlx::query!("
+        if let Some(row) = sqlx::query!(
+            "
             SELECT mapped_phase, mapped_round
             FROM startgg_phase_round_mappings
             WHERE series = $3 AND event = $4
@@ -435,14 +525,32 @@ pub(crate) async fn races_to_import(transaction: &mut Transaction<'_, Postgres>,
             ORDER BY (original_phase IS NOT NULL AND original_round IS NOT NULL) DESC,
                      (original_phase IS NOT NULL OR original_round IS NOT NULL) DESC
             LIMIT 1
-        ", &phase as _, &round as _, event.series as _, &event.event).fetch_optional(&mut **transaction).await? {
+        ",
+            &phase as _,
+            &round as _,
+            event.series as _,
+            &event.event
+        )
+        .fetch_optional(&mut **transaction)
+        .await?
+        {
             let orig_phase = phase.clone();
             let orig_round = round.clone();
             if let Some(mapped) = row.mapped_phase {
-                phase = Some(expand_placeholders(mapped, &orig_phase, &orig_round, pool.as_deref())?);
+                phase = Some(expand_placeholders(
+                    mapped,
+                    &orig_phase,
+                    &orig_round,
+                    pool.as_deref(),
+                )?);
             }
             if let Some(mapped) = row.mapped_round {
-                round = Some(expand_placeholders(mapped, &orig_phase, &orig_round, pool.as_deref())?);
+                round = Some(expand_placeholders(
+                    mapped,
+                    &orig_phase,
+                    &orig_round,
+                    pool.as_deref(),
+                )?);
             }
         }
         let normalize = |s: String| s.replace("Winners", "WB").replace("Losers", "LB");
@@ -450,6 +558,10 @@ pub(crate) async fn races_to_import(transaction: &mut Transaction<'_, Postgres>,
         round = round.map(normalize);
         let canonical_round = pre_mapping_round.map(normalize);
         races.push(Race {
+            // The provider supplies phase labels, so classify once at import.
+            // Subsequent saves and display-name edits retain this stored choice.
+            is_qualifier: phase.as_deref() == Some("Qualifier"),
+            qualifier_number: (phase.as_deref() == Some("Qualifier")).then(|| round.as_deref().and_then(|round| round.split_whitespace().last()).and_then(|number| number.parse::<i64>().ok()).filter(|number| *number >= 0).unwrap_or(1)),
             id: Id::new(&mut *transaction).await?,
             series: event.series,
             event: event.event.to_string(),
@@ -518,39 +630,145 @@ pub(crate) async fn races_to_import(transaction: &mut Transaction<'_, Postgres>,
         Ok(None)
     }
 
-    async fn process_page(transaction: &mut Transaction<'_, Postgres>, http_client: &reqwest::Client, config: &Config, event: &event::Data<'_>, event_slug: &str, existing_sets: &HashSet<ID>, page: i64, races: &mut Vec<Race>, skips: &mut Vec<(ID, ImportSkipReason)>) -> Result<i64, cal::Error> {
-        let response = query_cached::<EventSetsQuery>(http_client, &config.startgg, event_sets_query::Variables { event_slug: event_slug.to_owned(), page }).await?;
+    async fn process_page(
+        transaction: &mut Transaction<'_, Postgres>,
+        http_client: &reqwest::Client,
+        config: &Config,
+        event: &event::Data<'_>,
+        event_slug: &str,
+        existing_sets: &HashSet<ID>,
+        page: i64,
+        races: &mut Vec<Race>,
+        skips: &mut Vec<(ID, ImportSkipReason)>,
+    ) -> Result<i64, cal::Error> {
+        let response = query_cached::<EventSetsQuery>(
+            http_client,
+            &config.startgg,
+            event_sets_query::Variables {
+                event_slug: event_slug.to_owned(),
+                page,
+            },
+        )
+        .await?;
         let event_sets_query::ResponseData {
-            event: Some(event_sets_query::EventSetsQueryEvent {
-                sets: Some(event_sets_query::EventSetsQueryEventSets {
-                    page_info: Some(event_sets_query::EventSetsQueryEventSetsPageInfo { total_pages: Some(total_pages) }),
-                    nodes: Some(sets),
+            event:
+                Some(event_sets_query::EventSetsQueryEvent {
+                    sets:
+                        Some(event_sets_query::EventSetsQueryEventSets {
+                            page_info:
+                                Some(event_sets_query::EventSetsQueryEventSetsPageInfo {
+                                    total_pages: Some(total_pages),
+                                }),
+                            nodes: Some(sets),
+                        }),
                 }),
-            }),
-        } = response else { return Err(Error::NoQueryMatch(response).into()) };
+        } = response
+        else {
+            return Err(Error::NoQueryMatch(response).into());
+        };
         for set in sets.into_iter().filter_map(identity) {
-            let event_sets_query::EventSetsQueryEventSetsNodes { id: Some(id), phase_group, full_round_text, slots: Some(slots), set_games_type, total_games, round } = set else { panic!("unexpected set format") };
+            let event_sets_query::EventSetsQueryEventSetsNodes {
+                id: Some(id),
+                phase_group,
+                full_round_text,
+                slots: Some(slots),
+                set_games_type,
+                total_games,
+                round,
+            } = set
+            else {
+                panic!("unexpected set format")
+            };
             if id.0.starts_with("preview") {
                 skips.push((id, ImportSkipReason::Preview));
             } else if existing_sets.contains(&id) {
                 skips.push((id, ImportSkipReason::Exists));
             } else if let [
-                Some(event_sets_query::EventSetsQueryEventSetsNodesSlots { entrant: Some(event_sets_query::EventSetsQueryEventSetsNodesSlotsEntrant { id: Some(ref team1) }) }),
-                Some(event_sets_query::EventSetsQueryEventSetsNodesSlots { entrant: Some(event_sets_query::EventSetsQueryEventSetsNodesSlotsEntrant { id: Some(ref team2) }) }),
-            ] = *slots {
-                let team1 = Team::from_startgg(&mut *transaction, team1).await?.ok_or_else(|| cal::Error::UnknownTeamStartGG(team1.clone()))?;
-                let team2 = Team::from_startgg(&mut *transaction, team2).await?.ok_or_else(|| cal::Error::UnknownTeamStartGG(team2.clone()))?;
-                let best_of = phase_group.as_ref()
-                    .and_then(|event_sets_query::EventSetsQueryEventSetsNodesPhaseGroup { rounds, .. }| rounds.as_ref())
-                    .and_then(|rounds| rounds.iter().filter_map(Option::as_ref).find(|event_sets_query::EventSetsQueryEventSetsNodesPhaseGroupRounds { number, .. }| *number == round))
-                    .and_then(|event_sets_query::EventSetsQueryEventSetsNodesPhaseGroupRounds { best_of, .. }| *best_of);
-                let phase = phase_group.as_ref()
-                    .and_then(|event_sets_query::EventSetsQueryEventSetsNodesPhaseGroup { phase, .. }| phase.as_ref())
-                    .and_then(|event_sets_query::EventSetsQueryEventSetsNodesPhaseGroupPhase { name }| name.clone());
-                let bracket_type = phase_group.as_ref()
-                    .and_then(|event_sets_query::EventSetsQueryEventSetsNodesPhaseGroup { bracket_type, .. }| bracket_type.clone());
-                let pool = phase_group.and_then(|event_sets_query::EventSetsQueryEventSetsNodesPhaseGroup { display_identifier, .. }| display_identifier);
-                if let Some(reason) = process_set(&mut *transaction, http_client, event, races, event_slug, id.clone(), phase, full_round_text, pool, team1, team2, set_games_type, total_games, best_of, bracket_type).await? {
+                Some(event_sets_query::EventSetsQueryEventSetsNodesSlots {
+                    entrant:
+                        Some(event_sets_query::EventSetsQueryEventSetsNodesSlotsEntrant {
+                            id: Some(ref team1),
+                        }),
+                }),
+                Some(event_sets_query::EventSetsQueryEventSetsNodesSlots {
+                    entrant:
+                        Some(event_sets_query::EventSetsQueryEventSetsNodesSlotsEntrant {
+                            id: Some(ref team2),
+                        }),
+                }),
+            ] = *slots
+            {
+                let team1 = Team::from_startgg(&mut *transaction, team1)
+                    .await?
+                    .ok_or_else(|| cal::Error::UnknownTeamStartGG(team1.clone()))?;
+                let team2 = Team::from_startgg(&mut *transaction, team2)
+                    .await?
+                    .ok_or_else(|| cal::Error::UnknownTeamStartGG(team2.clone()))?;
+                let best_of = phase_group
+                    .as_ref()
+                    .and_then(
+                        |event_sets_query::EventSetsQueryEventSetsNodesPhaseGroup {
+                             rounds,
+                             ..
+                         }| rounds.as_ref(),
+                    )
+                    .and_then(|rounds| {
+                        rounds.iter().filter_map(Option::as_ref).find(
+                            |event_sets_query::EventSetsQueryEventSetsNodesPhaseGroupRounds {
+                                 number,
+                                 ..
+                             }| *number == round,
+                        )
+                    })
+                    .and_then(
+                        |event_sets_query::EventSetsQueryEventSetsNodesPhaseGroupRounds {
+                             best_of,
+                             ..
+                         }| *best_of,
+                    );
+                let phase = phase_group
+                    .as_ref()
+                    .and_then(
+                        |event_sets_query::EventSetsQueryEventSetsNodesPhaseGroup {
+                             phase, ..
+                         }| phase.as_ref(),
+                    )
+                    .and_then(
+                        |event_sets_query::EventSetsQueryEventSetsNodesPhaseGroupPhase { name }| {
+                            name.clone()
+                        },
+                    );
+                let bracket_type = phase_group.as_ref().and_then(
+                    |event_sets_query::EventSetsQueryEventSetsNodesPhaseGroup {
+                         bracket_type,
+                         ..
+                     }| bracket_type.clone(),
+                );
+                let pool = phase_group.and_then(
+                    |event_sets_query::EventSetsQueryEventSetsNodesPhaseGroup {
+                         display_identifier,
+                         ..
+                     }| display_identifier,
+                );
+                if let Some(reason) = process_set(
+                    &mut *transaction,
+                    http_client,
+                    event,
+                    races,
+                    event_slug,
+                    id.clone(),
+                    phase,
+                    full_round_text,
+                    pool,
+                    team1,
+                    team2,
+                    set_games_type,
+                    total_games,
+                    best_of,
+                    bracket_type,
+                )
+                .await?
+                {
                     skips.push((id, reason));
                 }
             } else {
@@ -564,68 +782,123 @@ pub(crate) async fn races_to_import(transaction: &mut Transaction<'_, Postgres>,
     // instead of issuing one EXISTS query per set while processing the cached start.gg pages.
     let existing_sets = sqlx::query_scalar!(
         r#"SELECT startgg_set AS "startgg_set!: ID" FROM races WHERE startgg_set IS NOT NULL"#,
-    ).fetch_all(&mut **transaction).await?.into_iter().collect::<HashSet<_>>();
+    )
+    .fetch_all(&mut **transaction)
+    .await?
+    .into_iter()
+    .collect::<HashSet<_>>();
     let mut races = Vec::default();
     let mut skips = Vec::default();
-    let total_pages = process_page(&mut *transaction, http_client, config, event, event_slug, &existing_sets, 1, &mut races, &mut skips).await?;
+    let total_pages = process_page(
+        &mut *transaction,
+        http_client,
+        config,
+        event,
+        event_slug,
+        &existing_sets,
+        1,
+        &mut races,
+        &mut skips,
+    )
+    .await?;
     for page in 2..=total_pages {
-        process_page(&mut *transaction, http_client, config, event, event_slug, &existing_sets, page, &mut races, &mut skips).await?;
+        process_page(
+            &mut *transaction,
+            http_client,
+            config,
+            event,
+            event_slug,
+            &existing_sets,
+            page,
+            &mut races,
+            &mut skips,
+        )
+        .await?;
     }
     Ok((races, skips))
 }
 
 /// Fetches all entrants for a given event slug
-pub(crate) async fn fetch_event_entrants(http_client: &reqwest::Client, config: &Config, event_slug: &str) -> Result<Vec<(ID, String, Vec<Option<ID>>)>, Error> {
+pub(crate) async fn fetch_event_entrants(
+    http_client: &reqwest::Client,
+    config: &Config,
+    event_slug: &str,
+) -> Result<Vec<(ID, String, Vec<Option<ID>>)>, Error> {
     let startgg_token = &config.startgg;
     let mut all_entrants = Vec::new();
     let mut page = 1;
-    
+
     loop {
-        let response = query_uncached::<EntrantsQuery>(http_client, startgg_token, entrants_query::Variables { 
-            slug: Some(event_slug.to_owned()), 
-            page: Some(page)
-        }).await?;
-        
+        let response = query_uncached::<EntrantsQuery>(
+            http_client,
+            startgg_token,
+            entrants_query::Variables {
+                slug: Some(event_slug.to_owned()),
+                page: Some(page),
+            },
+        )
+        .await?;
+
         let entrants_query::ResponseData {
-            event: Some(entrants_query::EntrantsQueryEvent {
-                entrants: Some(entrants_query::EntrantsQueryEventEntrants {
-                    page_info: Some(entrants_query::EntrantsQueryEventEntrantsPageInfo { 
-                        page: Some(current_page), 
-                        total_pages: Some(total_pages) 
-                    }),
-                    nodes: Some(entrants),
-                }), id: _,
-            }),
-        } = response else { return Err(Error::GraphQL(vec![graphql_client::Error { message: "Entrants query failed or returned no data".to_string(), locations: None, path: None, extensions: None }])); };
-        
+            event:
+                Some(entrants_query::EntrantsQueryEvent {
+                    entrants:
+                        Some(entrants_query::EntrantsQueryEventEntrants {
+                            page_info:
+                                Some(entrants_query::EntrantsQueryEventEntrantsPageInfo {
+                                    page: Some(current_page),
+                                    total_pages: Some(total_pages),
+                                }),
+                            nodes: Some(entrants),
+                        }),
+                    id: _,
+                }),
+        } = response
+        else {
+            return Err(Error::GraphQL(vec![graphql_client::Error {
+                message: "Entrants query failed or returned no data".to_string(),
+                locations: None,
+                path: None,
+                extensions: None,
+            }]));
+        };
+
         for entrant in entrants.into_iter().filter_map(identity) {
-            let entrants_query::EntrantsQueryEventEntrantsNodes { 
-                id: Some(entrant_id), 
-                name: Some(entrant_name), 
+            let entrants_query::EntrantsQueryEventEntrantsNodes {
+                id: Some(entrant_id),
+                name: Some(entrant_name),
                 participants: Some(participants),
-            } = entrant else { continue };
-            
-            let user_ids: Vec<Option<ID>> = participants.into_iter()
+            } = entrant
+            else {
+                continue;
+            };
+
+            let user_ids: Vec<Option<ID>> = participants
+                .into_iter()
                 .filter_map(identity)
                 .map(|participant| {
-                    let entrants_query::EntrantsQueryEventEntrantsNodesParticipants { 
-                        user: Some(entrants_query::EntrantsQueryEventEntrantsNodesParticipantsUser { 
-                            id: Some(user_id) 
-                        }) 
-                    } = participant else { return None };
+                    let entrants_query::EntrantsQueryEventEntrantsNodesParticipants {
+                        user:
+                            Some(entrants_query::EntrantsQueryEventEntrantsNodesParticipantsUser {
+                                id: Some(user_id),
+                            }),
+                    } = participant
+                    else {
+                        return None;
+                    };
                     Some(user_id)
                 })
                 .collect();
-            
+
             all_entrants.push((entrant_id, entrant_name, user_ids));
         }
-        
+
         if current_page >= total_pages {
             break;
         }
         page += 1;
     }
-    
+
     Ok(all_entrants)
 }
 
@@ -663,7 +936,7 @@ fn apply_swiss_set(
             } else if winner_id == entrant2_id.as_str() {
                 (entrant2_id, entrant1_id)
             } else {
-                return
+                return;
             };
             if let Some(record) = records.get_mut(winner_id) {
                 record.wins += 1;
@@ -681,15 +954,15 @@ async fn fetch_swiss_standings(
     event_slug: &str,
     startgg_token: &str,
 ) -> Result<Vec<SwissStanding>, Error> {
+    use swiss_entrants_query::ResponseData;
+    use swiss_entrants_query::SwissEntrantsQueryEvent as Event;
+    use swiss_entrants_query::SwissEntrantsQueryEventEntrants as Entrants;
     use swiss_entrants_query::SwissEntrantsQueryEventEntrantsNodes as EntrantNode;
     use swiss_entrants_query::SwissEntrantsQueryEventEntrantsPageInfo as PageInfo;
-    use swiss_entrants_query::SwissEntrantsQueryEventEntrants as Entrants;
-    use swiss_entrants_query::SwissEntrantsQueryEvent as Event;
-    use swiss_entrants_query::ResponseData as ResponseData;
+    use swiss_sets_query::ResponseData as SwissResponseData;
+    use swiss_sets_query::SwissSetsQueryEvent as SwissEvent;
     use swiss_sets_query::SwissSetsQueryEventSets as SwissSets;
     use swiss_sets_query::SwissSetsQueryEventSetsNodes as SwissSetNode;
-    use swiss_sets_query::SwissSetsQueryEvent as SwissEvent;
-    use swiss_sets_query::ResponseData as SwissResponseData;
 
     // Helper function to fetch remaining pages sequentially
     async fn fetch_remaining_pages<T>(
@@ -706,13 +979,14 @@ async fn fetch_swiss_standings(
     {
         if total_pages > 1 {
             for page in 2..=total_pages {
-                let response = query_cached::<T>(http_client, startgg_token, page_vars_fn(page)).await?;
+                let response =
+                    query_cached::<T>(http_client, startgg_token, page_vars_fn(page)).await?;
                 process_response(&response);
             }
         }
         Ok(())
     }
-    
+
     // Fetch entrant IDs and names. Match records are calculated separately from the event's
     // complete set list so pending matches and explicit byes are handled consistently.
     let mut entrant_names = HashMap::new();
@@ -726,23 +1000,32 @@ async fn fetch_swiss_standings(
         },
     )
     .await?;
-    
+
     let total_entrant_pages = if let ResponseData {
-        event: Some(Event {
-            entrants: Some(Entrants {
-                page_info: Some(PageInfo { total_pages: Some(tp) }),
-                nodes: Some(entrants),
+        event:
+            Some(Event {
+                entrants:
+                    Some(Entrants {
+                        page_info:
+                            Some(PageInfo {
+                                total_pages: Some(tp),
+                            }),
+                        nodes: Some(entrants),
+                    }),
+                ..
             }),
-            ..
-        }),
         ..
-    } = entrants_response {
+    } = entrants_response
+    {
         for entrant in entrants.into_iter().filter_map(|e| e) {
             let EntrantNode {
                 id: Some(entrant_id),
                 name: Some(entrant_name),
                 ..
-            } = entrant else { continue };
+            } = entrant
+            else {
+                continue;
+            };
             let entrant_id = entrant_id.to_string();
             entrant_names.insert(entrant_id.clone(), entrant_name);
             records.insert(entrant_id, SwissRecord::default());
@@ -763,22 +1046,30 @@ async fn fetch_swiss_standings(
         },
         |response| {
             let ResponseData {
-                event: Some(Event {
-                    entrants: Some(Entrants {
-                        nodes: Some(entrants),
+                event:
+                    Some(Event {
+                        entrants:
+                            Some(Entrants {
+                                nodes: Some(entrants),
+                                ..
+                            }),
                         ..
                     }),
-                    ..
-                }),
                 ..
-            } = response else { return };
-            
+            } = response
+            else {
+                return;
+            };
+
             for entrant in entrants.iter().filter_map(|e| e.as_ref()) {
                 let EntrantNode {
                     id: Some(entrant_id),
                     name: Some(entrant_name),
                     ..
-                } = entrant else { continue };
+                } = entrant
+                else {
+                    continue;
+                };
                 let entrant_id = entrant_id.to_string();
                 entrant_names.insert(entrant_id.clone(), entrant_name.clone());
                 records.insert(entrant_id, SwissRecord::default());
@@ -797,19 +1088,33 @@ async fn fetch_swiss_standings(
                 winner_id,
                 phase_group: Some(phase_group),
                 slots: Some(slots),
-            } = set else { continue };
+            } = set
+            else {
+                continue;
+            };
             if id.0.starts_with("preview")
                 || phase_group.bracket_type != Some(swiss_sets_query::BracketType::SWISS)
             {
-                continue
+                continue;
             }
             let entrant_ids = slots.iter().filter_map(|slot| {
-                slot.as_ref()?.entrant.as_ref()?.id.as_ref().map(ToString::to_string)
+                slot.as_ref()?
+                    .entrant
+                    .as_ref()?
+                    .id
+                    .as_ref()
+                    .map(ToString::to_string)
             });
-            let is_bye = slots.iter().filter_map(Option::as_ref).any(|slot| {
-                slot.seed.as_ref().and_then(|seed| seed.is_bye) == Some(true)
-            });
-            apply_swiss_set(records, entrant_ids, winner_id.map(|id| id.to_string()), is_bye);
+            let is_bye = slots
+                .iter()
+                .filter_map(Option::as_ref)
+                .any(|slot| slot.seed.as_ref().and_then(|seed| seed.is_bye) == Some(true));
+            apply_swiss_set(
+                records,
+                entrant_ids,
+                winner_id.map(|id| id.to_string()),
+                is_bye,
+            );
         }
     }
 
@@ -823,17 +1128,23 @@ async fn fetch_swiss_standings(
     )
     .await?;
     let total_set_pages = if let SwissResponseData {
-        event: Some(SwissEvent {
-            sets: Some(SwissSets {
-                page_info: Some(swiss_sets_query::SwissSetsQueryEventSetsPageInfo { total_pages: Some(tp) }),
-                nodes: Some(sets),
+        event:
+            Some(SwissEvent {
+                sets:
+                    Some(SwissSets {
+                        page_info:
+                            Some(swiss_sets_query::SwissSetsQueryEventSetsPageInfo {
+                                total_pages: Some(tp),
+                            }),
+                        nodes: Some(sets),
+                    }),
             }),
-        }),
-    } = &swiss_sets_response {
+    } = &swiss_sets_response
+    {
         process_sets(sets.iter().filter_map(Option::as_ref), &mut records);
         *tp
     } else {
-        return Ok(Vec::new())
+        return Ok(Vec::new());
     };
     fetch_remaining_pages::<SwissSetsQuery>(
         http_client,
@@ -845,18 +1156,30 @@ async fn fetch_swiss_standings(
         },
         |response| {
             let SwissResponseData {
-                event: Some(SwissEvent {
-                    sets: Some(SwissSets { nodes: Some(sets), .. }),
-                }),
-            } = response else { return };
+                event:
+                    Some(SwissEvent {
+                        sets:
+                            Some(SwissSets {
+                                nodes: Some(sets), ..
+                            }),
+                    }),
+            } = response
+            else {
+                return;
+            };
             process_sets(sets.iter().filter_map(Option::as_ref), &mut records);
         },
     )
     .await?;
 
-    let mut all_entrants = entrant_names.into_iter().filter_map(|(id, name)| {
-        records.remove(&id).map(|SwissRecord { wins, losses }| (name, wins, losses))
-    }).collect::<Vec<_>>();
+    let mut all_entrants = entrant_names
+        .into_iter()
+        .filter_map(|(id, name)| {
+            records
+                .remove(&id)
+                .map(|SwissRecord { wins, losses }| (name, wins, losses))
+        })
+        .collect::<Vec<_>>();
 
     // Sort: wins desc, losses asc, name asc
     all_entrants.sort_by(|a, b| {
@@ -864,7 +1187,7 @@ async fn fetch_swiss_standings(
             .then(a.2.cmp(&b.2)) // losses asc
             .then(a.0.cmp(&b.0)) // name asc
     });
-    
+
     // Assign placements with ties
     let mut standings = Vec::new();
     let mut last_wins = None;
@@ -919,7 +1242,7 @@ pub(crate) async fn refresh_swiss_standings(
         }
     });
     if !should_spawn {
-        return
+        return;
     }
 
     tokio::spawn(async move {
@@ -941,7 +1264,7 @@ pub(crate) async fn refresh_swiss_standings(
                 }
             });
             if !refresh_again {
-                break
+                break;
             }
         }
     });
@@ -956,7 +1279,7 @@ pub(crate) async fn swiss_standings(
     startgg_token: &str,
 ) -> Result<Vec<SwissStanding>, Error> {
     if let Some(standings) = lock!(cache = SWISS_STANDINGS_CACHE; cache.get(event_slug).cloned()) {
-        return Ok(standings)
+        return Ok(standings);
     }
 
     let standings = fetch_swiss_standings(http_client, event_slug, startgg_token).await?;
@@ -968,10 +1291,11 @@ pub(crate) async fn swiss_standings(
 
 #[cfg(test)]
 mod tests {
-    use super::{apply_swiss_set, HashMap, SwissRecord};
+    use super::{HashMap, SwissRecord, apply_swiss_set};
 
     fn records() -> HashMap<String, SwissRecord> {
-        ["entrant1", "entrant2"].into_iter()
+        ["entrant1", "entrant2"]
+            .into_iter()
             .map(|id| (id.to_owned(), SwissRecord::default()))
             .collect()
     }
@@ -1005,12 +1329,7 @@ mod tests {
     #[test]
     fn explicit_bye_adds_one_win() {
         let mut records = records();
-        apply_swiss_set(
-            &mut records,
-            ["entrant1".to_owned()],
-            None,
-            true,
-        );
+        apply_swiss_set(&mut records, ["entrant1".to_owned()], None, true);
         assert_eq!(records["entrant1"], SwissRecord { wins: 1, losses: 0 });
         assert_eq!(records["entrant2"], SwissRecord::default());
     }
@@ -1018,12 +1337,7 @@ mod tests {
     #[test]
     fn unmatched_single_entrant_is_not_assumed_to_be_a_bye() {
         let mut records = records();
-        apply_swiss_set(
-            &mut records,
-            ["entrant1".to_owned()],
-            None,
-            false,
-        );
+        apply_swiss_set(&mut records, ["entrant1".to_owned()], None, false);
         assert_eq!(records["entrant1"], SwissRecord::default());
     }
 }

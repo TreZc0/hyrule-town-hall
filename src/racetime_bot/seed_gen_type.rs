@@ -1,11 +1,12 @@
+#[cfg(unix)]
+use async_proto::Protocol;
 use {
-    std::collections::HashMap,
+    crate::cal::Race,
     itertools::Itertools as _,
     serde::{Deserialize, Serialize},
     sqlx::PgPool,
-    crate::cal::Race,
+    std::collections::HashMap,
 };
-#[cfg(unix)] use async_proto::Protocol;
 
 /// A (value, label) pair for a practice seed form dropdown or checkbox.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -104,16 +105,19 @@ impl SeedGenType {
                 let source = match source_str {
                     Some("boothisman") | None => AlttprDrSource::Boothisman,
                     Some("mutual_choices") => {
-                        let config = serde_json::from_value(seed_config.cloned().unwrap_or_default())
-                            .unwrap_or_else(|_| {
-                                eprintln!("alttpr_dr/mutual_choices: missing or invalid seed_config");
-                                OwrEventConfig {
-                                    base_settings: serde_json::json!({}),
-                                    base_placements: serde_json::Value::Null,
-                                    start_inventory: vec![],
-                                    choices: serde_json::Value::Null,
-                                }
-                            });
+                        let config =
+                            serde_json::from_value(seed_config.cloned().unwrap_or_default())
+                                .unwrap_or_else(|_| {
+                                    eprintln!(
+                                        "alttpr_dr/mutual_choices: missing or invalid seed_config"
+                                    );
+                                    OwrEventConfig {
+                                        base_settings: serde_json::json!({}),
+                                        base_placements: serde_json::Value::Null,
+                                        start_inventory: vec![],
+                                        choices: serde_json::Value::Null,
+                                    }
+                                });
                         AlttprDrSource::MutualChoices { config }
                     }
                     Some("mystery_pool") => {
@@ -137,7 +141,11 @@ impl SeedGenType {
                     .and_then(|c| c.get("practice_choices"))
                     .and_then(|v| serde_json::from_value(v.clone()).ok())
                     .unwrap_or_default();
-                Some(Self::AlttprDoorRando { source, practice_modes, practice_choices })
+                Some(Self::AlttprDoorRando {
+                    source,
+                    practice_modes,
+                    practice_choices,
+                })
             }
             "alttpr_avianart" => {
                 let default_preset = seed_config
@@ -149,7 +157,10 @@ impl SeedGenType {
                     .and_then(|c| c.get("practice_presets"))
                     .and_then(|v| serde_json::from_value(v.clone()).ok())
                     .unwrap_or_default();
-                Some(Self::AlttprAvianart { default_preset, practice_presets })
+                Some(Self::AlttprAvianart {
+                    default_preset,
+                    practice_presets,
+                })
             }
             "owr" => {
                 let config = seed_config.and_then(|c| serde_json::from_value(c.clone()).ok());
@@ -192,30 +203,45 @@ impl SeedGenType {
         is_async: bool,
     ) -> Option<String> {
         match self {
-            Self::AlttprDoorRando { source: AlttprDrSource::Boothisman, .. } => {
+            Self::AlttprDoorRando {
+                source: AlttprDrSource::Boothisman,
+                ..
+            } => {
                 let opts = super::AlttprDeRaceOptions::for_race(db_pool, race, round_modes).await;
-                opts.mode_display().map(|mode| format!("This race will be played in {} mode.", mode))
+                opts.mode_display()
+                    .map(|mode| format!("This race will be played in {} mode.", mode))
             }
-            Self::AlttprDoorRando { source: AlttprDrSource::MutualChoices { config }, .. } => {
+            Self::AlttprDoorRando {
+                source: AlttprDrSource::MutualChoices { config },
+                ..
+            } => {
                 let mut choices = super::owr_choices_for_race(db_pool, race).await;
                 if is_async {
-                    choices.retain(|key, _| !super::choice_entry_hidden_for_async(super::choice_entry(config, key)));
+                    choices.retain(|key, _| {
+                        !super::choice_entry_hidden_for_async(super::choice_entry(config, key))
+                    });
                 }
                 let seed_settings = super::owr_choices_description(&choices, config);
-                if let Some(player_rules) = super::alttpr_dr_player_rules_str_filtered(&choices, config, is_async) {
+                if let Some(player_rules) =
+                    super::alttpr_dr_player_rules_str_filtered(&choices, config, is_async)
+                {
                     Some(format!(
                         "This race will be played with {} as settings.\n\nThis race will be played with {}.",
-                        seed_settings,
-                        player_rules,
+                        seed_settings, player_rules,
                     ))
                 } else {
-                    Some(format!("This race will be played with {} as settings.", seed_settings))
+                    Some(format!(
+                        "This race will be played with {} as settings.",
+                        seed_settings
+                    ))
                 }
             }
             Self::Owr { config } => {
                 let mut choices = super::owr_choices_for_race(db_pool, race).await;
                 if is_async {
-                    choices.retain(|key, _| !super::choice_entry_hidden_for_async(super::choice_entry(config, key)));
+                    choices.retain(|key, _| {
+                        !super::choice_entry_hidden_for_async(super::choice_entry(config, key))
+                    });
                 }
                 Some(format!(
                     "This race will be played with {} as settings.",
@@ -231,11 +257,17 @@ impl SeedGenType {
     pub(crate) fn radio_choice_suggestions(&self) -> Vec<(String, String)> {
         let config = match self {
             Self::Owr { config } => config,
-            Self::AlttprDoorRando { source: AlttprDrSource::MutualChoices { config }, .. } => config,
+            Self::AlttprDoorRando {
+                source: AlttprDrSource::MutualChoices { config },
+                ..
+            } => config,
             _ => return vec![],
         };
-        let Some(obj) = config.choices.as_object() else { return vec![]; };
-        let mut pairs: Vec<(String, String)> = obj.iter()
+        let Some(obj) = config.choices.as_object() else {
+            return vec![];
+        };
+        let mut pairs: Vec<(String, String)> = obj
+            .iter()
             .map(|(k, v)| {
                 let label = v.get("label").and_then(|l| l.as_str()).unwrap_or(k);
                 (k.clone(), label.to_owned())
@@ -248,7 +280,13 @@ impl SeedGenType {
     /// Whether this seed gen type has per-race player-chosen settings that should
     /// be shown as a column in the race table.
     pub(crate) fn has_display_settings(&self) -> bool {
-        matches!(self, Self::AlttprDoorRando { source: AlttprDrSource::MutualChoices { .. }, .. } | Self::Owr { .. })
+        matches!(
+            self,
+            Self::AlttprDoorRando {
+                source: AlttprDrSource::MutualChoices { .. },
+                ..
+            } | Self::Owr { .. }
+        )
     }
 
     pub(crate) async fn settings_display_str<'e, E>(
@@ -261,7 +299,11 @@ impl SeedGenType {
         E: sqlx::Executor<'e, Database = sqlx::Postgres>,
     {
         let config = match self {
-            Self::AlttprDoorRando { source: AlttprDrSource::MutualChoices { config }, .. } | Self::Owr { config } => config,
+            Self::AlttprDoorRando {
+                source: AlttprDrSource::MutualChoices { config },
+                ..
+            }
+            | Self::Owr { config } => config,
             _ => return None,
         };
         let team_ids = race.teams().map(|t| t.id).collect_vec();
@@ -279,9 +321,14 @@ impl SeedGenType {
         let resolved = super::resolve_choice_values(rows.iter().map(|row| &row.custom_choices));
         let seed_settings = super::owr_choices_description_with_labels(&resolved, config, labels);
         match self {
-            Self::AlttprDoorRando { source: AlttprDrSource::MutualChoices { .. }, .. } => {
+            Self::AlttprDoorRando {
+                source: AlttprDrSource::MutualChoices { .. },
+                ..
+            } => {
                 if let Some(player_rules) = super::alttpr_dr_player_rules_str(&resolved, config) {
-                    Some(format!("Seed Settings: {seed_settings}\nRace Rules: {player_rules}"))
+                    Some(format!(
+                        "Seed Settings: {seed_settings}\nRace Rules: {player_rules}"
+                    ))
                 } else {
                     Some(seed_settings)
                 }
@@ -297,7 +344,10 @@ pub(crate) struct UnknownSeedGenType;
 
 impl std::fmt::Display for UnknownSeedGenType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "unknown seed_gen_type slug; valid values: owr, ootr_rsl, ootr_tfb, alttpr_avianart, ootr, mmr")
+        write!(
+            f,
+            "unknown seed_gen_type slug; valid values: owr, ootr_rsl, ootr_tfb, alttpr_avianart, ootr, mmr"
+        )
     }
 }
 
@@ -308,11 +358,14 @@ impl std::str::FromStr for SeedGenType {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "ootr_rsl"        => Ok(Self::OotrRsl),
-            "ootr_tfb"        => Ok(Self::OotrTriforceBlitz),
-            "alttpr_avianart" => Ok(Self::AlttprAvianart { default_preset: None, practice_presets: vec![] }),
-            "ootr"            => Ok(Self::OoTR),
-            "mmr"             => Ok(Self::Mmr),
+            "ootr_rsl" => Ok(Self::OotrRsl),
+            "ootr_tfb" => Ok(Self::OotrTriforceBlitz),
+            "alttpr_avianart" => Ok(Self::AlttprAvianart {
+                default_preset: None,
+                practice_presets: vec![],
+            }),
+            "ootr" => Ok(Self::OoTR),
+            "mmr" => Ok(Self::Mmr),
             _ => Err(UnknownSeedGenType),
         }
     }
@@ -328,8 +381,10 @@ mod tests {
             "preset": "casualboots",
             "practice_presets": [{"value": "casualboots", "label": "Casual Boots"}],
         });
-        let Some(SeedGenType::AlttprAvianart { default_preset, practice_presets }) =
-            SeedGenType::from_db(Some("alttpr_avianart"), Some(&config))
+        let Some(SeedGenType::AlttprAvianart {
+            default_preset,
+            practice_presets,
+        }) = SeedGenType::from_db(Some("alttpr_avianart"), Some(&config))
         else {
             panic!("expected Avianart seed generator");
         };

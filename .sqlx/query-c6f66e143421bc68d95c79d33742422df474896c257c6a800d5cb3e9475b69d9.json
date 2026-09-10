@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "DELETE FROM races WHERE id = $1 AND series = $2 AND event = $3 AND phase = 'Qualifier'",
+  "query": "DELETE FROM races WHERE id = $1 AND series = $2 AND event = $3 AND is_qualifier",
   "describe": {
     "columns": [],
     "parameters": {
@@ -12,5 +12,5 @@
     },
     "nullable": []
   },
-  "hash": "9ab2164049084b58542bbe0c4a5d24053175bdacfbf9207ba9989ca983e99d45"
+  "hash": "c6f66e143421bc68d95c79d33742422df474896c257c6a800d5cb3e9475b69d9"
 }

@@ -1,5 +1,5 @@
-use crate::prelude::*;
 use super::client::{self, Error};
+use crate::prelude::*;
 
 /// Report a match result to Challonge.
 ///
@@ -11,7 +11,8 @@ pub(crate) async fn report_result(
     winner_challonge_id: &str,
     game_scores: &[(u8, u8)],
 ) -> Result<(), Error> {
-    let scores_csv = game_scores.iter()
+    let scores_csv = game_scores
+        .iter()
         .map(|(w, l)| format!("{w}-{l}"))
         .collect::<Vec<_>>()
         .join(",");
@@ -25,8 +26,11 @@ pub(crate) async fn report_result(
     client::rate_limited_request(|| async {
         client::api_request(http_client, reqwest::Method::PUT, &endpoint, api_key)
             .json(&payload)
-            .send().await?
-            .detailed_error_for_status().await?;
+            .send()
+            .await?
+            .detailed_error_for_status()
+            .await?;
         Ok(())
-    }).await
+    })
+    .await
 }

@@ -1,13 +1,8 @@
 use {
-    chrono::{DateTime, Duration, NaiveTime, Utc},
-    serenity::all::CreateMessage,
-    serenity::model::id::{ChannelId, MessageId, RoleId},
-    sqlx::PgPool,
-    std::collections::HashSet,
     crate::{
         cal::{Entrant, Entrants, Race, RaceSchedule},
         discord_bot,
-        event::{roles::{EffectiveRoleBinding, Signup, VolunteerSignupStatus}},
+        event::roles::{EffectiveRoleBinding, Signup, VolunteerSignupStatus},
         game::Game,
         id::{Id, Races},
         lang::Language,
@@ -15,17 +10,27 @@ use {
         series::Series,
         volunteer_requests::format_round_phase_game,
     },
+    chrono::{DateTime, Duration, NaiveTime, Utc},
+    serenity::all::CreateMessage,
+    serenity::model::id::{ChannelId, MessageId, RoleId},
+    sqlx::PgPool,
+    std::collections::HashSet,
 };
 
 const MAX_RACES_PER_SCHEDULED_PING: usize = 5;
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum Error {
-    #[error(transparent)] Cal(#[from] cal::Error),
-    #[error(transparent)] DiscordBot(#[from] discord_bot::Error),
-    #[error(transparent)] Event(#[from] event::DataError),
-    #[error(transparent)] Sql(#[from] sqlx::Error),
-    #[error(transparent)] Serenity(#[from] serenity::Error),
+    #[error(transparent)]
+    Cal(#[from] cal::Error),
+    #[error(transparent)]
+    DiscordBot(#[from] discord_bot::Error),
+    #[error(transparent)]
+    Event(#[from] event::DataError),
+    #[error(transparent)]
+    Sql(#[from] sqlx::Error),
+    #[error(transparent)]
+    Serenity(#[from] serenity::Error),
 }
 
 #[derive(Debug, Clone, Copy, sqlx::Type, PartialEq, Eq)]
@@ -62,7 +67,6 @@ pub(crate) struct PingWorkflow {
     pub(crate) workflow_type: PingWorkflowType,
 }
 
-
 /// Resolves which workflows apply to the given event. If any event-level workflows exist, those
 /// are returned exclusively. Otherwise, game-level workflows for the associated game are returned.
 async fn resolve_workflows_for_event(
@@ -98,7 +102,9 @@ async fn resolve_workflows_for_event(
             let wf_type = match row.workflow_type {
                 PingWorkflowTypeDb::Scheduled => {
                     let interval = row.ping_interval.unwrap_or(PingInterval::Daily);
-                    let schedule_time = row.schedule_time.unwrap_or_else(|| NaiveTime::from_hms_opt(18, 0, 0).unwrap());
+                    let schedule_time = row
+                        .schedule_time
+                        .unwrap_or_else(|| NaiveTime::from_hms_opt(18, 0, 0).unwrap());
                     PingWorkflowType::Scheduled {
                         interval,
                         schedule_time,
@@ -126,8 +132,12 @@ async fn resolve_workflows_for_event(
         out
     } else {
         // Fall back to game-level workflows
-        let game = Game::from_series(&mut transaction, series).await.map_err(|_| sqlx::Error::RowNotFound)?;
-        let Some(game) = game else { return Ok(Vec::new()) };
+        let game = Game::from_series(&mut transaction, series)
+            .await
+            .map_err(|_| sqlx::Error::RowNotFound)?;
+        let Some(game) = game else {
+            return Ok(Vec::new());
+        };
 
         let game_rows = sqlx::query!(
             r#"SELECT
@@ -152,7 +162,9 @@ async fn resolve_workflows_for_event(
             let wf_type = match row.workflow_type {
                 PingWorkflowTypeDb::Scheduled => {
                     let interval = row.ping_interval.unwrap_or(PingInterval::Daily);
-                    let schedule_time = row.schedule_time.unwrap_or_else(|| NaiveTime::from_hms_opt(18, 0, 0).unwrap());
+                    let schedule_time = row
+                        .schedule_time
+                        .unwrap_or_else(|| NaiveTime::from_hms_opt(18, 0, 0).unwrap());
                     PingWorkflowType::Scheduled {
                         interval,
                         schedule_time,
@@ -185,8 +197,12 @@ async fn resolve_workflows_for_event(
 }
 
 /// Returns the effective ping channel: workflow-specific if set, else the event's volunteer info channel.
-fn resolve_ping_channel(workflow: &PingWorkflow, event_info_channel: Option<i64>) -> Option<ChannelId> {
-    workflow.discord_ping_channel
+fn resolve_ping_channel(
+    workflow: &PingWorkflow,
+    event_info_channel: Option<i64>,
+) -> Option<ChannelId> {
+    workflow
+        .discord_ping_channel
         .or(event_info_channel)
         .map(|id| ChannelId::new(id as u64))
 }
@@ -263,21 +279,34 @@ fn build_scheduled_ping_message(
 
     msg.push("**Looking for Volunteers — ");
     msg.push(display_name);
-    msg.push(&format!("** ({} restreams)\n", language.short_code().to_uppercase()));
+    msg.push(&format!(
+        "** ({} restreams)\n",
+        language.short_code().to_uppercase()
+    ));
 
     msg.push("Upcoming races (timestamps in your timezone):\n");
     for (matchup, start_ts, msg_id, chan_id, race_id_raw, needed_role_names) in race_summaries {
         let needs_str = needed_role_names.join(", ");
-        let web_url = format!("{}/event/{}/{}/races/{}/signups", base_uri(), series.slug(), event, race_id_raw);
-        let link_str = if let (Some(msg_id), Some(chan_id), Some(guild)) = (msg_id, chan_id, guild_id) {
-            format!(
-                "[[Discord signup](https://discord.com/channels/{}/{}/{})] [[Web signup]({})]",
-                guild, chan_id, msg_id, web_url
-            )
-        } else {
-            format!("[[Web signup]({})]", web_url)
-        };
-        msg.push(&format!("• {} — Needs: {} — {}: {}\n", matchup, needs_str, start_ts, link_str));
+        let web_url = format!(
+            "{}/event/{}/{}/races/{}/signups",
+            base_uri(),
+            series.slug(),
+            event,
+            race_id_raw
+        );
+        let link_str =
+            if let (Some(msg_id), Some(chan_id), Some(guild)) = (msg_id, chan_id, guild_id) {
+                format!(
+                    "[[Discord signup](https://discord.com/channels/{}/{}/{})] [[Web signup]({})]",
+                    guild, chan_id, msg_id, web_url
+                )
+            } else {
+                format!("[[Web signup]({})]", web_url)
+            };
+        msg.push(&format!(
+            "• {} — Needs: {} — {}: {}\n",
+            matchup, needs_str, start_ts, link_str
+        ));
     }
 
     msg.push("\nAll upcoming races: ");
@@ -316,9 +345,16 @@ fn build_per_race_ping_message(
     msg.push("**\n");
 
     let needs_str = needed_role_names.join(", ");
-    msg.push(&format!("Needs: {} — Race starts: {}\n", needs_str, start_ts));
+    msg.push(&format!(
+        "Needs: {} — Race starts: {}\n",
+        needs_str, start_ts
+    ));
 
-    if let (Some(msg_id), Some(chan_id), Some(guild)) = (volunteer_request_message_id, volunteer_request_channel_id, guild_id) {
+    if let (Some(msg_id), Some(chan_id), Some(guild)) = (
+        volunteer_request_message_id,
+        volunteer_request_channel_id,
+        guild_id,
+    ) {
         msg.push(&format!(
             "[Discord signup post](https://discord.com/channels/{}/{}/{}) | [Web signup]({})\n",
             guild, chan_id, msg_id, race_web_signup_url
@@ -366,14 +402,31 @@ pub(crate) async fn check_and_send_volunteer_pings(
 
         let workflows = match resolve_workflows_for_event(pool, series, event).await {
             Ok(w) => w,
-            Err(e) => { eprintln!("Error resolving ping workflows for {}/{}: {}", series.slug(), event, e); continue; }
+            Err(e) => {
+                eprintln!(
+                    "Error resolving ping workflows for {}/{}: {}",
+                    series.slug(),
+                    event,
+                    e
+                );
+                continue;
+            }
         };
 
         for workflow in &workflows {
-            let volunteer_page_url = format!("{}/event/{}/{}/volunteer-roles", base_uri(), series.slug(), event);
+            let volunteer_page_url = format!(
+                "{}/event/{}/{}/volunteer-roles",
+                base_uri(),
+                series.slug(),
+                event
+            );
 
             match &workflow.workflow_type {
-                PingWorkflowType::Scheduled { interval, schedule_time, schedule_day_of_week } => {
+                PingWorkflowType::Scheduled {
+                    interval,
+                    schedule_time,
+                    schedule_day_of_week,
+                } => {
                     if let Err(e) = check_scheduled_workflow(
                         pool,
                         discord_ctx,
@@ -388,8 +441,16 @@ pub(crate) async fn check_and_send_volunteer_pings(
                         *schedule_time,
                         *schedule_day_of_week,
                         &volunteer_page_url,
-                    ).await {
-                        eprintln!("Error in scheduled ping workflow {} for {}/{}: {}", workflow.id, series.slug(), event, e);
+                    )
+                    .await
+                    {
+                        eprintln!(
+                            "Error in scheduled ping workflow {} for {}/{}: {}",
+                            workflow.id,
+                            series.slug(),
+                            event,
+                            e
+                        );
                     }
                 }
                 PingWorkflowType::PerRace { lead_times } => {
@@ -405,8 +466,17 @@ pub(crate) async fn check_and_send_volunteer_pings(
                             guild_id,
                             lead_time_h,
                             &volunteer_page_url,
-                        ).await {
-                            eprintln!("Error in per-race ping workflow {} lt={} for {}/{}: {}", workflow.id, lead_time_h, series.slug(), event, e);
+                        )
+                        .await
+                        {
+                            eprintln!(
+                                "Error in per-race ping workflow {} lt={} for {}/{}: {}",
+                                workflow.id,
+                                lead_time_h,
+                                series.slug(),
+                                event,
+                                e
+                            );
                         }
                     }
                 }
@@ -492,7 +562,8 @@ async fn check_scheduled_workflow(
         };
 
         // Determine role needs for this workflow's language
-        let role_bindings = EffectiveRoleBinding::for_event(&mut transaction, series, event).await?;
+        let role_bindings =
+            EffectiveRoleBinding::for_event(&mut transaction, series, event).await?;
         let signups = Signup::for_race(&mut transaction, race_id).await?;
 
         let mut needs_ping = false;
@@ -501,11 +572,19 @@ async fn check_scheduled_workflow(
             if binding.is_disabled || binding.language != workflow.language {
                 continue;
             }
-            let confirmed = signups.iter()
-                .filter(|s| s.role_binding_id == binding.id && matches!(s.status, VolunteerSignupStatus::Confirmed))
+            let confirmed = signups
+                .iter()
+                .filter(|s| {
+                    s.role_binding_id == binding.id
+                        && matches!(s.status, VolunteerSignupStatus::Confirmed)
+                })
                 .count() as i32;
-            let pending = signups.iter()
-                .filter(|s| s.role_binding_id == binding.id && matches!(s.status, VolunteerSignupStatus::Pending))
+            let pending = signups
+                .iter()
+                .filter(|s| {
+                    s.role_binding_id == binding.id
+                        && matches!(s.status, VolunteerSignupStatus::Pending)
+                })
                 .count() as i32;
             let current = confirmed + pending;
             if current < binding.min_count {
@@ -543,10 +622,22 @@ async fn check_scheduled_workflow(
         .await?;
 
         let (vmsg_id, vchan_id) = msg_info
-            .map(|m| (m.volunteer_request_message_id, m.discord_volunteer_info_channel))
+            .map(|m| {
+                (
+                    m.volunteer_request_message_id,
+                    m.discord_volunteer_info_channel,
+                )
+            })
             .unwrap_or((None, None));
 
-        race_summaries.push((matchup, start_ts, vmsg_id, vchan_id, *race_id_raw, needed_role_names));
+        race_summaries.push((
+            matchup,
+            start_ts,
+            vmsg_id,
+            vchan_id,
+            *race_id_raw,
+            needed_role_names,
+        ));
     }
 
     transaction.commit().await?;
@@ -556,9 +647,16 @@ async fn check_scheduled_workflow(
     }
 
     let no_role_ids = HashSet::new();
-    for (chunk_idx, chunk) in race_summaries.chunks(MAX_RACES_PER_SCHEDULED_PING).enumerate() {
+    for (chunk_idx, chunk) in race_summaries
+        .chunks(MAX_RACES_PER_SCHEDULED_PING)
+        .enumerate()
+    {
         let message = build_scheduled_ping_message(
-            if chunk_idx == 0 { &role_ids_to_ping } else { &no_role_ids },
+            if chunk_idx == 0 {
+                &role_ids_to_ping
+            } else {
+                &no_role_ids
+            },
             chunk,
             display_name,
             workflow.language,
@@ -571,7 +669,10 @@ async fn check_scheduled_workflow(
         let posted = match channel_id.send_message(discord_ctx, message).await {
             Ok(m) => m,
             Err(e) => {
-                eprintln!("Failed to send scheduled ping for workflow {}: {}", workflow.id, e);
+                eprintln!(
+                    "Failed to send scheduled ping for workflow {}: {}",
+                    workflow.id, e
+                );
                 return Ok(());
             }
         };
@@ -653,11 +754,15 @@ async fn check_per_race_workflow(
 
         let race = match Race::from_id(&mut transaction, &http_client, race_id).await {
             Ok(r) => r,
-            Err(_) => { let _ = transaction.rollback().await; continue; }
+            Err(_) => {
+                let _ = transaction.rollback().await;
+                continue;
+            }
         };
 
         // Check if any role for this language needs a ping
-        let role_bindings = EffectiveRoleBinding::for_event(&mut transaction, series, event).await?;
+        let role_bindings =
+            EffectiveRoleBinding::for_event(&mut transaction, series, event).await?;
         let signups = Signup::for_race(&mut transaction, race_id).await?;
 
         let mut role_ids_to_ping: HashSet<i64> = HashSet::new();
@@ -666,11 +771,19 @@ async fn check_per_race_workflow(
             if binding.is_disabled || binding.language != workflow.language {
                 continue;
             }
-            let confirmed = signups.iter()
-                .filter(|s| s.role_binding_id == binding.id && matches!(s.status, VolunteerSignupStatus::Confirmed))
+            let confirmed = signups
+                .iter()
+                .filter(|s| {
+                    s.role_binding_id == binding.id
+                        && matches!(s.status, VolunteerSignupStatus::Confirmed)
+                })
                 .count() as i32;
-            let pending = signups.iter()
-                .filter(|s| s.role_binding_id == binding.id && matches!(s.status, VolunteerSignupStatus::Pending))
+            let pending = signups
+                .iter()
+                .filter(|s| {
+                    s.role_binding_id == binding.id
+                        && matches!(s.status, VolunteerSignupStatus::Pending)
+                })
                 .count() as i32;
             let current = confirmed + pending;
             if current < binding.min_count {
@@ -688,7 +801,10 @@ async fn check_per_race_workflow(
 
         let start_ts = match race.schedule {
             RaceSchedule::Live { start, .. } => format!("<t:{}:F>", start.timestamp()),
-            _ => { let _ = transaction.rollback().await; continue; }
+            _ => {
+                let _ = transaction.rollback().await;
+                continue;
+            }
         };
 
         let matchup = build_matchup_label(&race, &mut transaction, discord_ctx).await?;
@@ -706,12 +822,23 @@ async fn check_per_race_workflow(
         .await?;
 
         let (vmsg_id, vchan_id) = msg_info
-            .map(|m| (m.volunteer_request_message_id, m.discord_volunteer_info_channel))
+            .map(|m| {
+                (
+                    m.volunteer_request_message_id,
+                    m.discord_volunteer_info_channel,
+                )
+            })
             .unwrap_or((None, None));
 
         transaction.commit().await?;
 
-        let race_web_signup_url = format!("{}/event/{}/{}/races/{}/signups", base_uri(), series.slug(), event, race_id_raw);
+        let race_web_signup_url = format!(
+            "{}/event/{}/{}/races/{}/signups",
+            base_uri(),
+            series.slug(),
+            event,
+            race_id_raw
+        );
         let message = build_per_race_ping_message(
             &role_ids_to_ping,
             &matchup,
@@ -729,7 +856,10 @@ async fn check_per_race_workflow(
         let posted = match channel_id.send_message(discord_ctx, message).await {
             Ok(m) => m,
             Err(e) => {
-                eprintln!("Failed to send per-race ping for workflow {} race {}: {}", workflow.id, race_id_raw, e);
+                eprintln!(
+                    "Failed to send per-race ping for workflow {} race {}: {}",
+                    workflow.id, race_id_raw, e
+                );
                 continue;
             }
         };
@@ -797,23 +927,46 @@ pub(crate) async fn delete_stale_ping_messages(
     Ok(())
 }
 
-async fn build_matchup_label(race: &Race, transaction: &mut Transaction<'_, Postgres>, discord_ctx: &DiscordCtx) -> Result<String, Error> {
+async fn build_matchup_label(
+    race: &Race,
+    transaction: &mut Transaction<'_, Postgres>,
+    discord_ctx: &DiscordCtx,
+) -> Result<String, Error> {
     if let Some(custom_title) = &race.custom_title {
         return Ok(custom_title.clone());
     }
 
-    async fn entrant_name(entrant: &Entrant, transaction: &mut Transaction<'_, Postgres>, discord_ctx: &DiscordCtx) -> Result<String, discord_bot::Error> {
-        Ok(entrant.name(transaction, discord_ctx).await?.map(|n| n.into_owned()).unwrap_or_else(|| "?".to_string()))
+    async fn entrant_name(
+        entrant: &Entrant,
+        transaction: &mut Transaction<'_, Postgres>,
+        discord_ctx: &DiscordCtx,
+    ) -> Result<String, discord_bot::Error> {
+        Ok(entrant
+            .name(transaction, discord_ctx)
+            .await?
+            .map(|n| n.into_owned())
+            .unwrap_or_else(|| "?".to_string()))
     }
 
     let base = match &race.entrants {
-        Entrants::Two([e1, e2]) => format!("{} vs {}", entrant_name(e1, transaction, discord_ctx).await?, entrant_name(e2, transaction, discord_ctx).await?),
-        Entrants::Three([e1, e2, e3]) => format!("{} vs {} vs {}", entrant_name(e1, transaction, discord_ctx).await?, entrant_name(e2, transaction, discord_ctx).await?, entrant_name(e3, transaction, discord_ctx).await?),
+        Entrants::Two([e1, e2]) => format!(
+            "{} vs {}",
+            entrant_name(e1, transaction, discord_ctx).await?,
+            entrant_name(e2, transaction, discord_ctx).await?
+        ),
+        Entrants::Three([e1, e2, e3]) => format!(
+            "{} vs {} vs {}",
+            entrant_name(e1, transaction, discord_ctx).await?,
+            entrant_name(e2, transaction, discord_ctx).await?,
+            entrant_name(e3, transaction, discord_ctx).await?
+        ),
         Entrants::Open => "Open Race".to_string(),
         _ => "Race".to_string(),
     };
-    Ok(match format_round_phase_game(race.round.as_deref(), race.phase.as_deref(), race.game) {
-        Some(suffix) => format!("{base} ({suffix})"),
-        None => base,
-    })
+    Ok(
+        match format_round_phase_game(race.round.as_deref(), race.phase.as_deref(), race.game) {
+            Some(suffix) => format!("{base} ({suffix})"),
+            None => base,
+        },
+    )
 }

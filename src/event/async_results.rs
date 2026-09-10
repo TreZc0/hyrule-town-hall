@@ -1,5 +1,8 @@
 use crate::{
-    event::{AsyncKind, Data, Series, Tab, teams::{QualifierKind, QualifierScoreKind}},
+    event::{
+        AsyncKind, Data, Series, Tab,
+        teams::{QualifierKind, QualifierScoreKind},
+    },
     prelude::*,
     time::decode_pginterval,
 };
@@ -36,8 +39,18 @@ pub(crate) async fn get(
         QualifierKind::Score(k) => k,
         _ => return Err(StatusOrError::Status(Status::NotFound)),
     };
+    let is_organizer = if let Some(ref me) = me {
+        me.is_global_admin() || data.organizers(&mut transaction).await?.contains(me)
+    } else {
+        false
+    };
+    if !is_organizer && data.qualifier_score_hiding != super::QualifierScoreHiding::None {
+        return Err(StatusOrError::Status(Status::NotFound));
+    }
 
-    let header = data.header(&mut transaction, me.as_ref(), Tab::Teams, true).await?;
+    let header = data
+        .header(&mut transaction, me.as_ref(), Tab::Teams, true)
+        .await?;
 
     // Find which qualifier asyncs exist for this event
     let async_kinds = sqlx::query_scalar!(
@@ -80,10 +93,17 @@ pub(crate) async fn get(
         let num_entrants = finish_times.len();
         let par_cutoff = match score_kind {
             QualifierScoreKind::Standard => 7usize.min(num_entrants),
-            QualifierScoreKind::Sgl2023Online | QualifierScoreKind::Sgl2024Online | QualifierScoreKind::Sgl2025Online => {
-                if num_entrants < 20 { 3 } else { 4 }
+            QualifierScoreKind::Sgl2023Online
+            | QualifierScoreKind::Sgl2024Online
+            | QualifierScoreKind::Sgl2025Online => {
+                if num_entrants < 20 {
+                    3
+                } else {
+                    4
+                }
             }
             QualifierScoreKind::TwwrMiniblins26 | QualifierScoreKind::TwwrMain => 3,
+            QualifierScoreKind::TimeRelative(config) => config.par_finishers.into(),
         };
 
         let par_time_opt = if finish_times.len() >= par_cutoff {
@@ -108,15 +128,28 @@ pub(crate) async fn get(
                 .expect("async player not found");
 
             let points = par_time_opt.and_then(|par_time| match score_kind {
-                QualifierScoreKind::TwwrMiniblins26 => {
-                    Some((2000.0 + ((1.0 - (time.as_secs_f64() - par_time.as_secs_f64()) / par_time.as_secs_f64()) * 1000.0).floor()).max(100.0))
-                }
-                QualifierScoreKind::TwwrMain => {
-                    Some(((1.0 - (time.as_secs_f64() - par_time.as_secs_f64()) / par_time.as_secs_f64()) * 1000.0).max(100.0))
-                }
-                QualifierScoreKind::Sgl2023Online | QualifierScoreKind::Sgl2024Online | QualifierScoreKind::Sgl2025Online => {
-                    Some((100.0 * (2.0 - (time.as_secs_f64() / par_time.as_secs_f64()))).clamp(10.0, 110.0))
-                }
+                QualifierScoreKind::TwwrMiniblins26 => Some(
+                    (2000.0
+                        + ((1.0
+                            - (time.as_secs_f64() - par_time.as_secs_f64())
+                                / par_time.as_secs_f64())
+                            * 1000.0)
+                            .floor())
+                    .max(100.0),
+                ),
+                QualifierScoreKind::TwwrMain => Some(
+                    ((1.0
+                        - (time.as_secs_f64() - par_time.as_secs_f64()) / par_time.as_secs_f64())
+                        * 1000.0)
+                        .max(100.0),
+                ),
+                QualifierScoreKind::TimeRelative(config) => config.points(*time, par_time),
+                QualifierScoreKind::Sgl2023Online
+                | QualifierScoreKind::Sgl2024Online
+                | QualifierScoreKind::Sgl2025Online => Some(
+                    (100.0 * (2.0 - (time.as_secs_f64() / par_time.as_secs_f64())))
+                        .clamp(10.0, 110.0),
+                ),
                 QualifierScoreKind::Standard => {
                     // Standard formula requires per-qualifier par calculation with complex adjustments;
                     // points are shown on the standings page instead
@@ -137,7 +170,11 @@ pub(crate) async fn get(
             });
         }
 
-        sections.push(AsyncResultSection { title, rows: result_rows, has_vod });
+        sections.push(AsyncResultSection {
+            title,
+            rows: result_rows,
+            has_vod,
+        });
     }
 
     let content = html! {
@@ -204,5 +241,16 @@ pub(crate) async fn get(
         }
     };
 
-    Ok(page(transaction, &me, &uri, PageStyle { chests: data.chests().await?, ..PageStyle::default() }, &format!("Async Results — {}", data.display_name), content).await?)
+    Ok(page(
+        transaction,
+        &me,
+        &uri,
+        PageStyle {
+            chests: data.chests().await?,
+            ..PageStyle::default()
+        },
+        &format!("Async Results — {}", data.display_name),
+        content,
+    )
+    .await?)
 }

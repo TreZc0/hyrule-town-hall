@@ -4,23 +4,27 @@
 //! It supports multiple backends (ZSR, ZSRDE, ZSRFR) with configurable triggers.
 
 use {
-    chrono::Utc,
-    chrono_tz::US::Eastern,
-    chrono_tz::Europe::Berlin,
-    std::time::Duration,
-    tokio::time::sleep,
     crate::{
-        cal::{Race, RaceSchedule, Entrant, Entrants},
-        event::{self, roles::{EffectiveRoleBinding, Signup, VolunteerSignupStatus}},
+        cal::{Entrant, Entrants, Race, RaceSchedule},
+        event::{
+            self,
+            roles::{EffectiveRoleBinding, Signup, VolunteerSignupStatus},
+        },
         id::Races,
         prelude::*,
         series::Series,
         sheets::{self, WriteError},
         user::User,
     },
+    chrono::Utc,
+    chrono_tz::Europe::Berlin,
+    chrono_tz::US::Eastern,
+    std::time::Duration,
+    tokio::time::sleep,
 };
 
-pub(crate) static SYNC_LOCK: LazyLock<tokio::sync::Mutex<()>> = LazyLock::new(|| tokio::sync::Mutex::new(()));
+pub(crate) static SYNC_LOCK: LazyLock<tokio::sync::Mutex<()>> =
+    LazyLock::new(|| tokio::sync::Mutex::new(()));
 // Limitation by Discord events and YouTube.
 const MAX_ZSR_TITLE_CHARS: usize = 100;
 
@@ -37,10 +41,14 @@ static VOLUNTEER_API_DEBOUNCE: LazyLock<tokio::sync::Mutex<HashMap<u64, u64>>> =
 #[allow(dead_code)]
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum Error {
-    #[error(transparent)] Cal(#[from] cal::Error),
-    #[error(transparent)] Event(#[from] event::DataError),
-    #[error(transparent)] Sheets(#[from] WriteError),
-    #[error(transparent)] Sql(#[from] sqlx::Error),
+    #[error(transparent)]
+    Cal(#[from] cal::Error),
+    #[error(transparent)]
+    Event(#[from] event::DataError),
+    #[error(transparent)]
+    Sheets(#[from] WriteError),
+    #[error(transparent)]
+    Sql(#[from] sqlx::Error),
     #[error("backend not found: {0}")]
     BackendNotFound(i32),
     #[error("export config not found: {0}")]
@@ -109,7 +117,9 @@ impl RestreamingBackend {
         transaction: &mut Transaction<'_, Postgres>,
         id: i32,
     ) -> Result<Option<Self>, sqlx::Error> {
-        sqlx::query_as!(Self, r#"
+        sqlx::query_as!(
+            Self,
+            r#"
             SELECT
                 id,
                 name,
@@ -126,7 +136,9 @@ impl RestreamingBackend {
                 api_secret
             FROM zsr_restreaming_backends
             WHERE id = $1
-        "#, id)
+        "#,
+            id
+        )
         .fetch_optional(&mut **transaction)
         .await
     }
@@ -135,7 +147,9 @@ impl RestreamingBackend {
     pub(crate) async fn all(
         transaction: &mut Transaction<'_, Postgres>,
     ) -> Result<Vec<Self>, sqlx::Error> {
-        sqlx::query_as!(Self, r#"
+        sqlx::query_as!(
+            Self,
+            r#"
             SELECT
                 id,
                 name,
@@ -152,7 +166,8 @@ impl RestreamingBackend {
                 api_secret
             FROM zsr_restreaming_backends
             ORDER BY name
-        "#)
+        "#
+        )
         .fetch_all(&mut **transaction)
         .await
     }
@@ -173,7 +188,8 @@ impl RestreamingBackend {
         api_endpoint: Option<&str>,
         api_secret: Option<&str>,
     ) -> Result<i32, sqlx::Error> {
-        let row = sqlx::query_scalar!(r#"
+        let row = sqlx::query_scalar!(
+            r#"
             INSERT INTO zsr_restreaming_backends (
                 name, google_sheet_id, language,
                 hth_export_id_col, commentators_col, trackers_col,
@@ -219,7 +235,8 @@ impl RestreamingBackend {
         api_endpoint: Option<&str>,
         api_secret: Option<&str>,
     ) -> Result<(), sqlx::Error> {
-        sqlx::query!(r#"
+        sqlx::query!(
+            r#"
             UPDATE zsr_restreaming_backends SET
                 name = $2,
                 google_sheet_id = $3,
@@ -291,7 +308,9 @@ impl ExportConfig {
         transaction: &mut Transaction<'_, Postgres>,
         id: i32,
     ) -> Result<Option<Self>, sqlx::Error> {
-        sqlx::query_as!(Self, r#"
+        sqlx::query_as!(
+            Self,
+            r#"
             SELECT
                 id,
                 series AS "series: Series",
@@ -308,7 +327,9 @@ impl ExportConfig {
                 include_phase
             FROM zsr_restream_exports
             WHERE id = $1
-        "#, id)
+        "#,
+            id
+        )
         .fetch_optional(&mut **transaction)
         .await
     }
@@ -319,7 +340,9 @@ impl ExportConfig {
         series: Series,
         event: &str,
     ) -> Result<Vec<Self>, sqlx::Error> {
-        sqlx::query_as!(Self, r#"
+        sqlx::query_as!(
+            Self,
+            r#"
             SELECT
                 id,
                 series AS "series: Series",
@@ -337,7 +360,10 @@ impl ExportConfig {
             FROM zsr_restream_exports
             WHERE series = $1 AND event = $2
             ORDER BY backend_id
-        "#, series as _, event)
+        "#,
+            series as _,
+            event
+        )
         .fetch_all(&mut **transaction)
         .await
     }
@@ -346,7 +372,9 @@ impl ExportConfig {
     pub(crate) async fn all_enabled(
         transaction: &mut Transaction<'_, Postgres>,
     ) -> Result<Vec<Self>, sqlx::Error> {
-        sqlx::query_as!(Self, r#"
+        sqlx::query_as!(
+            Self,
+            r#"
             SELECT
                 id,
                 series AS "series: Series",
@@ -364,7 +392,8 @@ impl ExportConfig {
             FROM zsr_restream_exports
             WHERE enabled = true
             ORDER BY series, event, backend_id
-        "#)
+        "#
+        )
         .fetch_all(&mut **transaction)
         .await
     }
@@ -384,7 +413,8 @@ impl ExportConfig {
         append_mode: bool,
         include_phase: bool,
     ) -> Result<Self, sqlx::Error> {
-        let id = sqlx::query_scalar!(r#"
+        let id = sqlx::query_scalar!(
+            r#"
             INSERT INTO zsr_restream_exports (
                 series, event, backend_id,
                 title, description, estimate_override, delay_minutes, nodecg_pk,
@@ -439,7 +469,8 @@ impl ExportConfig {
         append_mode: bool,
         include_phase: bool,
     ) -> Result<(), sqlx::Error> {
-        sqlx::query!(r#"
+        sqlx::query!(
+            r#"
             UPDATE zsr_restream_exports SET
                 title = $2,
                 description = $3,
@@ -508,7 +539,9 @@ impl RaceExport {
         race_id: Id<Races>,
         export_id: i32,
     ) -> Result<Option<Self>, sqlx::Error> {
-        sqlx::query_as!(Self, r#"
+        sqlx::query_as!(
+            Self,
+            r#"
             SELECT
                 race_id AS "race_id: Id<Races>",
                 export_id,
@@ -517,7 +550,10 @@ impl RaceExport {
                 last_synced_at
             FROM zsr_race_exports
             WHERE race_id = $1 AND export_id = $2
-        "#, race_id as _, export_id)
+        "#,
+            race_id as _,
+            export_id
+        )
         .fetch_optional(&mut **transaction)
         .await
     }
@@ -528,7 +564,9 @@ impl RaceExport {
         transaction: &mut Transaction<'_, Postgres>,
         race_id: Id<Races>,
     ) -> Result<Vec<Self>, sqlx::Error> {
-        sqlx::query_as!(Self, r#"
+        sqlx::query_as!(
+            Self,
+            r#"
             SELECT
                 race_id AS "race_id: Id<Races>",
                 export_id,
@@ -537,7 +575,9 @@ impl RaceExport {
                 last_synced_at
             FROM zsr_race_exports
             WHERE race_id = $1
-        "#, race_id as _)
+        "#,
+            race_id as _
+        )
         .fetch_all(&mut **transaction)
         .await
     }
@@ -549,14 +589,19 @@ impl RaceExport {
         export_id: i32,
         sheet_row_id: &str,
     ) -> Result<(), sqlx::Error> {
-        sqlx::query!(r#"
+        sqlx::query!(
+            r#"
             INSERT INTO zsr_race_exports (race_id, export_id, sheet_row_id)
             VALUES ($1, $2, $3)
             ON CONFLICT (race_id, export_id)
             DO UPDATE SET
                 sheet_row_id = $3,
                 last_synced_at = NOW()
-        "#, race_id as _, export_id, sheet_row_id)
+        "#,
+            race_id as _,
+            export_id,
+            sheet_row_id
+        )
         .execute(&mut **transaction)
         .await?;
         Ok(())
@@ -568,10 +613,14 @@ impl RaceExport {
         race_id: Id<Races>,
         export_id: i32,
     ) -> Result<(), sqlx::Error> {
-        sqlx::query!(r#"
+        sqlx::query!(
+            r#"
             DELETE FROM zsr_race_exports
             WHERE race_id = $1 AND export_id = $2
-        "#, race_id as _, export_id)
+        "#,
+            race_id as _,
+            export_id
+        )
         .execute(&mut **transaction)
         .await?;
         Ok(())
@@ -621,10 +670,12 @@ pub(crate) async fn should_export_race(
         ExportTrigger::WhenVolunteerSignedUp => {
             // Export if at least one volunteer has signed up (pending or confirmed)
             let signups = Signup::for_race(transaction, race.id).await?;
-            Ok(signups.iter().any(|s| matches!(
-                s.status,
-                VolunteerSignupStatus::Pending | VolunteerSignupStatus::Confirmed
-            )))
+            Ok(signups.iter().any(|s| {
+                matches!(
+                    s.status,
+                    VolunteerSignupStatus::Pending | VolunteerSignupStatus::Confirmed
+                )
+            }))
         }
     }
 }
@@ -687,7 +738,7 @@ pub(crate) async fn build_race_title(
                 title = format!("{} [{}]", title, mode);
             }
         }
-        return title
+        return title;
     }
 
     if let Some(custom_title) = &race.custom_title {
@@ -699,7 +750,7 @@ pub(crate) async fn build_race_title(
     }
 
     // Qualifier races get a simplified title without matchup
-    if race.phase.as_deref() == Some("Qualifier") {
+    if race.is_qualifier {
         let round = race.round.as_deref().unwrap_or("1");
         return format!("{}: Qualifier {}", event_name, round);
     }
@@ -707,15 +758,31 @@ pub(crate) async fn build_race_title(
     // Build matchup string
     let (matchup, compact_matchup) = match &race.entrants {
         Entrants::Two([e1, e2]) => {
-            let name1 = get_entrant_name(transaction, e1).await.unwrap_or_else(|| "TBD".to_owned());
-            let name2 = get_entrant_name(transaction, e2).await.unwrap_or_else(|| "TBD".to_owned());
-            (format!("{} vs. {}", name1, name2), format!("{}/{}", name1, name2))
+            let name1 = get_entrant_name(transaction, e1)
+                .await
+                .unwrap_or_else(|| "TBD".to_owned());
+            let name2 = get_entrant_name(transaction, e2)
+                .await
+                .unwrap_or_else(|| "TBD".to_owned());
+            (
+                format!("{} vs. {}", name1, name2),
+                format!("{}/{}", name1, name2),
+            )
         }
         Entrants::Three([e1, e2, e3]) => {
-            let name1 = get_entrant_name(transaction, e1).await.unwrap_or_else(|| "TBD".to_owned());
-            let name2 = get_entrant_name(transaction, e2).await.unwrap_or_else(|| "TBD".to_owned());
-            let name3 = get_entrant_name(transaction, e3).await.unwrap_or_else(|| "TBD".to_owned());
-            (format!("{} vs. {} vs. {}", name1, name2, name3), format!("{}/{}/{}", name1, name2, name3))
+            let name1 = get_entrant_name(transaction, e1)
+                .await
+                .unwrap_or_else(|| "TBD".to_owned());
+            let name2 = get_entrant_name(transaction, e2)
+                .await
+                .unwrap_or_else(|| "TBD".to_owned());
+            let name3 = get_entrant_name(transaction, e3)
+                .await
+                .unwrap_or_else(|| "TBD".to_owned());
+            (
+                format!("{} vs. {} vs. {}", name1, name2, name3),
+                format!("{}/{}/{}", name1, name2, name3),
+            )
         }
         _ => ("TBD".to_owned(), "TBD".to_owned()),
     };
@@ -723,42 +790,74 @@ pub(crate) async fn build_race_title(
     let title = build_normal_race_title(event_name, race, export, &matchup, false);
     let title = append_race_mode(title, race, export);
     if zsr_title_fits(&title) {
-        return title
+        return title;
     }
 
     let title = build_normal_race_title(event_name, race, export, &matchup, true);
     let title = append_race_mode(title, race, export);
     if zsr_title_fits(&title) {
-        return title
+        return title;
     }
 
     let title = build_normal_race_title(event_name, race, export, &compact_matchup, true);
     append_race_mode(title, race, export)
 }
 
-fn build_normal_race_title(event_name: &str, race: &Race, export: &ExportConfig, matchup: &str, compact: bool) -> String {
+fn build_normal_race_title(
+    event_name: &str,
+    race: &Race,
+    export: &ExportConfig,
+    matchup: &str,
+    compact: bool,
+) -> String {
     let game_suffix = race.game.map(|g| format!(" (G{})", g)).unwrap_or_default();
     if export.include_phase {
         if let Some(phase) = &race.phase {
-            let phase = phase.split_once(" - ").map(|(before, _)| before).unwrap_or(phase.as_str());
-            let phase = if compact { clean_combined_phase(phase) } else { phase.to_owned() };
+            let phase = phase
+                .split_once(" - ")
+                .map(|(before, _)| before)
+                .unwrap_or(phase.as_str());
+            let phase = if compact {
+                clean_combined_phase(phase)
+            } else {
+                phase.to_owned()
+            };
             if let Some(round) = &race.round {
-                let round = if compact { round.replace("Round ", "R") } else { round.clone() };
-                format!("{}: {} {}{} - {}", event_name, phase, round, game_suffix, matchup)
+                let round = if compact {
+                    round.replace("Round ", "R")
+                } else {
+                    round.clone()
+                };
+                format!(
+                    "{}: {} {}{} - {}",
+                    event_name, phase, round, game_suffix, matchup
+                )
             } else {
                 format!("{}: {}{} - {}", event_name, phase, game_suffix, matchup)
             }
         } else if let Some(round) = &race.round {
-            let round = if compact { round.replace("Round ", "R") } else { round.clone() };
+            let round = if compact {
+                round.replace("Round ", "R")
+            } else {
+                round.clone()
+            };
             format!("{}: {}{} - {}", event_name, round, game_suffix, matchup)
         } else {
             format!("{}: {}{}", event_name, matchup, game_suffix)
         }
     } else if let Some(round) = &race.round {
-        let round = if compact { round.replace("Round ", "R") } else { round.clone() };
+        let round = if compact {
+            round.replace("Round ", "R")
+        } else {
+            round.clone()
+        };
         format!("{}: {}{} - {}", event_name, round, game_suffix, matchup)
     } else if let Some(phase) = &race.phase {
-        let phase = if compact { clean_combined_phase(phase) } else { phase.clone() };
+        let phase = if compact {
+            clean_combined_phase(phase)
+        } else {
+            phase.clone()
+        };
         format!("{}: {}{} - {}", event_name, phase, game_suffix, matchup)
     } else {
         format!("{}: {}{}", event_name, matchup, game_suffix)
@@ -789,14 +888,24 @@ async fn build_combined_member_title(
 ) -> String {
     let matchup = match &race.entrants {
         Entrants::Two([e1, e2]) => {
-            let name1 = get_entrant_name(transaction, e1).await.unwrap_or_else(|| "TBD".to_owned());
-            let name2 = get_entrant_name(transaction, e2).await.unwrap_or_else(|| "TBD".to_owned());
+            let name1 = get_entrant_name(transaction, e1)
+                .await
+                .unwrap_or_else(|| "TBD".to_owned());
+            let name2 = get_entrant_name(transaction, e2)
+                .await
+                .unwrap_or_else(|| "TBD".to_owned());
             format!("{}/{}", name1, name2)
         }
         Entrants::Three([e1, e2, e3]) => {
-            let name1 = get_entrant_name(transaction, e1).await.unwrap_or_else(|| "TBD".to_owned());
-            let name2 = get_entrant_name(transaction, e2).await.unwrap_or_else(|| "TBD".to_owned());
-            let name3 = get_entrant_name(transaction, e3).await.unwrap_or_else(|| "TBD".to_owned());
+            let name1 = get_entrant_name(transaction, e1)
+                .await
+                .unwrap_or_else(|| "TBD".to_owned());
+            let name2 = get_entrant_name(transaction, e2)
+                .await
+                .unwrap_or_else(|| "TBD".to_owned());
+            let name3 = get_entrant_name(transaction, e3)
+                .await
+                .unwrap_or_else(|| "TBD".to_owned());
             format!("{}/{}/{}", name1, name2, name3)
         }
         _ => "TBD".to_owned(),
@@ -804,10 +913,18 @@ async fn build_combined_member_title(
     let game_suffix = race.game.map(|g| format!(" (G{})", g)).unwrap_or_default();
     if export.include_phase {
         if let Some(phase) = &race.phase {
-            let short_phase = clean_combined_phase(phase.split_once(" - ").map(|(before, _)| before).unwrap_or(phase.as_str()));
+            let short_phase = clean_combined_phase(
+                phase
+                    .split_once(" - ")
+                    .map(|(before, _)| before)
+                    .unwrap_or(phase.as_str()),
+            );
             if let Some(round) = &race.round {
                 let short_round = round.replace("Round ", "R");
-                format!("{} {}{} - {}", short_phase, short_round, game_suffix, matchup)
+                format!(
+                    "{} {}{} - {}",
+                    short_phase, short_round, game_suffix, matchup
+                )
             } else {
                 format!("{}{} - {}", short_phase, game_suffix, matchup)
             }
@@ -819,7 +936,12 @@ async fn build_combined_member_title(
     } else if let Some(round) = &race.round {
         format!("{}{} - {}", round, game_suffix, matchup)
     } else if let Some(phase) = &race.phase {
-        format!("{}{} - {}", clean_combined_phase(phase), game_suffix, matchup)
+        format!(
+            "{}{} - {}",
+            clean_combined_phase(phase),
+            game_suffix,
+            matchup
+        )
     } else {
         format!("{}{}", matchup, game_suffix)
     }
@@ -827,7 +949,9 @@ async fn build_combined_member_title(
 
 fn format_combined_pair_title(primary: String, companion: String) -> String {
     match (primary.split_once(" - "), companion.split_once(" - ")) {
-        (Some((primary_prefix, primary_matchup)), Some((companion_prefix, companion_matchup))) if primary_prefix == companion_prefix => {
+        (Some((primary_prefix, primary_matchup)), Some((companion_prefix, companion_matchup)))
+            if primary_prefix == companion_prefix =>
+        {
             format!("{primary_prefix} - {primary_matchup} & {companion_matchup}")
         }
         _ => format!("{primary} & {companion}"),
@@ -847,11 +971,17 @@ fn get_race_mode(_race: &Race) -> Option<&str> {
 }
 
 /// Get display name for an entrant
-async fn get_entrant_name(transaction: &mut Transaction<'_, Postgres>, entrant: &Entrant) -> Option<String> {
+async fn get_entrant_name(
+    transaction: &mut Transaction<'_, Postgres>,
+    entrant: &Entrant,
+) -> Option<String> {
     match entrant {
-        Entrant::MidosHouseTeam(team) => {
-            team.name(transaction).await.ok().flatten().map(|n| n.into_owned())
-        }
+        Entrant::MidosHouseTeam(team) => team
+            .name(transaction)
+            .await
+            .ok()
+            .flatten()
+            .map(|n| n.into_owned()),
         Entrant::Named { name, .. } => Some(name.clone()),
         Entrant::Discord { .. } => Some("Discord User".to_owned()),
     }
@@ -860,11 +990,16 @@ async fn get_entrant_name(transaction: &mut Transaction<'_, Postgres>, entrant: 
 /// Get the runner count string for a race
 pub(crate) fn format_runner_count(race: &Race, companion: Option<&Race>) -> String {
     if let Some(companion) = companion {
-        return (export_runner_count(&race.entrants) + export_runner_count(&companion.entrants)).to_string()
+        return (export_runner_count(&race.entrants) + export_runner_count(&companion.entrants))
+            .to_string();
     }
-    let is_qualifier = race.phase.as_deref() == Some("Qualifier");
+    let is_qualifier = race.is_qualifier;
     let is_weekly = race.phase.is_none()
-        && race.round.as_deref().map(|r| r.ends_with(" Weekly")).unwrap_or(false);
+        && race
+            .round
+            .as_deref()
+            .map(|r| r.ends_with(" Weekly"))
+            .unwrap_or(false);
 
     if is_qualifier || is_weekly {
         return "2-4".to_owned();
@@ -911,32 +1046,50 @@ pub(crate) async fn ensure_description_entry(
     let title = export.title.as_deref().unwrap_or(event_display_name);
 
     // Read existing descriptions from the sheet
-    let existing = sheets::read_values_uncached(
-        http_client,
-        &backend.google_sheet_id,
-        "'Descriptions'!A:A",
-    ).await?;
+    let existing =
+        sheets::read_values_uncached(http_client, &backend.google_sheet_id, "'Descriptions'!A:A")
+            .await?;
 
     // Get the estimate - use override if present, otherwise calculate from series default duration
-    let estimate = export.estimate_override.clone()
+    let estimate = export
+        .estimate_override
+        .clone()
         .unwrap_or_else(|| format_estimate(export.series.default_race_duration()));
     let description = export.description.clone().unwrap_or_default();
-    let nodecg_pk = export.nodecg_pk.map(|pk| pk.to_string()).unwrap_or_default();
+    let nodecg_pk = export
+        .nodecg_pk
+        .map(|pk| pk.to_string())
+        .unwrap_or_default();
 
     // Check if title already exists (skip header row at index 0)
-    let existing_row_idx = existing.iter()
+    let existing_row_idx = existing
+        .iter()
         .skip(1)
         .position(|row| row.first().map(|s| s == title).unwrap_or(false))
         .map(|pos| pos + 2); // Convert to 1-indexed sheet row (pos is 0-indexed after the skip)
 
     if let Some(row_num) = existing_row_idx {
         // Update existing row — columns B (description), C (estimate), E (PK)
-        sheets::batch_update_values(http_client, &backend.google_sheet_id, vec![
-            (format!("'Descriptions'!B{}", row_num), vec![vec![description]]),
-            (format!("'Descriptions'!C{}", row_num), vec![vec![estimate]]),
-            (format!("'Descriptions'!D{}", row_num), vec![vec![default_runner_count.to_string()]]),
-            (format!("'Descriptions'!E{}", row_num), vec![vec![nodecg_pk]]),
-        ]).await?;
+        sheets::batch_update_values(
+            http_client,
+            &backend.google_sheet_id,
+            vec![
+                (
+                    format!("'Descriptions'!B{}", row_num),
+                    vec![vec![description]],
+                ),
+                (format!("'Descriptions'!C{}", row_num), vec![vec![estimate]]),
+                (
+                    format!("'Descriptions'!D{}", row_num),
+                    vec![vec![default_runner_count.to_string()]],
+                ),
+                (
+                    format!("'Descriptions'!E{}", row_num),
+                    vec![vec![nodecg_pk]],
+                ),
+            ],
+        )
+        .await?;
     } else {
         // Append new row to the Descriptions sheet
         sheets::append_values(
@@ -950,7 +1103,8 @@ pub(crate) async fn ensure_description_entry(
                 default_runner_count.to_string(),
                 nodecg_pk,
             ]],
-        ).await?;
+        )
+        .await?;
     }
 
     Ok(())
@@ -964,20 +1118,23 @@ pub(crate) async fn get_volunteers_for_role(
     backend: &RestreamingBackend,
     role_type_name: &str,
 ) -> Result<String, Error> {
-    let effective_bindings = EffectiveRoleBinding::for_event(transaction, race.series, &race.event).await?;
-    let Some(binding) = effective_bindings.iter()
-        .find(|b| !b.is_disabled && b.language == backend.language && b.role_type_name == role_type_name)
-    else {
+    let effective_bindings =
+        EffectiveRoleBinding::for_event(transaction, race.series, &race.event).await?;
+    let Some(binding) = effective_bindings.iter().find(|b| {
+        !b.is_disabled && b.language == backend.language && b.role_type_name == role_type_name
+    }) else {
         return Ok(String::new());
     };
     let binding_id = binding.id;
 
     let signups = Signup::for_race(transaction, race.id).await?;
-    let role_signups: Vec<&Signup> = signups.iter()
+    let role_signups: Vec<&Signup> = signups
+        .iter()
         .filter(|s| s.role_binding_id == binding_id)
         .collect();
 
-    let confirmed: Vec<&&Signup> = role_signups.iter()
+    let confirmed: Vec<&&Signup> = role_signups
+        .iter()
         .filter(|s| matches!(s.status, VolunteerSignupStatus::Confirmed))
         .collect();
 
@@ -991,7 +1148,8 @@ pub(crate) async fn get_volunteers_for_role(
         return Ok(names.join(", "));
     }
 
-    let pending_count = role_signups.iter()
+    let pending_count = role_signups
+        .iter()
         .filter(|s| matches!(s.status, VolunteerSignupStatus::Pending))
         .count();
 
@@ -1003,21 +1161,29 @@ pub(crate) async fn get_volunteers_for_role(
 }
 
 fn find_row_by_export_id(id_values: &[Vec<String>], export_id: &str) -> Option<usize> {
-    id_values.iter().enumerate()
+    id_values
+        .iter()
+        .enumerate()
         .find(|(_, row)| row.first().is_some_and(|cell| cell == export_id))
         .map(|(idx, _)| idx + 1)
 }
 
 fn parse_row_from_updated_range(updated_range: &str) -> Option<usize> {
     let cell_ref = updated_range.rsplit('!').next()?.split(':').next()?;
-    let row_digits_rev: String = cell_ref.chars()
+    let row_digits_rev: String = cell_ref
+        .chars()
         .rev()
         .take_while(|c| c.is_ascii_digit())
         .collect();
     if row_digits_rev.is_empty() {
         return None;
     }
-    row_digits_rev.chars().rev().collect::<String>().parse().ok()
+    row_digits_rev
+        .chars()
+        .rev()
+        .collect::<String>()
+        .parse()
+        .ok()
 }
 
 fn build_signup_row_updates(
@@ -1035,32 +1201,78 @@ fn build_signup_row_updates(
     notes: Option<&str>,
 ) -> Vec<(String, Vec<Vec<String>>)> {
     let mut updates = vec![
-        (format!("'Restream Signups'!A{}", row), vec![vec![utc_date.to_owned()]]),
-        (format!("'Restream Signups'!B{}", row), vec![vec![format!("=IF(A{}=\"\",\"\",TEXT(A{},\"ddd\"))", row, row)]]),
-        (format!("'Restream Signups'!C{}", row), vec![vec![dst_formula.replace("{row}", &row.to_string())]]),
-        (format!("'Restream Signups'!D{}", row), vec![vec![format!("=IF(C{}=\"\",\"\",TEXT(C{},\"ddd\"))", row, row)]]),
-        (format!("'Restream Signups'!E{}", row), vec![vec![title.to_owned()]]),
-        (format!("'Restream Signups'!F{}", row), vec![vec![estimate.to_owned()]]),
-        (format!("'Restream Signups'!G{}", row), vec![vec![runner_count.to_owned()]]),
-        (format!("'Restream Signups'!{}{}", backend.commentators_col, row), vec![vec![commentators.to_owned()]]),
-        (format!("'Restream Signups'!{}{}", backend.trackers_col, row), vec![vec![trackers.to_owned()]]),
-        (format!("'Restream Signups'!{}{}", backend.hth_export_id_col, row), vec![vec![export_id.to_owned()]]),
+        (
+            format!("'Restream Signups'!A{}", row),
+            vec![vec![utc_date.to_owned()]],
+        ),
+        (
+            format!("'Restream Signups'!B{}", row),
+            vec![vec![format!(
+                "=IF(A{}=\"\",\"\",TEXT(A{},\"ddd\"))",
+                row, row
+            )]],
+        ),
+        (
+            format!("'Restream Signups'!C{}", row),
+            vec![vec![dst_formula.replace("{row}", &row.to_string())]],
+        ),
+        (
+            format!("'Restream Signups'!D{}", row),
+            vec![vec![format!(
+                "=IF(C{}=\"\",\"\",TEXT(C{},\"ddd\"))",
+                row, row
+            )]],
+        ),
+        (
+            format!("'Restream Signups'!E{}", row),
+            vec![vec![title.to_owned()]],
+        ),
+        (
+            format!("'Restream Signups'!F{}", row),
+            vec![vec![estimate.to_owned()]],
+        ),
+        (
+            format!("'Restream Signups'!G{}", row),
+            vec![vec![runner_count.to_owned()]],
+        ),
+        (
+            format!("'Restream Signups'!{}{}", backend.commentators_col, row),
+            vec![vec![commentators.to_owned()]],
+        ),
+        (
+            format!("'Restream Signups'!{}{}", backend.trackers_col, row),
+            vec![vec![trackers.to_owned()]],
+        ),
+        (
+            format!("'Restream Signups'!{}{}", backend.hth_export_id_col, row),
+            vec![vec![export_id.to_owned()]],
+        ),
     ];
-    if let (Some(restream_channel_col), Some(alias)) = (&backend.restream_channel_col, restream_channel) {
-        updates.push((format!("'Restream Signups'!{}{}", restream_channel_col, row), vec![vec![alias.to_owned()]]));
+    if let (Some(restream_channel_col), Some(alias)) =
+        (&backend.restream_channel_col, restream_channel)
+    {
+        updates.push((
+            format!("'Restream Signups'!{}{}", restream_channel_col, row),
+            vec![vec![alias.to_owned()]],
+        ));
     }
     if let Some(notes) = notes {
-        updates.push((format!("'Restream Signups'!{}{}", backend.notes_col, row), vec![vec![notes.to_owned()]]));
+        updates.push((
+            format!("'Restream Signups'!{}{}", backend.notes_col, row),
+            vec![vec![notes.to_owned()]],
+        ));
     }
     updates
 }
 
 fn race_team_ids(race: &Race) -> Option<Vec<Id<Teams>>> {
-    race.teams_opt().map(|teams| teams.map(|team| team.id).collect())
+    race.teams_opt()
+        .map(|teams| teams.map(|team| team.id).collect())
 }
 
 fn custom_choice_disables_delay(value: Option<&serde_json::Value>) -> bool {
-    value.and_then(|value| value.as_str())
+    value
+        .and_then(|value| value.as_str())
         .is_some_and(|value| matches!(value, "yes" | "always"))
 }
 
@@ -1096,7 +1308,9 @@ async fn disables_export_delay(
     .await?;
 
     Ok(rows.len() == team_count
-        && rows.iter().all(|row| custom_choice_disables_delay(row.custom_choices.get("no_delay"))))
+        && rows
+            .iter()
+            .all(|row| custom_choice_disables_delay(row.custom_choices.get("no_delay"))))
 }
 
 async fn effective_delay_minutes(
@@ -1106,7 +1320,9 @@ async fn effective_delay_minutes(
     export: &ExportConfig,
     event_data: &event::Data<'_>,
 ) -> Result<i32, Error> {
-    if export.delay_minutes > 0 && disables_export_delay(transaction, race, companion, event_data).await? {
+    if export.delay_minutes > 0
+        && disables_export_delay(transaction, race, companion, event_data).await?
+    {
         Ok(0)
     } else {
         Ok(export.delay_minutes)
@@ -1143,8 +1359,10 @@ async fn delay_notes_update_for_row(
     }
 
     let notes_range = format!("'Restream Signups'!{}{}", backend.notes_col, row);
-    let notes_values = sheets::read_values_uncached(http_client, &backend.google_sheet_id, &notes_range).await?;
-    let existing_notes = notes_values.first()
+    let notes_values =
+        sheets::read_values_uncached(http_client, &backend.google_sheet_id, &notes_range).await?;
+    let existing_notes = notes_values
+        .first()
         .and_then(|row| row.first())
         .map(String::as_str)
         .unwrap_or_default();
@@ -1162,7 +1380,10 @@ fn column_letter_to_index(col: &str) -> Option<usize> {
 }
 
 fn is_orphaned_append_marker(row: &[String], export_id_prefix: &str, id_col_idx: usize) -> bool {
-    let Some(marker) = row.first().filter(|cell| cell.starts_with(export_id_prefix)) else {
+    let Some(marker) = row
+        .first()
+        .filter(|cell| cell.starts_with(export_id_prefix))
+    else {
         return false;
     };
     row.iter()
@@ -1178,7 +1399,8 @@ async fn dedupe_export_rows(
 ) -> Result<usize, Error> {
     let export_id_prefix = format!("HTH-{}-{}-", export.series.slug(), export.event);
     let full_range = "'Restream Signups'!A:Z".to_owned();
-    let rows = sheets::read_values_uncached(http_client, &backend.google_sheet_id, &full_range).await?;
+    let rows =
+        sheets::read_values_uncached(http_client, &backend.google_sheet_id, &full_range).await?;
     let Some(id_col_idx) = column_letter_to_index(&backend.hth_export_id_col) else {
         return Ok(0);
     };
@@ -1193,10 +1415,16 @@ async fn dedupe_export_rows(
         // left behind forever because normal lookup only checks the configured ID
         // column. It is safe to clear when no other cell in the row has content.
         if row_num >= 4 && is_orphaned_append_marker(row, &export_id_prefix, id_col_idx) {
-            updates.push((format!("'Restream Signups'!A{}", row_num), vec![vec![String::new()]]));
+            updates.push((
+                format!("'Restream Signups'!A{}", row_num),
+                vec![vec![String::new()]],
+            ));
             if id_col_idx != 0 && row.get(id_col_idx).is_some_and(|cell| !cell.is_empty()) {
                 updates.push((
-                    format!("'Restream Signups'!{}{}", backend.hth_export_id_col, row_num),
+                    format!(
+                        "'Restream Signups'!{}{}",
+                        backend.hth_export_id_col, row_num
+                    ),
                     vec![vec![String::new()]],
                 ));
             }
@@ -1211,7 +1439,9 @@ async fn dedupe_export_rows(
     }
 
     for row_nums in rows_by_id.into_values() {
-        if row_nums.len() <= 1 { continue }
+        if row_nums.len() <= 1 {
+            continue;
+        }
         let survivor = row_nums[0];
         let survivor_row = &rows[survivor - 1];
         // Column A (date) and E (title) are fixed regardless of backend column layout;
@@ -1225,23 +1455,38 @@ async fn dedupe_export_rows(
             let title_matches = candidate_row.get(4) == survivor_row.get(4);
             if date_matches && title_matches {
                 // Genuine artifact duplicate - safe to clear entirely.
-                updates.push((format!("'Restream Signups'!A{}:Z{}", row_num, row_num), vec![vec![String::new(); 26]]));
+                updates.push((
+                    format!("'Restream Signups'!A{}:Z{}", row_num, row_num),
+                    vec![vec![String::new(); 26]],
+                ));
                 cleared_rows += 1;
             } else if !date_matches && !title_matches {
                 // Both differ - unambiguously a different race that happens to carry a
                 // copy-pasted export ID. Leave the human-entered content untouched, only
                 // strip the stray ID so it stops being tracked as this race's row.
-                updates.push((format!("'Restream Signups'!{}{}", backend.hth_export_id_col, row_num), vec![vec![String::new()]]));
+                updates.push((
+                    format!(
+                        "'Restream Signups'!{}{}",
+                        backend.hth_export_id_col, row_num
+                    ),
+                    vec![vec![String::new()]],
+                ));
                 eprintln!(
                     "ZSR dedupe {}/{}: row {} shares export id with row {} but content differs entirely - stripped stray export ID, left content in place",
-                    export.series.slug(), export.event, row_num, survivor,
+                    export.series.slug(),
+                    export.event,
+                    row_num,
+                    survivor,
                 );
             } else {
                 // Only one of date/title differs - ambiguous, could be a legitimate
                 // update in flight. Leave everything alone for manual review.
                 eprintln!(
                     "ZSR dedupe {}/{}: row {} shares export id with row {} but content partially differs - leaving in place for manual review",
-                    export.series.slug(), export.event, row_num, survivor,
+                    export.series.slug(),
+                    export.event,
+                    row_num,
+                    survivor,
                 );
             }
         }
@@ -1276,28 +1521,36 @@ pub(crate) async fn export_race(
     let export_id = generate_export_id(race, export);
 
     // Calculate the exported start time, respecting a race-specific no_delay opt-out.
-    let delay_minutes = effective_delay_minutes(
-        transaction,
-        race,
-        companion.as_ref(),
-        export,
-        event_data,
-    ).await?;
+    let delay_minutes =
+        effective_delay_minutes(transaction, race, companion.as_ref(), export, event_data).await?;
     let export_start = start + chrono::Duration::minutes(delay_minutes as i64);
 
     // Format UTC date with zero-padded hour
     let utc_date = export_start.format("%b %d, %I:%M%p").to_string();
 
     // Build title
-    let title = build_race_title(transaction, race, companion.as_ref(), export, &event_data.display_name).await;
+    let title = build_race_title(
+        transaction,
+        race,
+        companion.as_ref(),
+        export,
+        &event_data.display_name,
+    )
+    .await;
 
     // Get estimate
-    let estimate = export.estimate_override.clone()
+    let estimate = export
+        .estimate_override
+        .clone()
         .unwrap_or_else(|| format_estimate(export.series.default_race_duration()));
 
     // Get volunteers
-    let commentators_joined = get_volunteers_for_role(transaction, race, backend, "Commentary").await.unwrap_or_default();
-    let trackers_joined = get_volunteers_for_role(transaction, race, backend, "Tracking").await.unwrap_or_default();
+    let commentators_joined = get_volunteers_for_role(transaction, race, backend, "Commentary")
+        .await
+        .unwrap_or_default();
+    let trackers_joined = get_volunteers_for_role(transaction, race, backend, "Tracking")
+        .await
+        .unwrap_or_default();
     let runner_count = format_runner_count(race, companion.as_ref());
 
     // Get restream channel alias - only fill the field if an alias is configured
@@ -1334,8 +1587,12 @@ pub(crate) async fn export_race(
     // the authoritative source for whether a row exists, which handles the case where
     // the DB tracking record was lost (e.g. a transaction rollback after a transient
     // Sheets 503 error left a row in the sheet but no DB record).
-    let id_col_range = format!("'Restream Signups'!{}:{}", backend.hth_export_id_col, backend.hth_export_id_col);
-    let id_values = sheets::read_values_uncached(http_client, &backend.google_sheet_id, &id_col_range).await?;
+    let id_col_range = format!(
+        "'Restream Signups'!{}:{}",
+        backend.hth_export_id_col, backend.hth_export_id_col
+    );
+    let id_values =
+        sheets::read_values_uncached(http_client, &backend.google_sheet_id, &id_col_range).await?;
     let row_num = find_row_by_export_id(&id_values, &export_id);
     let mut inserted_new_row = false;
 
@@ -1373,16 +1630,27 @@ pub(crate) async fn export_race(
             &backend.google_sheet_id,
             &append_range,
             vec![vec![export_id.clone()]],
-        ).await?;
+        )
+        .await?;
 
         let row = match parse_row_from_updated_range(&append_response.updates.updated_range) {
             Some(row) => row,
             None => {
-                let anchor_values_after = sheets::read_values_uncached(http_client, &backend.google_sheet_id, &append_range).await?;
-                anchor_values_after.iter()
+                let anchor_values_after = sheets::read_values_uncached(
+                    http_client,
+                    &backend.google_sheet_id,
+                    &append_range,
+                )
+                .await?;
+                anchor_values_after
+                    .iter()
                     .rposition(|sheet_row| sheet_row.first().is_some_and(|cell| cell == &export_id))
                     .map(|idx| idx + 1)
-                    .ok_or_else(|| Error::Sheets(WriteError::SheetNotFound("unable to resolve appended row".to_owned())))?
+                    .ok_or_else(|| {
+                        Error::Sheets(WriteError::SheetNotFound(
+                            "unable to resolve appended row".to_owned(),
+                        ))
+                    })?
             }
         };
 
@@ -1395,7 +1663,8 @@ pub(crate) async fn export_race(
             &backend.google_sheet_id,
             &id_range,
             vec![vec![export_id.clone()]],
-        ).await?;
+        )
+        .await?;
 
         let notes = delay_notes_update("", delay_minutes);
         let updates = build_signup_row_updates(
@@ -1434,15 +1703,26 @@ pub(crate) async fn remove_race(
 
     if let Some(existing) = existing {
         // Find the row by HTH Export ID
-        let id_col_range = format!("'Restream Signups'!{}:{}", backend.hth_export_id_col, backend.hth_export_id_col);
-        let id_values = sheets::read_values_uncached(http_client, &backend.google_sheet_id, &id_col_range).await?;
+        let id_col_range = format!(
+            "'Restream Signups'!{}:{}",
+            backend.hth_export_id_col, backend.hth_export_id_col
+        );
+        let id_values =
+            sheets::read_values_uncached(http_client, &backend.google_sheet_id, &id_col_range)
+                .await?;
 
         for (idx, row) in id_values.iter().enumerate() {
             if let Some(cell) = row.get(0) {
                 if cell == &existing.sheet_row_id {
                     let row_num = idx + 1;
-                    let sheet_id = sheets::get_sheet_id(http_client, &backend.google_sheet_id, "Restream Signups").await?;
-                    sheets::delete_row_at(http_client, &backend.google_sheet_id, sheet_id, row_num).await?;
+                    let sheet_id = sheets::get_sheet_id(
+                        http_client,
+                        &backend.google_sheet_id,
+                        "Restream Signups",
+                    )
+                    .await?;
+                    sheets::delete_row_at(http_client, &backend.google_sheet_id, sheet_id, row_num)
+                        .await?;
                     break;
                 }
             }
@@ -1461,22 +1741,28 @@ pub(crate) async fn sync_all_races(
     http_client: &reqwest::Client,
     export: &ExportConfig,
 ) -> Result<Vec<String>, Error> {
-    let backend = RestreamingBackend::from_id(transaction, export.backend_id).await?
+    let backend = RestreamingBackend::from_id(transaction, export.backend_id)
+        .await?
         .ok_or(Error::BackendNotFound(export.backend_id))?;
 
-    let event_data = event::Data::new(transaction, export.series, &export.event).await?
+    let event_data = event::Data::new(transaction, export.series, &export.event)
+        .await?
         .ok_or(Error::EventNotFound)?;
 
     // Ensure the event description entry exists (or is up to date) in the Descriptions sheet
     ensure_description_entry(http_client, export, &backend, &event_data.display_name, 2).await?;
 
     // Get all races for this event
-    let race_ids = sqlx::query_scalar!(r#"
+    let race_ids = sqlx::query_scalar!(
+        r#"
         SELECT id AS "id: Id<Races>"
         FROM races
         WHERE series = $1 AND event = $2 AND ignored = false
         ORDER BY start NULLS LAST
-    "#, export.series as _, &export.event)
+    "#,
+        export.series as _,
+        &export.event
+    )
     .fetch_all(&mut **transaction)
     .await?;
 
@@ -1493,7 +1779,10 @@ pub(crate) async fn sync_all_races(
         };
         if let Some(primary_id) = race.companion_primary_id(transaction).await? {
             if let Err(e) = remove_race(transaction, http_client, race.id, export, &backend).await {
-                errors.push(format!("Race {} companion of {} (remove): {}", race.id, primary_id, e));
+                errors.push(format!(
+                    "Race {} companion of {} (remove): {}",
+                    race.id, primary_id, e
+                ));
             }
             continue;
         }
@@ -1517,7 +1806,16 @@ pub(crate) async fn sync_all_races(
         // Check if race should be exported
         match should_export_race(transaction, &race, export, &backend).await {
             Ok(true) => {
-                match export_race(transaction, http_client, &race, export, &backend, &event_data).await {
+                match export_race(
+                    transaction,
+                    http_client,
+                    &race,
+                    export,
+                    &backend,
+                    &event_data,
+                )
+                .await
+                {
                     Ok(inserted_new_row) => {
                         if inserted_new_row {
                             needs_sort = true;
@@ -1532,7 +1830,9 @@ pub(crate) async fn sync_all_races(
                 // Trigger not met - remove if previously exported
                 let existing = RaceExport::find(transaction, race.id, export.id).await?;
                 if existing.is_some() {
-                    if let Err(e) = remove_race(transaction, http_client, race.id, export, &backend).await {
+                    if let Err(e) =
+                        remove_race(transaction, http_client, race.id, export, &backend).await
+                    {
                         errors.push(format!("Race {} (remove): {}", race.id, e));
                     }
                 }
@@ -1551,9 +1851,17 @@ pub(crate) async fn sync_all_races(
     }
 
     if needs_sort {
-        match sheets::get_sheet_id(http_client, &backend.google_sheet_id, "Restream Signups").await {
+        match sheets::get_sheet_id(http_client, &backend.google_sheet_id, "Restream Signups").await
+        {
             Ok(sheet_id) => {
-                if let Err(e) = sheets::sort_rows_by_column_a(http_client, &backend.google_sheet_id, sheet_id, 4).await {
+                if let Err(e) = sheets::sort_rows_by_column_a(
+                    http_client,
+                    &backend.google_sheet_id,
+                    sheet_id,
+                    4,
+                )
+                .await
+                {
                     errors.push(format!("Sort rows: {}", e));
                 }
             }
@@ -1569,7 +1877,9 @@ pub(crate) async fn check_and_sync_all_exports(
     http_client: &reqwest::Client,
 ) -> Result<(), Error> {
     // Skip this run if a manual sync (or a previous background run) is still in progress.
-    let Ok(_guard) = SYNC_LOCK.try_lock() else { return Ok(()) };
+    let Ok(_guard) = SYNC_LOCK.try_lock() else {
+        return Ok(());
+    };
 
     let mut transaction = pool.begin().await?;
 
@@ -1579,13 +1889,22 @@ pub(crate) async fn check_and_sync_all_exports(
         match sync_all_races(&mut transaction, http_client, &export).await {
             Ok(errors) => {
                 for err in errors {
-                    eprintln!("ZSR Export {}/{} to backend {}: {}", export.series.slug(), export.event, export.backend_id, err);
+                    eprintln!(
+                        "ZSR Export {}/{} to backend {}: {}",
+                        export.series.slug(),
+                        export.event,
+                        export.backend_id,
+                        err
+                    );
                 }
             }
             Err(e) => {
                 eprintln!(
                     "ZSR Export {}/{} to backend {}: failed - {}",
-                    export.series.slug(), export.event, export.backend_id, e
+                    export.series.slug(),
+                    export.event,
+                    export.backend_id,
+                    e
                 );
             }
         }
@@ -1616,10 +1935,11 @@ async fn get_confirmed_discord_usernames(
     backend: &RestreamingBackend,
     role_type_name: &str,
 ) -> Result<Vec<String>, Error> {
-    let effective_bindings = EffectiveRoleBinding::for_event(transaction, race.series, &race.event).await?;
-    let Some(binding) = effective_bindings.iter()
-        .find(|b| !b.is_disabled && b.language == backend.language && b.role_type_name == role_type_name)
-    else {
+    let effective_bindings =
+        EffectiveRoleBinding::for_event(transaction, race.series, &race.event).await?;
+    let Some(binding) = effective_bindings.iter().find(|b| {
+        !b.is_disabled && b.language == backend.language && b.role_type_name == role_type_name
+    }) else {
         return Ok(Vec::new());
     };
 
@@ -1657,40 +1977,70 @@ async fn send_volunteer_api(pool: &PgPool, http_client: &reqwest::Client, race_i
         } else {
             None
         };
-        let event_data = event::Data::new(&mut transaction, race.series, &race.event).await?
+        let event_data = event::Data::new(&mut transaction, race.series, &race.event)
+            .await?
             .ok_or(Error::EventNotFound)?;
         let exports = ExportConfig::for_event(&mut transaction, race.series, &race.event).await?;
 
         for export in &exports {
-            if !export.enabled { continue; }
+            if !export.enabled {
+                continue;
+            }
 
-            let backend = match RestreamingBackend::from_id(&mut transaction, export.backend_id).await? {
-                Some(b) => b,
-                None => continue,
-            };
+            let backend =
+                match RestreamingBackend::from_id(&mut transaction, export.backend_id).await? {
+                    Some(b) => b,
+                    None => continue,
+                };
 
             let (api_endpoint, api_secret) = match (&backend.api_endpoint, &backend.api_secret) {
                 (Some(ep), Some(sec)) => (ep.clone(), sec.clone()),
                 _ => continue,
             };
 
-            if !race.video_urls.get(&backend.language).is_some_and(|url| url.as_str().contains("zeldaspeedruns")) {
+            if !race
+                .video_urls
+                .get(&backend.language)
+                .is_some_and(|url| url.as_str().contains("zeldaspeedruns"))
+            {
                 continue;
             }
 
-            let title = build_race_title(&mut transaction, &race, companion.as_ref(), export, &event_data.display_name).await;
-            let commentary = get_confirmed_discord_usernames(&mut transaction, &race, &backend, "Commentary").await?;
-            let tracker = get_confirmed_discord_usernames(&mut transaction, &race, &backend, "Tracking").await?;
+            let title = build_race_title(
+                &mut transaction,
+                &race,
+                companion.as_ref(),
+                export,
+                &event_data.display_name,
+            )
+            .await;
+            let commentary =
+                get_confirmed_discord_usernames(&mut transaction, &race, &backend, "Commentary")
+                    .await?;
+            let tracker =
+                get_confirmed_discord_usernames(&mut transaction, &race, &backend, "Tracking")
+                    .await?;
 
-            let payload = VolunteerApiPayload { secret: api_secret, title, commentary, tracker };
+            let payload = VolunteerApiPayload {
+                secret: api_secret,
+                title,
+                commentary,
+                tracker,
+            };
 
             if let Err(e) = http_client.post(&api_endpoint).json(&payload).send().await {
-                eprintln!("Volunteer API call to {} for race {}: {}", api_endpoint, u64::from(race_id), e);
+                eprintln!(
+                    "Volunteer API call to {} for race {}: {}",
+                    api_endpoint,
+                    u64::from(race_id),
+                    e
+                );
             }
         }
 
         Ok(())
-    }.await;
+    }
+    .await;
 
     if let Err(e) = result {
         eprintln!("Volunteer API for race {}: {}", u64::from(race_id), e);
@@ -1699,7 +2049,11 @@ async fn send_volunteer_api(pool: &PgPool, http_client: &reqwest::Client, race_i
 
 /// Schedule a debounced volunteer API call for `race_id`. Calls within 20 s of each other
 /// are collapsed into a single outgoing request.
-pub(crate) fn schedule_volunteer_api_call(pool: PgPool, http_client: reqwest::Client, race_id: Id<Races>) {
+pub(crate) fn schedule_volunteer_api_call(
+    pool: PgPool,
+    http_client: reqwest::Client,
+    race_id: Id<Races>,
+) {
     tokio::spawn(async move {
         let version = {
             let mut map = VOLUNTEER_API_DEBOUNCE.lock().await;
@@ -1713,7 +2067,10 @@ pub(crate) fn schedule_volunteer_api_call(pool: PgPool, http_client: reqwest::Cl
         let should_fire = {
             let mut map = VOLUNTEER_API_DEBOUNCE.lock().await;
             match map.get(&u64::from(race_id)) {
-                Some(&v) if v == version => { map.remove(&u64::from(race_id)); true }
+                Some(&v) if v == version => {
+                    map.remove(&u64::from(race_id));
+                    true
+                }
                 _ => false,
             }
         };
@@ -1732,8 +2089,16 @@ mod tests {
     fn recognizes_orphaned_append_marker() {
         let prefix = "HTH-mw-s8-";
 
-        assert!(is_orphaned_append_marker(&["HTH-mw-s8-123".to_owned()], prefix, 17));
-        assert!(!is_orphaned_append_marker(&["HTH-mw-s7-123".to_owned()], prefix, 17));
+        assert!(is_orphaned_append_marker(
+            &["HTH-mw-s8-123".to_owned()],
+            prefix,
+            17
+        ));
+        assert!(!is_orphaned_append_marker(
+            &["HTH-mw-s7-123".to_owned()],
+            prefix,
+            17
+        ));
 
         let mut row_with_export_id = vec![String::new(); 18];
         row_with_export_id[0] = "HTH-mw-s8-123".to_owned();

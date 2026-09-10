@@ -1,19 +1,20 @@
 use {
-    chrono::Utc,
     crate::{
-        event::{
-            Data,
-            InfoError,
-        },
+        event::{Data, InfoError},
         prelude::*,
     },
+    chrono::Utc,
 };
 
-pub(crate) async fn info(transaction: &mut Transaction<'_, Postgres>, data: &Data<'_>) -> Result<Option<RawHtml<String>>, InfoError> {
+pub(crate) async fn info(
+    transaction: &mut Transaction<'_, Postgres>,
+    data: &Data<'_>,
+) -> Result<Option<RawHtml<String>>, InfoError> {
     let now = Utc::now();
     Ok(match &*data.event {
         "w" => {
-            let weekly_schedules = WeeklySchedule::for_event(transaction, Series::TwwrMain, "w").await?;
+            let weekly_schedules =
+                WeeklySchedule::for_event(transaction, Series::TwwrMain, "w").await?;
             let active_schedules: Vec<_> = weekly_schedules.iter().filter(|s| s.active).collect();
             Some(html! {
                 article {
@@ -44,7 +45,7 @@ pub(crate) async fn info(transaction: &mut Transaction<'_, Postgres>, data: &Dat
                     }
                 }
             })
-        },
+        }
         "miniblins26" => Some(html! {
             article {
                 p : "Hello, and welcome to the Miniblins Tournament for Wind Waker Randomizer. Every hero starts their journey somewhere. This tournament is here to help newcomers and less-experienced runners grow. You will move up from training against Miniblins to facing the main boss, Ganondorf. Runners of all skill levels are encouraged to participate.";

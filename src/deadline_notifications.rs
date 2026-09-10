@@ -1,17 +1,16 @@
 use {
+    crate::{prelude::*, series::Series},
     serenity::all::CreateMessage,
     serenity::model::id::ChannelId,
     sqlx::PgPool,
-    crate::{
-        prelude::*,
-        series::Series,
-    },
 };
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum Error {
-    #[error(transparent)] Serenity(#[from] serenity::Error),
-    #[error(transparent)] Sql(#[from] sqlx::Error),
+    #[error(transparent)]
+    Serenity(#[from] serenity::Error),
+    #[error(transparent)]
+    Sql(#[from] sqlx::Error),
 }
 
 pub(crate) async fn deadline_notification_manager(
@@ -38,7 +37,8 @@ pub(crate) async fn deadline_notification_manager(
 
 async fn run_passes(db_pool: &PgPool, discord_ctx: &DiscordCtx) -> Result<(), Error> {
     // Pass 1 — 3-day player reminder
-    let rows = sqlx::query!(r#"
+    let rows = sqlx::query!(
+        r#"
         SELECT id, scheduling_thread, scheduling_deadline AS "scheduling_deadline!"
         FROM races
         WHERE NOT ignored
@@ -52,7 +52,10 @@ async fn run_passes(db_pool: &PgPool, discord_ctx: &DiscordCtx) -> Result<(), Er
           AND async_start1 IS NULL
           AND async_start2 IS NULL
           AND async_start3 IS NULL
-    "#).fetch_all(db_pool).await?;
+    "#
+    )
+    .fetch_all(db_pool)
+    .await?;
 
     for row in rows {
         if let Some(thread_id) = row.scheduling_thread {
@@ -61,12 +64,17 @@ async fn run_passes(db_pool: &PgPool, discord_ctx: &DiscordCtx) -> Result<(), Er
             let _ = channel.send_message(discord_ctx, CreateMessage::new()
                 .content(format!("Reminder: you have 3 days left to schedule this race (deadline: <t:{ts}:F>)."))).await;
         }
-        sqlx::query!("UPDATE races SET deadline_reminded_3d = true WHERE id = $1", row.id)
-            .execute(db_pool).await?;
+        sqlx::query!(
+            "UPDATE races SET deadline_reminded_3d = true WHERE id = $1",
+            row.id
+        )
+        .execute(db_pool)
+        .await?;
     }
 
     // Pass 2 — 24-hour player reminder
-    let rows = sqlx::query!(r#"
+    let rows = sqlx::query!(
+        r#"
         SELECT id, scheduling_thread, scheduling_deadline AS "scheduling_deadline!"
         FROM races
         WHERE NOT ignored
@@ -80,7 +88,10 @@ async fn run_passes(db_pool: &PgPool, discord_ctx: &DiscordCtx) -> Result<(), Er
           AND async_start1 IS NULL
           AND async_start2 IS NULL
           AND async_start3 IS NULL
-    "#).fetch_all(db_pool).await?;
+    "#
+    )
+    .fetch_all(db_pool)
+    .await?;
 
     for row in rows {
         if let Some(thread_id) = row.scheduling_thread {
@@ -89,12 +100,17 @@ async fn run_passes(db_pool: &PgPool, discord_ctx: &DiscordCtx) -> Result<(), Er
             let _ = channel.send_message(discord_ctx, CreateMessage::new()
                 .content(format!("Final reminder: 24 hours remaining to schedule this race (deadline: <t:{ts}:F>)."))).await;
         }
-        sqlx::query!("UPDATE races SET deadline_reminded_24h = true WHERE id = $1", row.id)
-            .execute(db_pool).await?;
+        sqlx::query!(
+            "UPDATE races SET deadline_reminded_24h = true WHERE id = $1",
+            row.id
+        )
+        .execute(db_pool)
+        .await?;
     }
 
     // Pass 3 — organizer notification on missed deadline
-    let rows = sqlx::query!(r#"
+    let rows = sqlx::query!(
+        r#"
         SELECT
             r.id,
             r.series AS "series: Series",
@@ -118,7 +134,10 @@ async fn run_passes(db_pool: &PgPool, discord_ctx: &DiscordCtx) -> Result<(), Er
           AND r.async_start1 IS NULL
           AND r.async_start2 IS NULL
           AND r.async_start3 IS NULL
-    "#).fetch_all(db_pool).await?;
+    "#
+    )
+    .fetch_all(db_pool)
+    .await?;
 
     for row in rows {
         if let Some(channel_id) = row.discord_organizer_channel {
@@ -138,8 +157,12 @@ async fn run_passes(db_pool: &PgPool, discord_ctx: &DiscordCtx) -> Result<(), Er
             let _ = channel.send_message(discord_ctx, CreateMessage::new()
                 .content(format!("Scheduling deadline passed for {matchup} ({location}). No schedule has been set."))).await;
         }
-        sqlx::query!("UPDATE races SET deadline_organizer_notified = true WHERE id = $1", row.id)
-            .execute(db_pool).await?;
+        sqlx::query!(
+            "UPDATE races SET deadline_organizer_notified = true WHERE id = $1",
+            row.id
+        )
+        .execute(db_pool)
+        .await?;
     }
 
     Ok(())

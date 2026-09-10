@@ -1,24 +1,21 @@
-use rocket::{
-    form::{Form, Contextual},
-    http::Status,
-    response::Redirect,
-    State,
-};
-use rocket_util::Origin;
-use rocket::response::content::RawHtml;
-use rocket_csrf::CsrfToken;
-use rocket_util::{
-    CsrfForm,
-    html,
-};
 use crate::http::page;
-use sqlx::{Postgres, Transaction};
 use crate::{
     game::{Game, GameError},
     lang::Language,
     prelude::*,
     user::User,
 };
+use rocket::response::content::RawHtml;
+use rocket::{
+    State,
+    form::{Contextual, Form},
+    http::Status,
+    response::Redirect,
+};
+use rocket_csrf::CsrfToken;
+use rocket_util::Origin;
+use rocket_util::{CsrfForm, html};
+use sqlx::{Postgres, Transaction};
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum Error {
@@ -53,11 +50,18 @@ impl IsNetworkError for Error {
     }
 }
 
-async fn is_game_admin(user: &User, game: &Game, transaction: &mut Transaction<'_, Postgres>) -> Result<bool, GameError> {
+async fn is_game_admin(
+    user: &User,
+    game: &Game,
+    transaction: &mut Transaction<'_, Postgres>,
+) -> Result<bool, GameError> {
     game.is_admin(transaction, user).await
 }
 
-async fn get_accessible_games(user: &User, transaction: &mut Transaction<'_, Postgres>) -> Result<Vec<Game>, GameError> {
+async fn get_accessible_games(
+    user: &User,
+    transaction: &mut Transaction<'_, Postgres>,
+) -> Result<Vec<Game>, GameError> {
     if user.is_global_admin() {
         // Trez can see all games
         Game::all(transaction).await
@@ -177,12 +181,16 @@ pub(crate) async fn index(
         pool.begin().await.map_err(Error::from)?,
         &Some(me),
         &uri,
-        PageStyle { kind: PageKind::Other, ..PageStyle::default() },
+        PageStyle {
+            kind: PageKind::Other,
+            ..PageStyle::default()
+        },
         "Admin Panel — Hyrule Town Hall",
         content,
-    ).await.map_err(Error::from)?)
+    )
+    .await
+    .map_err(Error::from)?)
 }
-
 
 #[derive(FromForm, CsrfForm)]
 pub(crate) struct AddGameForm {
@@ -210,22 +218,22 @@ pub(crate) async fn add_game_form(
     let content = html! {
         article {
             h1 : "Add New Game";
-            
+
             form(method = "post", action = uri!(add_game_post)) {
                 : csrf;
-                
+
                 div {
                     label(for = "name") : "Game Name:";
                     input(type = "text", id = "name", name = "name", required);
                     p(class = "help") : "(Internal identifier, e.g., 'ootr', 'alttpr')";
                 }
-                
+
                 div {
                     label(for = "display_name") : "Display Name:";
                     input(type = "text", id = "display_name", name = "display_name", required);
                     p(class = "help") : "(Human-readable name, e.g., 'Ocarina of Time Randomizer')";
                 }
-                
+
                 div {
                     label(for = "description") : "Description:";
                     textarea(id = "description", name = "description", rows = "3");
@@ -237,7 +245,7 @@ pub(crate) async fn add_game_form(
                     input(type = "text", id = "discord_guild", name = "discord_guild");
                     p(class = "help") : "(Optional server for game-level volunteer Discord roles)";
                 }
-                
+
                 div {
                     input(type = "submit", value = "Add Game");
                     a(href = uri!(index)) : "Cancel";
@@ -250,10 +258,15 @@ pub(crate) async fn add_game_form(
         pool.begin().await.map_err(Error::from)?,
         &Some(me),
         &uri,
-        PageStyle { kind: PageKind::Other, ..PageStyle::default() },
+        PageStyle {
+            kind: PageKind::Other,
+            ..PageStyle::default()
+        },
         "Add New Game — Admin Panel",
         content,
-    ).await.map_err(Error::from)?)
+    )
+    .await
+    .map_err(Error::from)?)
 }
 
 #[rocket::post("/admin/game/add", data = "<form>")]
@@ -271,7 +284,12 @@ pub(crate) async fn add_game_post(
     let discord_guild = if form.discord_guild.trim().is_empty() {
         None
     } else {
-        Some(form.discord_guild.trim().parse::<i64>().map_err(|_| StatusOrError::Status(Status::BadRequest))?)
+        Some(
+            form.discord_guild
+                .trim()
+                .parse::<i64>()
+                .map_err(|_| StatusOrError::Status(Status::BadRequest))?,
+        )
     };
     sqlx::query!(
         r#"INSERT INTO games (name, display_name, description, discord_guild) VALUES ($1, $2, $3, $4)"#,
@@ -314,11 +332,21 @@ pub(crate) async fn edit_game(
     form.verify(&csrf);
 
     if let Some(ref value) = form.value {
-        let description = if value.description.trim().is_empty() { None } else { Some(value.description.trim()) };
+        let description = if value.description.trim().is_empty() {
+            None
+        } else {
+            Some(value.description.trim())
+        };
         let discord_guild = if value.discord_guild.trim().is_empty() {
             None
         } else {
-            Some(value.discord_guild.trim().parse::<i64>().map_err(|_| StatusOrError::Status(Status::BadRequest))?)
+            Some(
+                value
+                    .discord_guild
+                    .trim()
+                    .parse::<i64>()
+                    .map_err(|_| StatusOrError::Status(Status::BadRequest))?,
+            )
         };
         let mut transaction = pool.begin().await.map_err(Error::from)?;
         sqlx::query!(
@@ -364,20 +392,26 @@ pub(crate) async fn remove_game_admin(
     }
     let mut form = form.into_inner();
     form.verify(&csrf);
-    
+
     if form.value.is_some() {
         let mut transaction = pool.begin().await.map_err(Error::from)?;
         let game = Game::from_name(&mut transaction, game_name)
-            .await.map_err(Error::from)?
+            .await
+            .map_err(Error::from)?
             .ok_or(StatusOrError::Status(Status::NotFound))?;
         // Only remove if the user is currently an admin
         let admins = game.admins(&mut transaction).await.map_err(Error::from)?;
         if !admins.iter().any(|u| u.id == admin_id) {
             return Ok(Redirect::to(uri!(manage_game_admins(game_name))));
         }
-        sqlx::query!("DELETE FROM game_admins WHERE game_id = $1 AND admin_id = $2", game.id, i64::from(admin_id))
-            .execute(&mut *transaction)
-            .await.map_err(Error::from)?;
+        sqlx::query!(
+            "DELETE FROM game_admins WHERE game_id = $1 AND admin_id = $2",
+            game.id,
+            i64::from(admin_id)
+        )
+        .execute(&mut *transaction)
+        .await
+        .map_err(Error::from)?;
         transaction.commit().await.map_err(Error::from)?;
     }
     Ok(Redirect::to(uri!(manage_game_admins(game_name))))
@@ -398,39 +432,41 @@ pub(crate) async fn add_game_admin(
     }
     let mut form = form.into_inner();
     form.verify(&csrf);
-    
+
     if let Some(ref value) = form.value {
         let mut transaction = pool.begin().await.map_err(Error::from)?;
         let game = Game::from_name(&mut transaction, game_name)
-            .await.map_err(Error::from)?
+            .await
+            .map_err(Error::from)?
             .ok_or(StatusOrError::Status(Status::NotFound))?;
-        
+
         // Check if user is trez or a game admin
         let is_global_admin = me.is_global_admin();
         let is_game_admin = if !is_global_admin {
-            is_game_admin(&me, &game, &mut transaction).await.map_err(Error::from)?
+            is_game_admin(&me, &game, &mut transaction)
+                .await
+                .map_err(Error::from)?
         } else {
             false
         };
-        
+
         if !is_global_admin && !is_game_admin {
             return Err(StatusOrError::Err(Error::Unauthorized));
         }
-        
+
         // Parse user ID from form
         let admin_id = match value.admin.parse::<u64>() {
-            Ok(id) => {
-                Id::<Users>::from(id)
-            },
+            Ok(id) => Id::<Users>::from(id),
             Err(_) => {
                 return Ok(Redirect::to(uri!(manage_game_admins(game_name))));
             }
         };
         // Check if user exists
-        let _user = match User::from_id(&mut *transaction, admin_id).await.map_err(Error::from)? {
-            Some(u) => {
-                u
-            },
+        let _user = match User::from_id(&mut *transaction, admin_id)
+            .await
+            .map_err(Error::from)?
+        {
+            Some(u) => u,
             None => {
                 return Ok(Redirect::to(uri!(manage_game_admins(game_name))));
             }
@@ -440,7 +476,7 @@ pub(crate) async fn add_game_admin(
         if admins.iter().any(|u| u.id == admin_id) {
             return Ok(Redirect::to(uri!(manage_game_admins(game_name))));
         }
-        
+
         // Add user as admin
         sqlx::query!(
             r#"INSERT INTO game_admins (game_id, admin_id) VALUES ($1, $2)"#,
@@ -464,24 +500,27 @@ pub(crate) async fn manage_game_admins(
     game_name: &str,
 ) -> Result<RawHtml<String>, StatusOrError<Error>> {
     let me = me.ok_or(Error::Unauthorized)?;
-    
+
     let mut transaction = pool.begin().await.map_err(Error::from)?;
     let game = Game::from_name(&mut transaction, game_name)
-        .await.map_err(Error::from)?
+        .await
+        .map_err(Error::from)?
         .ok_or(StatusOrError::Status(Status::NotFound))?;
-    
+
     // Check if user is trez or a game admin
     let is_global_admin = me.is_global_admin();
     let is_game_admin = if !is_global_admin {
-        is_game_admin(&me, &game, &mut transaction).await.map_err(Error::from)?
+        is_game_admin(&me, &game, &mut transaction)
+            .await
+            .map_err(Error::from)?
     } else {
         false
     };
-    
+
     if !is_global_admin && !is_game_admin {
         return Err(Error::Unauthorized.into());
     }
-    
+
     let admins = game.admins(&mut transaction).await.map_err(Error::from)?;
     transaction.commit().await.map_err(Error::from)?;
 
@@ -491,7 +530,7 @@ pub(crate) async fn manage_game_admins(
     let content = html! {
         article {
             h1 : format!("Manage Admins — {}", game_display_name);
-            
+
             h2 : "Current Admins";
             @if admins.is_empty() {
                 p : "No admins assigned to this game.";
@@ -508,7 +547,7 @@ pub(crate) async fn manage_game_admins(
                     }
                 }
             }
-            
+
             h2 : "Add Admin";
             form(method = "post", action = uri!(add_game_admin(&game_name_clone))) {
                 : csrf;
@@ -532,12 +571,16 @@ pub(crate) async fn manage_game_admins(
         pool.begin().await.map_err(Error::from)?,
         &Some(me),
         &uri,
-        PageStyle { kind: PageKind::Other, ..PageStyle::default() },
+        PageStyle {
+            kind: PageKind::Other,
+            ..PageStyle::default()
+        },
         &format!("Manage Admins — {}", game_display_name),
         content,
-    ).await.map_err(Error::from)?)
+    )
+    .await
+    .map_err(Error::from)?)
 }
-
 
 #[rocket::get("/admin/game-management")]
 pub(crate) async fn game_management_overview(
@@ -546,30 +589,34 @@ pub(crate) async fn game_management_overview(
     uri: Origin<'_>,
 ) -> Result<RawHtml<String>, StatusOrError<Error>> {
     let me = me.ok_or(Error::Unauthorized)?;
-    
+
     // Check if user is trez or has any game admin access
     let is_global_admin = me.is_global_admin();
     let has_game_admin_access = if !is_global_admin {
         let mut transaction = pool.begin().await.map_err(Error::from)?;
-        let accessible_games = get_accessible_games(&me, &mut transaction).await.map_err(Error::from)?;
+        let accessible_games = get_accessible_games(&me, &mut transaction)
+            .await
+            .map_err(Error::from)?;
         transaction.commit().await.map_err(Error::from)?;
         !accessible_games.is_empty()
     } else {
         true
     };
-    
+
     if !is_global_admin && !has_game_admin_access {
         return Err(StatusOrError::Err(Error::Unauthorized));
     }
 
     let mut transaction = pool.begin().await.map_err(Error::from)?;
-    let games = get_accessible_games(&me, &mut transaction).await.map_err(Error::from)?;
+    let games = get_accessible_games(&me, &mut transaction)
+        .await
+        .map_err(Error::from)?;
     transaction.commit().await.map_err(Error::from)?;
 
     let content = html! {
         article {
             h1 : "Game Management";
-            
+
             @if games.is_empty() {
                 p : "No games available for management.";
             } else {
@@ -587,7 +634,7 @@ pub(crate) async fn game_management_overview(
                     }
                 }
             }
-            
+
             @if is_global_admin {
                 p {
                     a(href = uri!(index)) : "← Back to Admin Panel";
@@ -604,10 +651,15 @@ pub(crate) async fn game_management_overview(
         pool.begin().await.map_err(Error::from)?,
         &Some(me),
         &uri,
-        PageStyle { kind: PageKind::Other, ..PageStyle::default() },
+        PageStyle {
+            kind: PageKind::Other,
+            ..PageStyle::default()
+        },
         "Game Management — Hyrule Town Hall",
         content,
-    ).await.map_err(Error::from)?)
+    )
+    .await
+    .map_err(Error::from)?)
 }
 
 // ============================================================================
@@ -627,7 +679,9 @@ pub(crate) async fn zsr_backends(
     }
 
     let mut transaction = pool.begin().await.map_err(Error::from)?;
-    let backends = crate::zsr_export::RestreamingBackend::all(&mut transaction).await.map_err(Error::from)?;
+    let backends = crate::zsr_export::RestreamingBackend::all(&mut transaction)
+        .await
+        .map_err(Error::from)?;
     transaction.commit().await.map_err(Error::from)?;
 
     let content = html! {
@@ -743,10 +797,15 @@ pub(crate) async fn zsr_backends(
         pool.begin().await.map_err(Error::from)?,
         &Some(me),
         &uri,
-        PageStyle { kind: PageKind::Other, ..PageStyle::default() },
+        PageStyle {
+            kind: PageKind::Other,
+            ..PageStyle::default()
+        },
         "ZSR Backends — Hyrule Town Hall",
         content,
-    ).await.map_err(Error::from)?)
+    )
+    .await
+    .map_err(Error::from)?)
 }
 
 #[derive(Debug, FromForm, CsrfForm)]
@@ -792,13 +851,18 @@ pub(crate) async fn add_zsr_backend(
             &value.hth_export_id_col,
             &value.commentators_col,
             &value.trackers_col,
-            value.restream_channel_col.as_deref().filter(|s| !s.is_empty()),
+            value
+                .restream_channel_col
+                .as_deref()
+                .filter(|s| !s.is_empty()),
             &value.notes_col,
             &value.dst_formula_standard,
             &value.dst_formula_dst,
             value.api_endpoint.as_deref().filter(|s| !s.is_empty()),
             value.api_secret.as_deref().filter(|s| !s.is_empty()),
-        ).await.map_err(Error::from)?;
+        )
+        .await
+        .map_err(Error::from)?;
 
         transaction.commit().await.map_err(Error::from)?;
     }
@@ -820,7 +884,8 @@ pub(crate) async fn edit_zsr_backend(
     }
 
     let mut transaction = pool.begin().await.map_err(Error::from)?;
-    let backend = crate::zsr_export::RestreamingBackend::from_id(&mut transaction, backend_id).await
+    let backend = crate::zsr_export::RestreamingBackend::from_id(&mut transaction, backend_id)
+        .await
         .map_err(Error::from)?
         .ok_or(StatusOrError::Status(Status::NotFound))?;
     transaction.commit().await.map_err(Error::from)?;
@@ -901,10 +966,15 @@ pub(crate) async fn edit_zsr_backend(
         pool.begin().await.map_err(Error::from)?,
         &Some(me),
         &uri,
-        PageStyle { kind: PageKind::Other, ..PageStyle::default() },
+        PageStyle {
+            kind: PageKind::Other,
+            ..PageStyle::default()
+        },
         &format!("Edit Backend — {}", backend.name),
         content,
-    ).await.map_err(Error::from)?)
+    )
+    .await
+    .map_err(Error::from)?)
 }
 
 #[rocket::post("/admin/zsr-backends/<backend_id>/edit", data = "<form>")]
@@ -934,13 +1004,18 @@ pub(crate) async fn update_zsr_backend(
             &value.hth_export_id_col,
             &value.commentators_col,
             &value.trackers_col,
-            value.restream_channel_col.as_deref().filter(|s| !s.is_empty()),
+            value
+                .restream_channel_col
+                .as_deref()
+                .filter(|s| !s.is_empty()),
             &value.notes_col,
             &value.dst_formula_standard,
             &value.dst_formula_dst,
             value.api_endpoint.as_deref().filter(|s| !s.is_empty()),
             value.api_secret.as_deref().filter(|s| !s.is_empty()),
-        ).await.map_err(Error::from)?;
+        )
+        .await
+        .map_err(Error::from)?;
 
         transaction.commit().await.map_err(Error::from)?;
     }
@@ -971,7 +1046,9 @@ pub(crate) async fn delete_zsr_backend(
 
     if form.value.is_some() {
         let mut transaction = pool.begin().await.map_err(Error::from)?;
-        crate::zsr_export::RestreamingBackend::delete(&mut transaction, backend_id).await.map_err(Error::from)?;
+        crate::zsr_export::RestreamingBackend::delete(&mut transaction, backend_id)
+            .await
+            .map_err(Error::from)?;
         transaction.commit().await.map_err(Error::from)?;
     }
 
@@ -986,7 +1063,9 @@ pub(crate) fn normalize_restream_url_pattern(s: &str) -> String {
         .strip_prefix("https://")
         .or_else(|| s.strip_prefix("http://"))
         .unwrap_or(s);
-    let without_www = without_scheme.strip_prefix("www.").unwrap_or(without_scheme);
+    let without_www = without_scheme
+        .strip_prefix("www.")
+        .unwrap_or(without_scheme);
     without_www.trim_end_matches('/').to_lowercase()
 }
 
@@ -1098,10 +1177,15 @@ pub(crate) async fn list_restream_channels(
         pool.begin().await.map_err(Error::from)?,
         &Some(me),
         &uri,
-        PageStyle { kind: PageKind::Other, ..PageStyle::default() },
+        PageStyle {
+            kind: PageKind::Other,
+            ..PageStyle::default()
+        },
         "Restream Channels — Hyrule Town Hall",
         content,
-    ).await.map_err(Error::from)?)
+    )
+    .await
+    .map_err(Error::from)?)
 }
 
 #[derive(Debug, FromForm, CsrfForm)]
@@ -1213,10 +1297,15 @@ pub(crate) async fn edit_restream_channel_form(
         pool.begin().await.map_err(Error::from)?,
         &Some(me),
         &uri,
-        PageStyle { kind: PageKind::Other, ..PageStyle::default() },
+        PageStyle {
+            kind: PageKind::Other,
+            ..PageStyle::default()
+        },
         &format!("Edit Restream Channel — {}", ch.url_pattern),
         content,
-    ).await.map_err(Error::from)?)
+    )
+    .await
+    .map_err(Error::from)?)
 }
 
 #[rocket::post("/admin/restream-channels/<id>/edit", data = "<form>")]
@@ -1319,13 +1408,18 @@ pub(crate) async fn add_game_ping_workflow(
     let me = me.ok_or(Error::Unauthorized)?;
     let mut transaction = pool.begin().await.map_err(Error::from)?;
     let game = Game::from_name(&mut transaction, game_name)
-        .await.map_err(Error::from)?
+        .await
+        .map_err(Error::from)?
         .ok_or(StatusOrError::Status(Status::NotFound))?;
 
     let is_global_admin = me.is_global_admin();
     let is_admin = if !is_global_admin {
-        is_game_admin(&me, &game, &mut transaction).await.map_err(Error::from)?
-    } else { false };
+        is_game_admin(&me, &game, &mut transaction)
+            .await
+            .map_err(Error::from)?
+    } else {
+        false
+    };
     if !is_global_admin && !is_admin {
         return Err(Error::Unauthorized.into());
     }
@@ -1338,7 +1432,11 @@ pub(crate) async fn add_game_ping_workflow(
         let is_per_race = value.workflow_type == "per_race";
 
         if !is_scheduled && !is_per_race {
-            return Ok(Redirect::to(uri!(crate::games::manage_roles(game_name, _, _))));
+            return Ok(Redirect::to(uri!(crate::games::manage_roles(
+                game_name,
+                _,
+                _
+            ))));
         }
 
         let discord_ping_channel = if value.discord_ping_channel.is_empty() {
@@ -1348,7 +1446,11 @@ pub(crate) async fn add_game_ping_workflow(
         };
 
         if is_scheduled {
-            let ping_interval = if value.ping_interval == "weekly" { "weekly" } else { "daily" };
+            let ping_interval = if value.ping_interval == "weekly" {
+                "weekly"
+            } else {
+                "daily"
+            };
             let schedule_time_str = if value.schedule_time.is_empty() {
                 "18:00".to_string()
             } else {
@@ -1391,7 +1493,9 @@ pub(crate) async fn add_game_ping_workflow(
 
             for part in value.lead_times.split(',') {
                 let part = part.trim();
-                if part.is_empty() { continue; }
+                if part.is_empty() {
+                    continue;
+                }
                 if let Ok(hours) = part.parse::<i32>() {
                     if hours >= 1 {
                         sqlx::query!(
@@ -1410,7 +1514,11 @@ pub(crate) async fn add_game_ping_workflow(
         transaction.commit().await.map_err(Error::from)?;
     }
 
-    Ok(Redirect::to(uri!(crate::games::manage_roles(game_name, _, _))))
+    Ok(Redirect::to(uri!(crate::games::manage_roles(
+        game_name,
+        _,
+        _
+    ))))
 }
 
 #[derive(FromForm, CsrfForm)]
@@ -1419,7 +1527,10 @@ pub(crate) struct DeleteGamePingWorkflowForm {
     csrf: String,
 }
 
-#[rocket::post("/game/<game_name>/ping-workflows/<workflow_id>/delete", data = "<form>")]
+#[rocket::post(
+    "/game/<game_name>/ping-workflows/<workflow_id>/delete",
+    data = "<form>"
+)]
 pub(crate) async fn delete_game_ping_workflow(
     pool: &State<PgPool>,
     me: Option<User>,
@@ -1431,13 +1542,18 @@ pub(crate) async fn delete_game_ping_workflow(
     let me = me.ok_or(Error::Unauthorized)?;
     let mut transaction = pool.begin().await.map_err(Error::from)?;
     let game = Game::from_name(&mut transaction, game_name)
-        .await.map_err(Error::from)?
+        .await
+        .map_err(Error::from)?
         .ok_or(StatusOrError::Status(Status::NotFound))?;
 
     let is_global_admin = me.is_global_admin();
     let is_admin = if !is_global_admin {
-        is_game_admin(&me, &game, &mut transaction).await.map_err(Error::from)?
-    } else { false };
+        is_game_admin(&me, &game, &mut transaction)
+            .await
+            .map_err(Error::from)?
+    } else {
+        false
+    };
     if !is_global_admin && !is_admin {
         return Err(Error::Unauthorized.into());
     }
@@ -1457,7 +1573,11 @@ pub(crate) async fn delete_game_ping_workflow(
         transaction.commit().await.map_err(Error::from)?;
     }
 
-    Ok(Redirect::to(uri!(crate::games::manage_roles(game_name, _, _))))
+    Ok(Redirect::to(uri!(crate::games::manage_roles(
+        game_name,
+        _,
+        _
+    ))))
 }
 
 #[derive(FromForm, CsrfForm)]
@@ -1490,13 +1610,18 @@ pub(crate) async fn edit_game_ping_workflow(
     let me = me.ok_or(Error::Unauthorized)?;
     let mut transaction = pool.begin().await.map_err(Error::from)?;
     let game = Game::from_name(&mut transaction, game_name)
-        .await.map_err(Error::from)?
+        .await
+        .map_err(Error::from)?
         .ok_or(StatusOrError::Status(Status::NotFound))?;
 
     let is_global_admin = me.is_global_admin();
     let is_admin = if !is_global_admin {
-        is_game_admin(&me, &game, &mut transaction).await.map_err(Error::from)?
-    } else { false };
+        is_game_admin(&me, &game, &mut transaction)
+            .await
+            .map_err(Error::from)?
+    } else {
+        false
+    };
     if !is_global_admin && !is_admin {
         return Err(Error::Unauthorized.into());
     }
@@ -1524,7 +1649,11 @@ pub(crate) async fn edit_game_ping_workflow(
         if let Some(wf) = wf {
             match wf.workflow_type {
                 crate::volunteer_pings::PingWorkflowTypeDb::Scheduled => {
-                    let ping_interval = if value.ping_interval == "weekly" { "weekly" } else { "daily" };
+                    let ping_interval = if value.ping_interval == "weekly" {
+                        "weekly"
+                    } else {
+                        "daily"
+                    };
                     let schedule_time_str = if value.schedule_time.is_empty() {
                         "18:00".to_string()
                     } else {
@@ -1563,14 +1692,19 @@ pub(crate) async fn edit_game_ping_workflow(
                     .await
                     .map_err(Error::from)?;
 
-                    sqlx::query!("DELETE FROM volunteer_ping_lead_times WHERE workflow_id = $1", workflow_id)
-                        .execute(&mut *transaction)
-                        .await
-                        .map_err(Error::from)?;
+                    sqlx::query!(
+                        "DELETE FROM volunteer_ping_lead_times WHERE workflow_id = $1",
+                        workflow_id
+                    )
+                    .execute(&mut *transaction)
+                    .await
+                    .map_err(Error::from)?;
 
                     for part in value.lead_times.split(',') {
                         let part = part.trim();
-                        if part.is_empty() { continue; }
+                        if part.is_empty() {
+                            continue;
+                        }
                         if let Ok(hours) = part.parse::<i32>() {
                             if hours >= 1 {
                                 sqlx::query!(
@@ -1600,7 +1734,10 @@ pub(crate) struct AddGamePingWorkflowLeadTimeForm {
     lead_time_hours: i32,
 }
 
-#[rocket::post("/game/<game_name>/ping-workflows/<workflow_id>/lead-time/add", data = "<form>")]
+#[rocket::post(
+    "/game/<game_name>/ping-workflows/<workflow_id>/lead-time/add",
+    data = "<form>"
+)]
 pub(crate) async fn add_game_ping_workflow_lead_time(
     pool: &State<PgPool>,
     me: Option<User>,
@@ -1612,13 +1749,18 @@ pub(crate) async fn add_game_ping_workflow_lead_time(
     let me = me.ok_or(Error::Unauthorized)?;
     let mut transaction = pool.begin().await.map_err(Error::from)?;
     let game = Game::from_name(&mut transaction, game_name)
-        .await.map_err(Error::from)?
+        .await
+        .map_err(Error::from)?
         .ok_or(StatusOrError::Status(Status::NotFound))?;
 
     let is_global_admin = me.is_global_admin();
     let is_admin = if !is_global_admin {
-        is_game_admin(&me, &game, &mut transaction).await.map_err(Error::from)?
-    } else { false };
+        is_game_admin(&me, &game, &mut transaction)
+            .await
+            .map_err(Error::from)?
+    } else {
+        false
+    };
     if !is_global_admin && !is_admin {
         return Err(Error::Unauthorized.into());
     }
@@ -1640,7 +1782,11 @@ pub(crate) async fn add_game_ping_workflow_lead_time(
         }
     }
 
-    Ok(Redirect::to(uri!(crate::games::manage_roles(game_name, _, _))))
+    Ok(Redirect::to(uri!(crate::games::manage_roles(
+        game_name,
+        _,
+        _
+    ))))
 }
 
 #[derive(FromForm, CsrfForm)]
@@ -1649,7 +1795,10 @@ pub(crate) struct DeleteGamePingWorkflowLeadTimeForm {
     csrf: String,
 }
 
-#[rocket::post("/game/<game_name>/ping-workflows/<workflow_id>/lead-time/<hours>/delete", data = "<form>")]
+#[rocket::post(
+    "/game/<game_name>/ping-workflows/<workflow_id>/lead-time/<hours>/delete",
+    data = "<form>"
+)]
 pub(crate) async fn delete_game_ping_workflow_lead_time(
     pool: &State<PgPool>,
     me: Option<User>,
@@ -1662,13 +1811,18 @@ pub(crate) async fn delete_game_ping_workflow_lead_time(
     let me = me.ok_or(Error::Unauthorized)?;
     let mut transaction = pool.begin().await.map_err(Error::from)?;
     let game = Game::from_name(&mut transaction, game_name)
-        .await.map_err(Error::from)?
+        .await
+        .map_err(Error::from)?
         .ok_or(StatusOrError::Status(Status::NotFound))?;
 
     let is_global_admin = me.is_global_admin();
     let is_admin = if !is_global_admin {
-        is_game_admin(&me, &game, &mut transaction).await.map_err(Error::from)?
-    } else { false };
+        is_game_admin(&me, &game, &mut transaction)
+            .await
+            .map_err(Error::from)?
+    } else {
+        false
+    };
     if !is_global_admin && !is_admin {
         return Err(Error::Unauthorized.into());
     }
@@ -1688,5 +1842,9 @@ pub(crate) async fn delete_game_ping_workflow_lead_time(
         transaction.commit().await.map_err(Error::from)?;
     }
 
-    Ok(Redirect::to(uri!(crate::games::manage_roles(game_name, _, _))))
+    Ok(Redirect::to(uri!(crate::games::manage_roles(
+        game_name,
+        _,
+        _
+    ))))
 }

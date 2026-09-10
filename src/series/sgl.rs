@@ -1,15 +1,13 @@
 use crate::{
-    event::{
-        Data,
-        InfoError,
-    },
+    event::{Data, InfoError},
     prelude::*,
 };
 
 /// Rate limit once per minute according to DMs with tsigma6
 const RATE_LIMIT: Duration = Duration::from_secs(60);
 
-static CACHE: LazyLock<Mutex<(Instant, Schedule)>> = LazyLock::new(|| Mutex::new((Instant::now() + RATE_LIMIT, Schedule::default())));
+static CACHE: LazyLock<Mutex<(Instant, Schedule)>> =
+    LazyLock::new(|| Mutex::new((Instant::now() + RATE_LIMIT, Schedule::default())));
 
 #[derive(Clone, Deserialize)]
 pub(crate) struct RestreamMatch {
@@ -19,25 +17,41 @@ pub(crate) struct RestreamMatch {
 }
 
 impl RestreamMatch {
-    pub(crate) async fn matches(&self, transaction: &mut Transaction<'_, Postgres>, http_client: &reqwest::Client, race: &Race) -> Result<bool, cal::Error> {
-        Ok(if race.phase.as_ref().is_some_and(|phase| phase == "Qualifier") {
-            let Some((_, match_round)) = regex_captures!("^Qualifier #([0-9]+)$", &self.title) else { return Ok(false) };
-            race.round.as_ref().is_some_and(|race_round| race_round == match_round)
+    pub(crate) async fn matches(
+        &self,
+        transaction: &mut Transaction<'_, Postgres>,
+        http_client: &reqwest::Client,
+        race: &Race,
+    ) -> Result<bool, cal::Error> {
+        Ok(if race.is_qualifier {
+            let Some((_, match_round)) = regex_captures!("^Qualifier #([0-9]+)$", &self.title)
+            else {
+                return Ok(false);
+            };
+            race.round
+                .as_ref()
+                .is_some_and(|race_round| race_round == match_round)
         } else {
             match &race.entrants {
-                Entrants::Open | Entrants::Count { .. } | Entrants::Named(_) | Entrants::Many(_) => false,
+                Entrants::Open
+                | Entrants::Count { .. }
+                | Entrants::Named(_)
+                | Entrants::Many(_) => false,
                 Entrants::Two(entrants) => {
                     if self.players.len() == 2 {
                         for players in self.players.iter().permutations(2) {
                             let mut all_match = true;
                             for (entrant, player) in entrants.iter().zip_eq(players) {
-                                if !player.matches(&mut *transaction, http_client, entrant).await? {
+                                if !player
+                                    .matches(&mut *transaction, http_client, entrant)
+                                    .await?
+                                {
                                     all_match = false;
-                                    break
+                                    break;
                                 }
                             }
                             if all_match {
-                                return Ok(true)
+                                return Ok(true);
                             }
                         }
                     }
@@ -48,13 +62,16 @@ impl RestreamMatch {
                         for players in self.players.iter().permutations(3) {
                             let mut all_match = true;
                             for (entrant, player) in entrants.iter().zip_eq(players) {
-                                if !player.matches(&mut *transaction, http_client, entrant).await? {
+                                if !player
+                                    .matches(&mut *transaction, http_client, entrant)
+                                    .await?
+                                {
                                     all_match = false;
-                                    break
+                                    break;
                                 }
                             }
                             if all_match {
-                                return Ok(true)
+                                return Ok(true);
                             }
                         }
                     }
@@ -68,7 +85,14 @@ impl RestreamMatch {
 impl fmt::Display for RestreamMatch {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.title.is_empty() {
-            write!(f, "{}", self.players.iter().map(|player| &player.streaming_from).format(" vs "))
+            write!(
+                f,
+                "{}",
+                self.players
+                    .iter()
+                    .map(|player| &player.streaming_from)
+                    .format(" vs ")
+            )
         } else {
             self.title.fmt(f)
         }
@@ -88,7 +112,12 @@ struct Player {
 }
 
 impl Player {
-    async fn matches(&self, transaction: &mut Transaction<'_, Postgres>, http_client: &reqwest::Client, entrant: &Entrant) -> Result<bool, cal::Error> {
+    async fn matches(
+        &self,
+        transaction: &mut Transaction<'_, Postgres>,
+        http_client: &reqwest::Client,
+        entrant: &Entrant,
+    ) -> Result<bool, cal::Error> {
         Ok(match entrant {
             Entrant::MidosHouseTeam(team) => if_chain! {
                 if let Ok(member) = team.members(transaction).await?.into_iter().exactly_one();
@@ -100,8 +129,22 @@ impl Player {
                     false
                 }
             },
-            Entrant::Discord { twitch_username: None, .. } | Entrant::Named { twitch_username: None, .. } => false,
-            Entrant::Discord { twitch_username: Some(username), .. } | Entrant::Named { twitch_username: Some(username), .. } => username.eq_ignore_ascii_case(&self.streaming_from),
+            Entrant::Discord {
+                twitch_username: None,
+                ..
+            }
+            | Entrant::Named {
+                twitch_username: None,
+                ..
+            } => false,
+            Entrant::Discord {
+                twitch_username: Some(username),
+                ..
+            }
+            | Entrant::Named {
+                twitch_username: Some(username),
+                ..
+            } => username.eq_ignore_ascii_case(&self.streaming_from),
         })
     }
 }
@@ -121,14 +164,23 @@ impl Restream {
     }
 
     pub(crate) fn update_race(&self, race: &mut Race, id: i64) -> Result<(), url::ParseError> {
-        if !race.cal_events().any(|cal_event| cal_event.room().is_some()) { // don't mess with starting time if room already open
-            assert!(matches!(mem::replace(&mut race.source, cal::Source::SpeedGaming { id }), cal::Source::Manual | cal::Source::SpeedGaming { id: _ }));
+        if !race
+            .cal_events()
+            .any(|cal_event| cal_event.room().is_some())
+        {
+            // don't mess with starting time if room already open
+            assert!(matches!(
+                mem::replace(&mut race.source, cal::Source::SpeedGaming { id }),
+                cal::Source::Manual | cal::Source::SpeedGaming { id: _ }
+            ));
             race.schedule.set_live_start(self.when_countdown);
             //TODO if schedule changed, post notice in scheduling thread, open room if short notice
         }
         if !race.schedule_locked {
             for channel in &self.channels {
-                if matches!(channel.slug.as_str(), "norestream" | "nostream") { continue }
+                if matches!(channel.slug.as_str(), "norestream" | "nostream") {
+                    continue;
+                }
                 if let hash_map::Entry::Vacant(entry) = race.video_urls.entry(channel.language) {
                     let video_url = Url::parse(&format!("https://twitch.tv/{}", channel.slug))?;
                     entry.insert(video_url);
@@ -142,7 +194,10 @@ impl Restream {
 
 pub(crate) type Schedule = Vec<Restream>;
 
-pub(crate) async fn schedule(http_client: &reqwest::Client, event_slug: &str) -> wheel::Result<Schedule> {
+pub(crate) async fn schedule(
+    http_client: &reqwest::Client,
+    event_slug: &str,
+) -> wheel::Result<Schedule> {
     let now = Utc::now();
     lock!(cache = CACHE; {
         let (ref mut next_request, ref mut cache) = *cache;
@@ -162,149 +217,140 @@ pub(crate) async fn schedule(http_client: &reqwest::Client, event_slug: &str) ->
     })
 }
 
-pub(crate) async fn info(transaction: &mut Transaction<'_, Postgres>, data: &Data<'_>) -> Result<Option<RawHtml<String>>, InfoError> {
+pub(crate) async fn info(
+    transaction: &mut Transaction<'_, Postgres>,
+    data: &Data<'_>,
+) -> Result<Option<RawHtml<String>>, InfoError> {
     Ok(match &*data.event {
-        "2023onl" => {
-            Some(html! {
-                article {
-                    p {
-                        : "Welcome to the 2023 SpeedGaming Live online OoTR tournament, organized by ";
-                        : English.join_html_opt(data.organizers(&mut *transaction).await?);
-                        : ".";
-                        h2 : "See also";
-                        ul {
-                            li {
-                                a(href = "https://docs.google.com/document/d/1EACqBl8ZOreD6xT5jQ2HrdLOnpBpKyjS3FUYK8XFeqg/edit") : "Rules document";
-                            }
-                            li {
-                                a(href = "https://sglive.speedgaming.org/") : "Main SGL event page";
-                            }
-                            li {
-                                a(href = "https://discord.gg/YGzQsUp") : "Main SGL Discord";
-                            }
+        "2023onl" => Some(html! {
+            article {
+                p {
+                    : "Welcome to the 2023 SpeedGaming Live online OoTR tournament, organized by ";
+                    : English.join_html_opt(data.organizers(&mut *transaction).await?);
+                    : ".";
+                    h2 : "See also";
+                    ul {
+                        li {
+                            a(href = "https://docs.google.com/document/d/1EACqBl8ZOreD6xT5jQ2HrdLOnpBpKyjS3FUYK8XFeqg/edit") : "Rules document";
+                        }
+                        li {
+                            a(href = "https://sglive.speedgaming.org/") : "Main SGL event page";
+                        }
+                        li {
+                            a(href = "https://discord.gg/YGzQsUp") : "Main SGL Discord";
                         }
                     }
                 }
-            })
-        }
-        "2023live" => {
-            Some(html! {
-                article {
-                    p {
-                        : "Welcome to the 2023 SpeedGaming Live in-person OoTR tournament, organized by ";
-                        : English.join_html_opt(data.organizers(&mut *transaction).await?);
-                        : ".";
-                        h2 : "See also";
-                        ul {
-                            li {
-                                a(href = "https://docs.google.com/document/d/1EACqBl8ZOreD6xT5jQ2HrdLOnpBpKyjS3FUYK8XFeqg/edit") : "Rules document";
-                            }
-                            li {
-                                a(href = "https://sglive.speedgaming.org/") : "Main SGL event page";
-                            }
-                            li {
-                                a(href = "https://matcherino.com/t/sglive23") : "Matcherino";
-                            }
-                            li {
-                                a(href = "https://discord.gg/YGzQsUp") : "Main SGL Discord";
-                            }
+            }
+        }),
+        "2023live" => Some(html! {
+            article {
+                p {
+                    : "Welcome to the 2023 SpeedGaming Live in-person OoTR tournament, organized by ";
+                    : English.join_html_opt(data.organizers(&mut *transaction).await?);
+                    : ".";
+                    h2 : "See also";
+                    ul {
+                        li {
+                            a(href = "https://docs.google.com/document/d/1EACqBl8ZOreD6xT5jQ2HrdLOnpBpKyjS3FUYK8XFeqg/edit") : "Rules document";
+                        }
+                        li {
+                            a(href = "https://sglive.speedgaming.org/") : "Main SGL event page";
+                        }
+                        li {
+                            a(href = "https://matcherino.com/t/sglive23") : "Matcherino";
+                        }
+                        li {
+                            a(href = "https://discord.gg/YGzQsUp") : "Main SGL Discord";
                         }
                     }
                 }
-            })
-        }
-        "2024onl" => {
-            Some(html! {
-                article {
-                    p {
-                        : "Welcome to the 2024 SpeedGaming Live online OoTR tournament, organized by ";
-                        : English.join_html_opt(data.organizers(&mut *transaction).await?);
-                        : ".";
-                        h2 : "See also";
-                        ul {
-                            li {
-                                a(href = "https://docs.google.com/document/d/1I0IcnGMqKr3QaCgg923SR_SxVu0iytIA_lOhN2ybj9w/edit") : "Rules document";
-                            }
-                            li {
-                                a(href = "https://sglive.speedgaming.org/") : "Main SGL event page";
-                            }
-                            li {
-                                a(href = "https://discord.gg/YGzQsUp") : "Main SGL Discord";
-                            }
+            }
+        }),
+        "2024onl" => Some(html! {
+            article {
+                p {
+                    : "Welcome to the 2024 SpeedGaming Live online OoTR tournament, organized by ";
+                    : English.join_html_opt(data.organizers(&mut *transaction).await?);
+                    : ".";
+                    h2 : "See also";
+                    ul {
+                        li {
+                            a(href = "https://docs.google.com/document/d/1I0IcnGMqKr3QaCgg923SR_SxVu0iytIA_lOhN2ybj9w/edit") : "Rules document";
+                        }
+                        li {
+                            a(href = "https://sglive.speedgaming.org/") : "Main SGL event page";
+                        }
+                        li {
+                            a(href = "https://discord.gg/YGzQsUp") : "Main SGL Discord";
                         }
                     }
                 }
-            })
-        }
-        "2024live" => {
-            Some(html! {
-                article {
-                    p {
-                        : "Welcome to the 2024 SpeedGaming Live in-person OoTR tournament, organized by ";
-                        : English.join_html_opt(data.organizers(&mut *transaction).await?);
-                        : ".";
-                        h2 : "See also";
-                        ul {
-                            li {
-                                a(href = "https://docs.google.com/document/d/1I0IcnGMqKr3QaCgg923SR_SxVu0iytIA_lOhN2ybj9w/edit") : "Rules document";
-                            }
-                            li {
-                                a(href = "https://sglive.speedgaming.org/") : "Main SGL event page";
-                            }
-                            li {
-                                a(href = "https://matcherino.com/t/sglive24") : "Matcherino";
-                            }
-                            li {
-                                a(href = "https://discord.gg/YGzQsUp") : "Main SGL Discord";
-                            }
+            }
+        }),
+        "2024live" => Some(html! {
+            article {
+                p {
+                    : "Welcome to the 2024 SpeedGaming Live in-person OoTR tournament, organized by ";
+                    : English.join_html_opt(data.organizers(&mut *transaction).await?);
+                    : ".";
+                    h2 : "See also";
+                    ul {
+                        li {
+                            a(href = "https://docs.google.com/document/d/1I0IcnGMqKr3QaCgg923SR_SxVu0iytIA_lOhN2ybj9w/edit") : "Rules document";
+                        }
+                        li {
+                            a(href = "https://sglive.speedgaming.org/") : "Main SGL event page";
+                        }
+                        li {
+                            a(href = "https://matcherino.com/t/sglive24") : "Matcherino";
+                        }
+                        li {
+                            a(href = "https://discord.gg/YGzQsUp") : "Main SGL Discord";
                         }
                     }
                 }
-            })
-        }
-        "2025onl" => {
-            Some(html! {
-                article {
-                    p {
-                        : "Welcome to the 2025 SpeedGaming Live online OoTR tournament, organized by ";
-                        : English.join_html_opt(data.organizers(&mut *transaction).await?);
-                        : ".";
-                        h2 : "See also";
-                        ul {
-                            li {
-                                a(href = "https://sglive.speedgaming.org/") : "Main SGL event page";
-                            }
-                            li {
-                                a(href = "https://discord.gg/YGzQsUp") : "Main SGL Discord";
-                            }
+            }
+        }),
+        "2025onl" => Some(html! {
+            article {
+                p {
+                    : "Welcome to the 2025 SpeedGaming Live online OoTR tournament, organized by ";
+                    : English.join_html_opt(data.organizers(&mut *transaction).await?);
+                    : ".";
+                    h2 : "See also";
+                    ul {
+                        li {
+                            a(href = "https://sglive.speedgaming.org/") : "Main SGL event page";
+                        }
+                        li {
+                            a(href = "https://discord.gg/YGzQsUp") : "Main SGL Discord";
                         }
                     }
                 }
-            })
-        }
-        "2025live" => {
-            Some(html! {
-                article {
-                    p {
-                        : "Welcome to the 2025 SpeedGaming Live in-person OoTR tournament, organized by ";
-                        : English.join_html_opt(data.organizers(&mut *transaction).await?);
-                        : ".";
-                        h2 : "See also";
-                        ul {
-                            li {
-                                a(href = "https://sglive.speedgaming.org/") : "Main SGL event page";
-                            }
-                            li {
-                                a(href = "https://matcherino.com/t/sglive25") : "Matcherino";
-                            }
-                            li {
-                                a(href = "https://discord.gg/YGzQsUp") : "Main SGL Discord";
-                            }
+            }
+        }),
+        "2025live" => Some(html! {
+            article {
+                p {
+                    : "Welcome to the 2025 SpeedGaming Live in-person OoTR tournament, organized by ";
+                    : English.join_html_opt(data.organizers(&mut *transaction).await?);
+                    : ".";
+                    h2 : "See also";
+                    ul {
+                        li {
+                            a(href = "https://sglive.speedgaming.org/") : "Main SGL event page";
+                        }
+                        li {
+                            a(href = "https://matcherino.com/t/sglive25") : "Matcherino";
+                        }
+                        li {
+                            a(href = "https://discord.gg/YGzQsUp") : "Main SGL Discord";
                         }
                     }
                 }
-            })
-        }
+            }
+        }),
         _ => None,
     })
 }

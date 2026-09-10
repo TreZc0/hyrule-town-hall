@@ -1,41 +1,23 @@
 use {
     crate::{
+        async_race::{self, Error as AsyncRaceError},
         config::ConfigRaceTime,
         prelude::*,
         racetime_bot::{CleanShutdown, GlobalState},
-        speedgaming_export,
-        async_race::{self, Error as AsyncRaceError},
-        volunteer_requests,
-    }, serenity::all::{
-        CacheHttp,
-        CommandDataOptionValue,
-        Content,
-        CreateActionRow,
-        CreateAllowedMentions,
-        CreateButton,
-        CreateCommand,
-        CreateCommandOption,
-        CreateForumPost,
-        CreateInputText,
-        CreateInteractionResponse,
-        CreateInteractionResponseMessage,
-        CreateMessage,
-        CreateModal,
-        CreateThread,
-        EditInteractionResponse,
-        EditMessage,
-        EditRole,
-        EditThread,
-        InputTextStyle,
-    }, serenity_utils::{
-        builder::ErrorNotifier,
-        handler::HandlerMethods as _,
-    }, sqlx::{
-        types::Json, Database, Decode, Encode, postgres::types::PgInterval
-    }, std::{
+        speedgaming_export, volunteer_requests,
+    },
+    serenity::all::{
+        CacheHttp, CommandDataOptionValue, Content, CreateActionRow, CreateAllowedMentions,
+        CreateButton, CreateCommand, CreateCommandOption, CreateForumPost, CreateInputText,
+        CreateInteractionResponse, CreateInteractionResponseMessage, CreateMessage, CreateModal,
+        CreateThread, EditInteractionResponse, EditMessage, EditRole, EditThread, InputTextStyle,
+    },
+    serenity_utils::{builder::ErrorNotifier, handler::HandlerMethods as _},
+    sqlx::{Database, Decode, Encode, postgres::types::PgInterval, types::Json},
+    std::{
+        cmp::Ordering::{Equal, Greater, Less},
         marker::Sync,
-        cmp::Ordering::{Less, Greater, Equal},
-    }
+    },
 };
 
 pub(crate) const ADMIN_USER: UserId = UserId::new(82783364175630336); // TreZ
@@ -46,8 +28,12 @@ const BUTTONS_PER_PAGE: usize = 25;
 pub(crate) struct PgSnowflake<T>(pub(crate) T);
 
 impl<'r, T: From<NonZero<u64>>, DB: Database> Decode<'r, DB> for PgSnowflake<T>
-where i64: Decode<'r, DB> {
-    fn decode(value: <DB as Database>::ValueRef<'r>) -> Result<Self, Box<dyn std::error::Error + 'static + Send + Sync>> {
+where
+    i64: Decode<'r, DB>,
+{
+    fn decode(
+        value: <DB as Database>::ValueRef<'r>,
+    ) -> Result<Self, Box<dyn std::error::Error + 'static + Send + Sync>> {
         let id = i64::decode(value)?;
         let id = NonZero::try_from(id as u64)?;
         Ok(Self(id.into()))
@@ -55,12 +41,20 @@ where i64: Decode<'r, DB> {
 }
 
 impl<'q, T: Copy + Into<i64>, DB: Database> Encode<'q, DB> for PgSnowflake<T>
-where i64: Encode<'q, DB> {
-    fn encode_by_ref(&self, buf: &mut <DB as Database>::ArgumentBuffer<'q>) -> Result<sqlx::encode::IsNull, Box<dyn std::error::Error + Send + Sync>> {
+where
+    i64: Encode<'q, DB>,
+{
+    fn encode_by_ref(
+        &self,
+        buf: &mut <DB as Database>::ArgumentBuffer<'q>,
+    ) -> Result<sqlx::encode::IsNull, Box<dyn std::error::Error + Send + Sync>> {
         self.0.into().encode(buf)
     }
 
-    fn encode(self, buf: &mut <DB as Database>::ArgumentBuffer<'q>) -> Result<sqlx::encode::IsNull, Box<dyn std::error::Error + Send + Sync>> {
+    fn encode(
+        self,
+        buf: &mut <DB as Database>::ArgumentBuffer<'q>,
+    ) -> Result<sqlx::encode::IsNull, Box<dyn std::error::Error + Send + Sync>> {
         self.0.into().encode(buf)
     }
 
@@ -74,7 +68,9 @@ where i64: Encode<'q, DB> {
 }
 
 impl<T, DB: Database> sqlx::Type<DB> for PgSnowflake<T>
-where i64: sqlx::Type<DB> {
+where
+    i64: sqlx::Type<DB>,
+{
     fn type_info() -> <DB as Database>::TypeInfo {
         i64::type_info()
     }
@@ -86,30 +82,70 @@ where i64: sqlx::Type<DB> {
 
 #[async_trait]
 pub(crate) trait MessageBuilderExt {
-    async fn mention_entrant(&mut self, transaction: &mut Transaction<'_, Postgres>, guild: Option<GuildId>, entrant: &Entrant) -> sqlx::Result<&mut Self>;
-    async fn mention_team(&mut self, transaction: &mut Transaction<'_, Postgres>, guild: Option<GuildId>, team: &Team) -> sqlx::Result<&mut Self>;
+    async fn mention_entrant(
+        &mut self,
+        transaction: &mut Transaction<'_, Postgres>,
+        guild: Option<GuildId>,
+        entrant: &Entrant,
+    ) -> sqlx::Result<&mut Self>;
+    async fn mention_team(
+        &mut self,
+        transaction: &mut Transaction<'_, Postgres>,
+        guild: Option<GuildId>,
+        team: &Team,
+    ) -> sqlx::Result<&mut Self>;
     fn mention_user(&mut self, user: &User) -> &mut Self;
     fn push_emoji(&mut self, emoji: &ReactionType) -> &mut Self;
-    fn push_named_link_no_preview(&mut self, name: impl Into<Content>, url: impl Into<Content>) -> &mut Self;
-    fn push_named_link_safe_no_preview(&mut self, name: impl Into<Content>, url: impl Into<Content>) -> &mut Self;
+    fn push_named_link_no_preview(
+        &mut self,
+        name: impl Into<Content>,
+        url: impl Into<Content>,
+    ) -> &mut Self;
+    fn push_named_link_safe_no_preview(
+        &mut self,
+        name: impl Into<Content>,
+        url: impl Into<Content>,
+    ) -> &mut Self;
 }
 
 #[async_trait]
 impl MessageBuilderExt for MessageBuilder {
-    async fn mention_entrant(&mut self, transaction: &mut Transaction<'_, Postgres>, guild: Option<GuildId>, entrant: &Entrant) -> sqlx::Result<&mut Self> {
+    async fn mention_entrant(
+        &mut self,
+        transaction: &mut Transaction<'_, Postgres>,
+        guild: Option<GuildId>,
+        entrant: &Entrant,
+    ) -> sqlx::Result<&mut Self> {
         match entrant {
-            Entrant::MidosHouseTeam(team) => { self.mention_team(transaction, guild, team).await?; }
-            Entrant::Discord { id,  .. } => { self.mention(id); }
-            Entrant::Named { name, .. } => { self.push_safe(name); }
+            Entrant::MidosHouseTeam(team) => {
+                self.mention_team(transaction, guild, team).await?;
+            }
+            Entrant::Discord { id, .. } => {
+                self.mention(id);
+            }
+            Entrant::Named { name, .. } => {
+                self.push_safe(name);
+            }
         }
         Ok(self)
     }
 
-    async fn mention_team(&mut self, transaction: &mut Transaction<'_, Postgres>, guild: Option<GuildId>, team: &Team) -> sqlx::Result<&mut Self> {
-        if let Ok(member) = team.members(&mut *transaction).await?.into_iter().exactly_one() {
+    async fn mention_team(
+        &mut self,
+        transaction: &mut Transaction<'_, Postgres>,
+        guild: Option<GuildId>,
+        team: &Team,
+    ) -> sqlx::Result<&mut Self> {
+        if let Ok(member) = team
+            .members(&mut *transaction)
+            .await?
+            .into_iter()
+            .exactly_one()
+        {
             self.mention_user(&member);
         } else {
-            let team_role = if let (Some(guild), Some(racetime_slug)) = (guild, &team.racetime_slug) {
+            let team_role = if let (Some(guild), Some(racetime_slug)) = (guild, &team.racetime_slug)
+            {
                 sqlx::query_scalar!(r#"SELECT id AS "id: PgSnowflake<RoleId>" FROM discord_roles WHERE guild = $1 AND racetime_team = $2"#, PgSnowflake(guild) as _, racetime_slug).fetch_optional(&mut **transaction).await?
             } else {
                 None
@@ -118,13 +154,19 @@ impl MessageBuilderExt for MessageBuilder {
                 self.role(team_role);
             } else if let Some(team_name) = team.name(transaction).await? {
                 if let Some(ref racetime_slug) = team.racetime_slug {
-                    self.push_named_link_safe_no_preview(team_name, format!("https://{}/team/{racetime_slug}", racetime_host()));
+                    self.push_named_link_safe_no_preview(
+                        team_name,
+                        format!("https://{}/team/{racetime_slug}", racetime_host()),
+                    );
                 } else {
                     self.push_italic_safe(team_name);
                 }
             } else {
                 if let Some(ref racetime_slug) = team.racetime_slug {
-                    self.push_named_link_safe_no_preview("an unnamed team", format!("https://{}/team/{racetime_slug}", racetime_host()));
+                    self.push_named_link_safe_no_preview(
+                        "an unnamed team",
+                        format!("https://{}/team/{racetime_slug}", racetime_host()),
+                    );
                 } else {
                     self.push("an unnamed team");
                 }
@@ -145,11 +187,19 @@ impl MessageBuilderExt for MessageBuilder {
         self.push(emoji.to_string())
     }
 
-    fn push_named_link_no_preview(&mut self, name: impl Into<Content>, url: impl Into<Content>) -> &mut Self {
+    fn push_named_link_no_preview(
+        &mut self,
+        name: impl Into<Content>,
+        url: impl Into<Content>,
+    ) -> &mut Self {
         self.push_named_link(name, format!("<{}>", url.into()))
     }
 
-    fn push_named_link_safe_no_preview(&mut self, name: impl Into<Content>, url: impl Into<Content>) -> &mut Self {
+    fn push_named_link_safe_no_preview(
+        &mut self,
+        name: impl Into<Content>,
+        url: impl Into<Content>,
+    ) -> &mut Self {
         self.push_named_link_safe(name, format!("<{}>", url.into()))
     }
 }
@@ -198,8 +248,6 @@ enum PendingAsyncVod {}
 impl TypeMapKey for PendingAsyncVod {
     type Value = Arc<tokio::sync::Mutex<HashMap<u64, Option<String>>>>;
 }
-
-
 
 #[derive(Clone, Copy)]
 pub(crate) struct CommandIds {
@@ -266,34 +314,70 @@ trait GenericInteraction {
     fn channel_id(&self) -> ChannelId;
     fn guild_id(&self) -> Option<GuildId>;
     fn user_id(&self) -> UserId;
-    async fn create_response(&self, cache_http: impl CacheHttp, builder: CreateInteractionResponse) -> serenity::Result<()>;
-    async fn edit_response(&self, cache_http: impl CacheHttp, builder: EditInteractionResponse) -> serenity::Result<Message>;
+    async fn create_response(
+        &self,
+        cache_http: impl CacheHttp,
+        builder: CreateInteractionResponse,
+    ) -> serenity::Result<()>;
+    async fn edit_response(
+        &self,
+        cache_http: impl CacheHttp,
+        builder: EditInteractionResponse,
+    ) -> serenity::Result<Message>;
 }
 
 #[async_trait]
 impl GenericInteraction for CommandInteraction {
-    fn channel_id(&self) -> ChannelId { self.channel_id }
-    fn guild_id(&self) -> Option<GuildId> { self.guild_id }
-    fn user_id(&self) -> UserId { self.user.id }
+    fn channel_id(&self) -> ChannelId {
+        self.channel_id
+    }
+    fn guild_id(&self) -> Option<GuildId> {
+        self.guild_id
+    }
+    fn user_id(&self) -> UserId {
+        self.user.id
+    }
 
-    async fn create_response(&self, cache_http: impl CacheHttp, builder: CreateInteractionResponse) -> serenity::Result<()> {
+    async fn create_response(
+        &self,
+        cache_http: impl CacheHttp,
+        builder: CreateInteractionResponse,
+    ) -> serenity::Result<()> {
         self.create_response(cache_http, builder).await
     }
-    async fn edit_response(&self, cache_http: impl CacheHttp, builder: EditInteractionResponse) -> serenity::Result<Message> {
+    async fn edit_response(
+        &self,
+        cache_http: impl CacheHttp,
+        builder: EditInteractionResponse,
+    ) -> serenity::Result<Message> {
         self.edit_response(cache_http, builder).await
     }
 }
 
 #[async_trait]
 impl GenericInteraction for ComponentInteraction {
-    fn channel_id(&self) -> ChannelId { self.channel_id }
-    fn guild_id(&self) -> Option<GuildId> { self.guild_id }
-    fn user_id(&self) -> UserId { self.user.id }
+    fn channel_id(&self) -> ChannelId {
+        self.channel_id
+    }
+    fn guild_id(&self) -> Option<GuildId> {
+        self.guild_id
+    }
+    fn user_id(&self) -> UserId {
+        self.user.id
+    }
 
-    async fn create_response(&self, cache_http: impl CacheHttp, builder: CreateInteractionResponse) -> serenity::Result<()> {
+    async fn create_response(
+        &self,
+        cache_http: impl CacheHttp,
+        builder: CreateInteractionResponse,
+    ) -> serenity::Result<()> {
         self.create_response(cache_http, builder).await
     }
-    async fn edit_response(&self, cache_http: impl CacheHttp, builder: EditInteractionResponse) -> serenity::Result<Message> {
+    async fn edit_response(
+        &self,
+        cache_http: impl CacheHttp,
+        builder: EditInteractionResponse,
+    ) -> serenity::Result<Message> {
         self.edit_response(cache_http, builder).await
     }
 }
@@ -314,47 +398,101 @@ async fn apply_live_schedule(
     // Create or update Discord scheduled event
     let (http_client, correction_hint) = {
         let data = ctx.data.read().await;
-        let command_ids_opt = interaction.guild_id().and_then(|guild_id|
-            data.get::<CommandIds>().and_then(|ids| ids.get(&guild_id).copied()).flatten()
-        );
+        let command_ids_opt = interaction.guild_id().and_then(|guild_id| {
+            data.get::<CommandIds>()
+                .and_then(|ids| ids.get(&guild_id).copied())
+                .flatten()
+        });
         let hint = if let Some(ids) = command_ids_opt {
             if let French = event.language {
-                format!("\nPour corriger une erreur, utilisez </schedule:{}> pour replanifier ou </schedule-remove:{}> pour annuler.", ids.schedule, ids.schedule_remove)
+                format!(
+                    "\nPour corriger une erreur, utilisez </schedule:{}> pour replanifier ou </schedule-remove:{}> pour annuler.",
+                    ids.schedule, ids.schedule_remove
+                )
             } else {
-                format!("\nIf this was a mistake, use </schedule:{}> to reschedule or </schedule-remove:{}> to unschedule.", ids.schedule, ids.schedule_remove)
+                format!(
+                    "\nIf this was a mistake, use </schedule:{}> to reschedule or </schedule-remove:{}> to unschedule.",
+                    ids.schedule, ids.schedule_remove
+                )
             }
         } else {
             String::new()
         };
-        (data.get::<HttpClient>().expect("HTTP client missing from Discord context").clone(), hint)
+        (
+            data.get::<HttpClient>()
+                .expect("HTTP client missing from Discord context")
+                .clone(),
+            hint,
+        )
     };
-    match crate::discord_scheduled_events::create_discord_scheduled_event(ctx, &mut transaction, &mut race, &event, &http_client).await {
+    match crate::discord_scheduled_events::create_discord_scheduled_event(
+        ctx,
+        &mut transaction,
+        &mut race,
+        &event,
+        &http_client,
+    )
+    .await
+    {
         Ok(()) => {
             race.save(&mut transaction).await?; // Save updated discord_scheduled_event_id
         }
         Err(e) => {
-            eprintln!("Failed to create Discord scheduled event for race {}: {}", race.id, e);
+            eprintln!(
+                "Failed to create Discord scheduled event for race {}: {}",
+                race.id, e
+            );
         }
     }
-    let mut cal_event = cal::Event { kind: cal::EventKind::Normal, race };
+    let mut cal_event = cal::Event {
+        kind: cal::EventKind::Normal,
+        race,
+    };
     if start - Utc::now() < TimeDelta::minutes(30) {
         // Commit transaction BEFORE creating room so race handler can find it in database
         transaction.commit().await?;
 
-        let (http_client, new_room_lock, racetime_host, racetime_config, clean_shutdown, extra_room_senders) = {
+        let (
+            http_client,
+            new_room_lock,
+            racetime_host,
+            racetime_config,
+            clean_shutdown,
+            extra_room_senders,
+        ) = {
             let data = ctx.data.read().await;
             (
-                data.get::<HttpClient>().expect("HTTP client missing from Discord context").clone(),
-                data.get::<NewRoomLock>().expect("new room lock missing from Discord context").clone(),
-                data.get::<RacetimeHost>().expect("racetime.gg host missing from Discord context").clone(),
-                data.get::<ConfigRaceTime>().expect("racetime.gg config missing from Discord context").clone(),
-                data.get::<CleanShutdown>().expect("clean shutdown state missing from Discord context").clone(),
-                data.get::<GlobalState>().expect("global state missing from Discord context").extra_room_senders.clone(),
+                data.get::<HttpClient>()
+                    .expect("HTTP client missing from Discord context")
+                    .clone(),
+                data.get::<NewRoomLock>()
+                    .expect("new room lock missing from Discord context")
+                    .clone(),
+                data.get::<RacetimeHost>()
+                    .expect("racetime.gg host missing from Discord context")
+                    .clone(),
+                data.get::<ConfigRaceTime>()
+                    .expect("racetime.gg config missing from Discord context")
+                    .clone(),
+                data.get::<CleanShutdown>()
+                    .expect("clean shutdown state missing from Discord context")
+                    .clone(),
+                data.get::<GlobalState>()
+                    .expect("global state missing from Discord context")
+                    .extra_room_senders
+                    .clone(),
             )
         };
 
         // Start a new transaction for room creation
-        let mut transaction = ctx.data.read().await.get::<DbPool>().expect("database connection pool missing from Discord context").begin().await?;
+        let mut transaction = ctx
+            .data
+            .read()
+            .await
+            .get::<DbPool>()
+            .expect("database connection pool missing from Discord context")
+            .begin()
+            .await?;
         lock!(new_room_lock = new_room_lock; {
             if let Some((_, msg, _notification_channel)) = racetime_bot::create_room(&mut transaction, ctx, &racetime_host, &racetime_config.client_id, &racetime_config.client_secret, &http_client, clean_shutdown, &extra_room_senders, &cal_event, &event).await? {
                 if let Some(channel) = event.discord_race_room_channel {
@@ -388,35 +526,55 @@ async fn apply_live_schedule(
         let fire_notifications_short = was_scheduled || {
             let pool = {
                 let data = ctx.data.read().await;
-                data.get::<DbPool>().expect("database connection pool missing from Discord context").clone()
+                data.get::<DbPool>()
+                    .expect("database connection pool missing from Discord context")
+                    .clone()
             };
             let mut tx = pool.begin().await?;
-            event::roles::Signup::for_race(&mut tx, cal_event.race.id).await
-                .map(|s| s.iter().any(|s| matches!(s.status,
-                    event::roles::VolunteerSignupStatus::Pending |
-                    event::roles::VolunteerSignupStatus::Confirmed)))
+            event::roles::Signup::for_race(&mut tx, cal_event.race.id)
+                .await
+                .map(|s| {
+                    s.iter().any(|s| {
+                        matches!(
+                            s.status,
+                            event::roles::VolunteerSignupStatus::Pending
+                                | event::roles::VolunteerSignupStatus::Confirmed
+                        )
+                    })
+                })
                 .unwrap_or(false)
         };
         if fire_notifications_short {
             let pool = {
                 let data = ctx.data.read().await;
-                data.get::<DbPool>().expect("database connection pool missing from Discord context").clone()
+                data.get::<DbPool>()
+                    .expect("database connection pool missing from Discord context")
+                    .clone()
             };
-            let _ = volunteer_requests::update_volunteer_post_for_race(
-                &pool,
-                ctx,
-                cal_event.race.id,
-            ).await;
+            let _ =
+                volunteer_requests::update_volunteer_post_for_race(&pool, ctx, cal_event.race.id)
+                    .await;
 
             // Send reschedule notification DMs to volunteers
             let mut transaction = pool.begin().await?;
-            let signups = event::roles::Signup::for_race(&mut transaction, cal_event.race.id).await?;
-            let affected_signups: Vec<_> = signups.iter()
-                .filter(|s| matches!(s.status, event::roles::VolunteerSignupStatus::Pending | event::roles::VolunteerSignupStatus::Confirmed))
+            let signups =
+                event::roles::Signup::for_race(&mut transaction, cal_event.race.id).await?;
+            let affected_signups: Vec<_> = signups
+                .iter()
+                .filter(|s| {
+                    matches!(
+                        s.status,
+                        event::roles::VolunteerSignupStatus::Pending
+                            | event::roles::VolunteerSignupStatus::Confirmed
+                    )
+                })
                 .collect();
 
             // Build race description
-            let race_description = cal_event.race.notification_description(&mut transaction).await?;
+            let race_description = cal_event
+                .race
+                .notification_description(&mut transaction)
+                .await?;
 
             // Send DM to each affected volunteer
             for signup in affected_signups {
@@ -432,29 +590,50 @@ async fn apply_live_schedule(
                         msg.push(&event.display_name);
                         msg.push(" has been rescheduled.\n\n");
                         msg.push("**New time (in your timezone):** ");
-                        msg.push_timestamp(start, serenity_utils::message::TimestampStyle::LongDateTime);
+                        msg.push_timestamp(
+                            start,
+                            serenity_utils::message::TimestampStyle::LongDateTime,
+                        );
                         msg.push(" (");
-                        msg.push_timestamp(start, serenity_utils::message::TimestampStyle::Relative);
+                        msg.push_timestamp(
+                            start,
+                            serenity_utils::message::TimestampStyle::Relative,
+                        );
                         msg.push(")\n\n");
                         msg.push("If you're no longer available, you can withdraw your signup using the button below or on the website: <");
-                        msg.push(&format!("{}/event/{}/{}/races/{}/signups",
-                            base_uri(), cal_event.race.series.slug(), cal_event.race.event, u64::from(cal_event.race.id)));
+                        msg.push(&format!(
+                            "{}/event/{}/{}/races/{}/signups",
+                            base_uri(),
+                            cal_event.race.series.slug(),
+                            cal_event.race.event,
+                            u64::from(cal_event.race.id)
+                        ));
                         msg.push(">");
 
                         // Create withdraw button
-                        let button = CreateButton::new(format!("volunteer_withdraw_{}", u64::from(signup.id)))
-                            .label("Withdraw Signup")
-                            .style(ButtonStyle::Danger);
+                        let button = CreateButton::new(format!(
+                            "volunteer_withdraw_{}",
+                            u64::from(signup.id)
+                        ))
+                        .label("Withdraw Signup")
+                        .style(ButtonStyle::Danger);
                         let row = CreateActionRow::Buttons(vec![button]);
 
                         // Send DM
                         if let Ok(dm_channel) = discord_user_id.create_dm_channel(ctx).await {
-                            if let Err(e) = dm_channel.send_message(ctx,
-                                CreateMessage::new()
-                                    .content(msg.build())
-                                    .components(vec![row])
-                            ).await {
-                                eprintln!("Failed to send reschedule notification DM to user {}: {}", signup.user_id, e);
+                            if let Err(e) = dm_channel
+                                .send_message(
+                                    ctx,
+                                    CreateMessage::new()
+                                        .content(msg.build())
+                                        .components(vec![row]),
+                                )
+                                .await
+                            {
+                                eprintln!(
+                                    "Failed to send reschedule notification DM to user {}: {}",
+                                    signup.user_id, e
+                                );
                             }
                         }
                     }
@@ -467,17 +646,33 @@ async fn apply_live_schedule(
         // Create Discord scheduled event for races scheduled > 30 minutes in advance
         let http_client = {
             let data = ctx.data.read().await;
-            data.get::<HttpClient>().expect("HTTP client missing from Discord context").clone()
+            data.get::<HttpClient>()
+                .expect("HTTP client missing from Discord context")
+                .clone()
         };
-        match crate::discord_scheduled_events::create_discord_scheduled_event(ctx, &mut transaction, &mut cal_event.race, &event, &http_client).await {
+        match crate::discord_scheduled_events::create_discord_scheduled_event(
+            ctx,
+            &mut transaction,
+            &mut cal_event.race,
+            &event,
+            &http_client,
+        )
+        .await
+        {
             Ok(()) => {
                 cal_event.race.save(&mut transaction).await?;
             }
             Err(e) => {
-                eprintln!("Failed to create Discord scheduled event for race {}: {}", cal_event.race.id, e);
+                eprintln!(
+                    "Failed to create Discord scheduled event for race {}: {}",
+                    cal_event.race.id, e
+                );
             }
         }
-        let overlapping_maintenance_windows = if let RaceHandleMode::RaceTime = cal_event.should_create_room(&mut transaction, &event).await? {
+        let overlapping_maintenance_windows = if let RaceHandleMode::RaceTime = cal_event
+            .should_create_room(&mut transaction, &event)
+            .await?
+        {
             sqlx::query_as!(Range::<DateTime<Utc>>, r#"SELECT start, end_time AS "end" FROM racetime_maintenance WHERE start < $1 AND end_time > $2"#, start + event.series.default_race_duration(), start - TimeDelta::minutes(30)).fetch_all(&mut *transaction).await?
         } else {
             Vec::default()
@@ -488,35 +683,55 @@ async fn apply_live_schedule(
         let fire_notifications_long = was_scheduled || {
             let pool = {
                 let data = ctx.data.read().await;
-                data.get::<DbPool>().expect("database connection pool missing from Discord context").clone()
+                data.get::<DbPool>()
+                    .expect("database connection pool missing from Discord context")
+                    .clone()
             };
             let mut tx = pool.begin().await?;
-            event::roles::Signup::for_race(&mut tx, cal_event.race.id).await
-                .map(|s| s.iter().any(|s| matches!(s.status,
-                    event::roles::VolunteerSignupStatus::Pending |
-                    event::roles::VolunteerSignupStatus::Confirmed)))
+            event::roles::Signup::for_race(&mut tx, cal_event.race.id)
+                .await
+                .map(|s| {
+                    s.iter().any(|s| {
+                        matches!(
+                            s.status,
+                            event::roles::VolunteerSignupStatus::Pending
+                                | event::roles::VolunteerSignupStatus::Confirmed
+                        )
+                    })
+                })
                 .unwrap_or(false)
         };
         if fire_notifications_long {
             let pool = {
                 let data = ctx.data.read().await;
-                data.get::<DbPool>().expect("database connection pool missing from Discord context").clone()
+                data.get::<DbPool>()
+                    .expect("database connection pool missing from Discord context")
+                    .clone()
             };
-            let _ = volunteer_requests::update_volunteer_post_for_race(
-                &pool,
-                ctx,
-                cal_event.race.id,
-            ).await;
+            let _ =
+                volunteer_requests::update_volunteer_post_for_race(&pool, ctx, cal_event.race.id)
+                    .await;
 
             // Send reschedule notification DMs to volunteers
             let mut transaction = pool.begin().await?;
-            let signups = event::roles::Signup::for_race(&mut transaction, cal_event.race.id).await?;
-            let affected_signups: Vec<_> = signups.iter()
-                .filter(|s| matches!(s.status, event::roles::VolunteerSignupStatus::Pending | event::roles::VolunteerSignupStatus::Confirmed))
+            let signups =
+                event::roles::Signup::for_race(&mut transaction, cal_event.race.id).await?;
+            let affected_signups: Vec<_> = signups
+                .iter()
+                .filter(|s| {
+                    matches!(
+                        s.status,
+                        event::roles::VolunteerSignupStatus::Pending
+                            | event::roles::VolunteerSignupStatus::Confirmed
+                    )
+                })
                 .collect();
 
             // Build race description
-            let race_description = cal_event.race.notification_description(&mut transaction).await?;
+            let race_description = cal_event
+                .race
+                .notification_description(&mut transaction)
+                .await?;
 
             // Send DM to each affected volunteer
             for signup in affected_signups {
@@ -532,29 +747,50 @@ async fn apply_live_schedule(
                         msg.push(&event.display_name);
                         msg.push(" has been rescheduled.\n\n");
                         msg.push("**New time (in your timezone):** ");
-                        msg.push_timestamp(start, serenity_utils::message::TimestampStyle::LongDateTime);
+                        msg.push_timestamp(
+                            start,
+                            serenity_utils::message::TimestampStyle::LongDateTime,
+                        );
                         msg.push(" (");
-                        msg.push_timestamp(start, serenity_utils::message::TimestampStyle::Relative);
+                        msg.push_timestamp(
+                            start,
+                            serenity_utils::message::TimestampStyle::Relative,
+                        );
                         msg.push(")\n\n");
                         msg.push("If you're no longer available, you can withdraw your signup using the button below or on the website: <");
-                        msg.push(&format!("{}/event/{}/{}/races/{}/signups",
-                            base_uri(), cal_event.race.series.slug(), cal_event.race.event, u64::from(cal_event.race.id)));
+                        msg.push(&format!(
+                            "{}/event/{}/{}/races/{}/signups",
+                            base_uri(),
+                            cal_event.race.series.slug(),
+                            cal_event.race.event,
+                            u64::from(cal_event.race.id)
+                        ));
                         msg.push(">");
 
                         // Create withdraw button
-                        let button = CreateButton::new(format!("volunteer_withdraw_{}", u64::from(signup.id)))
-                            .label("Withdraw Signup")
-                            .style(ButtonStyle::Danger);
+                        let button = CreateButton::new(format!(
+                            "volunteer_withdraw_{}",
+                            u64::from(signup.id)
+                        ))
+                        .label("Withdraw Signup")
+                        .style(ButtonStyle::Danger);
                         let row = CreateActionRow::Buttons(vec![button]);
 
                         // Send DM
                         if let Ok(dm_channel) = discord_user_id.create_dm_channel(ctx).await {
-                            if let Err(e) = dm_channel.send_message(ctx,
-                                CreateMessage::new()
-                                    .content(msg.build())
-                                    .components(vec![row])
-                            ).await {
-                                eprintln!("Failed to send reschedule notification DM to user {}: {}", signup.user_id, e);
+                            if let Err(e) = dm_channel
+                                .send_message(
+                                    ctx,
+                                    CreateMessage::new()
+                                        .content(msg.build())
+                                        .components(vec![row]),
+                                )
+                                .await
+                            {
+                                eprintln!(
+                                    "Failed to send reschedule notification DM to user {}: {}",
+                                    signup.user_id, e
+                                );
                             }
                         }
                     }
@@ -598,9 +834,12 @@ async fn apply_live_schedule(
             response_content
         };
         let response_content = format!("{}{}", response_content, correction_hint);
-        interaction.edit_response(ctx, EditInteractionResponse::new()
-            .content(response_content)
-        ).await?;
+        interaction
+            .edit_response(
+                ctx,
+                EditInteractionResponse::new().content(response_content),
+            )
+            .await?;
     }
     Ok(())
 }
@@ -617,7 +856,11 @@ fn async_part_for_team(race: &Race, team: &Team) -> Option<u8> {
         .and_then(|index| u8::try_from(index + 1).ok())
 }
 
-async fn async_part_has_been_played(transaction: &mut Transaction<'_, Postgres>, race: &Race, async_part: u8) -> sqlx::Result<bool> {
+async fn async_part_has_been_played(
+    transaction: &mut Transaction<'_, Postgres>,
+    race: &Race,
+    async_part: u8,
+) -> sqlx::Result<bool> {
     sqlx::query_scalar!(
         r#"SELECT EXISTS (
             SELECT 1 FROM async_times
@@ -627,27 +870,37 @@ async fn async_part_has_been_played(transaction: &mut Transaction<'_, Postgres>,
         ) AS "played!""#,
         race.id as _,
         async_part as i32,
-    ).fetch_one(&mut **transaction).await
+    )
+    .fetch_one(&mut **transaction)
+    .await
 }
 
 fn canceled_async_thread_name(name: &str) -> String {
     const SUFFIX: &str = " (canceled)";
     const DISCORD_NAME_LIMIT: usize = 100;
     if name.ends_with(SUFFIX) {
-        return name.to_owned()
+        return name.to_owned();
     }
-    let mut canceled_name = name.chars().take(DISCORD_NAME_LIMIT - SUFFIX.chars().count()).collect::<String>();
+    let mut canceled_name = name
+        .chars()
+        .take(DISCORD_NAME_LIMIT - SUFFIX.chars().count())
+        .collect::<String>();
     canceled_name.push_str(SUFFIX);
     canceled_name
 }
 
-async fn reset_async_command(ctx: &DiscordCtx, interaction: &CommandInteraction) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+async fn reset_async_command(
+    ctx: &DiscordCtx,
+    interaction: &CommandInteraction,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut participant = None;
     let mut game = None;
     for option in &interaction.data.options {
         match (&*option.name, &option.value) {
             ("participant", CommandDataOptionValue::User(user_id)) => participant = Some(*user_id),
-            ("game", CommandDataOptionValue::Integer(value)) => game = Some(i16::try_from(*value).expect("game number out of range")),
+            ("game", CommandDataOptionValue::Integer(value)) => {
+                game = Some(i16::try_from(*value).expect("game number out of range"))
+            }
             (name, _) => panic!("unexpected option for /reset-async: {name}"),
         }
     }
@@ -656,11 +909,23 @@ async fn reset_async_command(ctx: &DiscordCtx, interaction: &CommandInteraction)
     let (mut transaction, http_client) = {
         let data = ctx.data.read().await;
         (
-            data.get::<DbPool>().expect("database connection pool missing from Discord context").begin().await?,
-            data.get::<HttpClient>().expect("HTTP client missing from Discord context").clone(),
+            data.get::<DbPool>()
+                .expect("database connection pool missing from Discord context")
+                .begin()
+                .await?,
+            data.get::<HttpClient>()
+                .expect("HTTP client missing from Discord context")
+                .clone(),
         )
     };
-    let races = Race::for_scheduling_channel(&mut transaction, &http_client, interaction.channel_id(), game, true).await?;
+    let races = Race::for_scheduling_channel(
+        &mut transaction,
+        &http_client,
+        interaction.channel_id(),
+        game,
+        true,
+    )
+    .await?;
     let race = match races.into_iter().at_most_one() {
         Ok(Some(race)) => race,
         Ok(None) => {
@@ -673,53 +938,95 @@ async fn reset_async_command(ctx: &DiscordCtx, interaction: &CommandInteraction)
                 })
             )).await?;
             transaction.rollback().await?;
-            return Ok(())
+            return Ok(());
         }
         Err(_) => {
-            interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
-                .ephemeral(true)
-                .content("This thread has multiple games. Please specify the game number.")
-            )).await?;
+            interaction
+                .create_response(
+                    ctx,
+                    CreateInteractionResponse::Message(
+                        CreateInteractionResponseMessage::new()
+                            .ephemeral(true)
+                            .content(
+                                "This thread has multiple games. Please specify the game number.",
+                            ),
+                    ),
+                )
+                .await?;
             transaction.rollback().await?;
-            return Ok(())
+            return Ok(());
         }
     };
     let event = race.event(&mut transaction).await?;
-    let is_organizer = event.organizers(&mut transaction).await?.into_iter()
-        .any(|organizer| organizer.discord.is_some_and(|discord| discord.id == interaction.user.id));
+    let is_organizer = event
+        .organizers(&mut transaction)
+        .await?
+        .into_iter()
+        .any(|organizer| {
+            organizer
+                .discord
+                .is_some_and(|discord| discord.id == interaction.user.id)
+        });
     if !is_organizer {
-        interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
-            .ephemeral(true)
-            .content("Sorry, only event organizers can use this command.")
-        )).await?;
+        interaction
+            .create_response(
+                ctx,
+                CreateInteractionResponse::Message(
+                    CreateInteractionResponseMessage::new()
+                        .ephemeral(true)
+                        .content("Sorry, only event organizers can use this command."),
+                ),
+            )
+            .await?;
         transaction.rollback().await?;
-        return Ok(())
+        return Ok(());
     }
     if !matches!(race.schedule, RaceSchedule::Async { .. }) {
-        interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
-            .ephemeral(true)
-            .content("The selected game does not currently have an async part to reset.")
-        )).await?;
+        interaction
+            .create_response(
+                ctx,
+                CreateInteractionResponse::Message(
+                    CreateInteractionResponseMessage::new()
+                        .ephemeral(true)
+                        .content(
+                            "The selected game does not currently have an async part to reset.",
+                        ),
+                ),
+            )
+            .await?;
         transaction.rollback().await?;
-        return Ok(())
+        return Ok(());
     }
 
     let mut target_part = None;
     for (index, team) in race.teams().enumerate() {
-        if team.members(&mut transaction).await?.into_iter()
-            .any(|member| member.discord.is_some_and(|discord| discord.id == participant))
+        if team
+            .members(&mut transaction)
+            .await?
+            .into_iter()
+            .any(|member| {
+                member
+                    .discord
+                    .is_some_and(|discord| discord.id == participant)
+            })
         {
             target_part = u8::try_from(index + 1).ok();
-            break
+            break;
         }
     }
     let Some(async_part) = target_part else {
-        interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
-            .ephemeral(true)
-            .content("That user is not a participant in the selected game.")
-        )).await?;
+        interaction
+            .create_response(
+                ctx,
+                CreateInteractionResponse::Message(
+                    CreateInteractionResponseMessage::new()
+                        .ephemeral(true)
+                        .content("That user is not a participant in the selected game."),
+                ),
+            )
+            .await?;
         transaction.rollback().await?;
-        return Ok(())
+        return Ok(());
     };
 
     let (thread_id, scheduled, seed_released, ready): (Option<i64>, bool, bool, bool) = match async_part {
@@ -738,24 +1045,39 @@ async fn reset_async_command(ctx: &DiscordCtx, interaction: &CommandInteraction)
             .content("That async part cannot be reset because its seed has already been released or its run has started.")
         )).await?;
         transaction.rollback().await?;
-        return Ok(())
+        return Ok(());
     }
     if !scheduled && thread_id.is_none() {
-        interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
-            .ephemeral(true)
-            .content("That participant's async part is already unscheduled.")
-        )).await?;
+        interaction
+            .create_response(
+                ctx,
+                CreateInteractionResponse::Message(
+                    CreateInteractionResponseMessage::new()
+                        .ephemeral(true)
+                        .content("That participant's async part is already unscheduled."),
+                ),
+            )
+            .await?;
         transaction.rollback().await?;
-        return Ok(())
+        return Ok(());
     }
 
     let update = match async_part {
-        1 => "UPDATE races SET async_start1 = NULL, async_end1 = NULL, async_room1 = NULL, async_thread1 = NULL, async_seed1 = FALSE, async_ready1 = FALSE, async_notified_1 = FALSE, schedule_updated_at = NOW() WHERE id = $1",
-        2 => "UPDATE races SET async_start2 = NULL, async_end2 = NULL, async_room2 = NULL, async_thread2 = NULL, async_seed2 = FALSE, async_ready2 = FALSE, async_notified_2 = FALSE, schedule_updated_at = NOW() WHERE id = $1",
-        3 => "UPDATE races SET async_start3 = NULL, async_end3 = NULL, async_room3 = NULL, async_thread3 = NULL, async_seed3 = FALSE, async_ready3 = FALSE, async_notified_3 = FALSE, schedule_updated_at = NOW() WHERE id = $1",
+        1 => {
+            "UPDATE races SET async_start1 = NULL, async_end1 = NULL, async_room1 = NULL, async_thread1 = NULL, async_seed1 = FALSE, async_ready1 = FALSE, async_notified_1 = FALSE, schedule_updated_at = NOW() WHERE id = $1"
+        }
+        2 => {
+            "UPDATE races SET async_start2 = NULL, async_end2 = NULL, async_room2 = NULL, async_thread2 = NULL, async_seed2 = FALSE, async_ready2 = FALSE, async_notified_2 = FALSE, schedule_updated_at = NOW() WHERE id = $1"
+        }
+        3 => {
+            "UPDATE races SET async_start3 = NULL, async_end3 = NULL, async_room3 = NULL, async_thread3 = NULL, async_seed3 = FALSE, async_ready3 = FALSE, async_notified_3 = FALSE, schedule_updated_at = NOW() WHERE id = $1"
+        }
         _ => unreachable!("race has more than three async parts"),
     };
-    sqlx::query(update).bind(i64::from(race.id)).execute(&mut *transaction).await?;
+    sqlx::query(update)
+        .bind(i64::from(race.id))
+        .execute(&mut *transaction)
+        .await?;
     sqlx::query("DELETE FROM async_times WHERE race_id = $1 AND async_part = $2")
         .bind(i64::from(race.id))
         .bind(i32::from(async_part))
@@ -763,14 +1085,30 @@ async fn reset_async_command(ctx: &DiscordCtx, interaction: &CommandInteraction)
         .await?;
     transaction.commit().await?;
 
-    interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
-        .ephemeral(false)
-        .content(format!("<@{}>'s async part{} has been reset and can now be scheduled again.", participant.get(), race.game.map_or(String::new(), |game| format!(" for Game {game}"))))
-    )).await?;
+    interaction
+        .create_response(
+            ctx,
+            CreateInteractionResponse::Message(
+                CreateInteractionResponseMessage::new()
+                    .ephemeral(false)
+                    .content(format!(
+                        "<@{}>'s async part{} has been reset and can now be scheduled again.",
+                        participant.get(),
+                        race.game
+                            .map_or(String::new(), |game| format!(" for Game {game}"))
+                    )),
+            ),
+        )
+        .await?;
     if let Some(thread_id) = thread_id {
         let thread = ChannelId::new(thread_id as u64);
         if let Ok(Channel::Guild(channel)) = thread.to_channel(ctx).await {
-            let _ = thread.edit_thread(ctx, EditThread::new().name(canceled_async_thread_name(&channel.name))).await;
+            let _ = thread
+                .edit_thread(
+                    ctx,
+                    EditThread::new().name(canceled_async_thread_name(&channel.name)),
+                )
+                .await;
         }
         let _ = thread.say(ctx,
             "This async part was reset by an organizer. The buttons in this thread are no longer valid; use the match scheduling thread to choose a new time."
@@ -780,30 +1118,63 @@ async fn reset_async_command(ctx: &DiscordCtx, interaction: &CommandInteraction)
 }
 
 //TODO refactor (MH admins should have permissions, room already being open should not remove permissions but only remove the team from return)
-async fn check_scheduling_thread_permissions<'a>(ctx: &'a DiscordCtx, interaction: &impl GenericInteraction, game: Option<i16>, allow_rooms_for_other_teams: bool, alternative_instructions: Option<&str>, already_deferred: bool, skip_room_check: bool, race_filter: SchedulingRaceFilter) -> Result<Option<(Transaction<'a, Postgres>, Race, Option<Team>)>, Box<dyn std::error::Error + Send + Sync>> {
+async fn check_scheduling_thread_permissions<'a>(
+    ctx: &'a DiscordCtx,
+    interaction: &impl GenericInteraction,
+    game: Option<i16>,
+    allow_rooms_for_other_teams: bool,
+    alternative_instructions: Option<&str>,
+    already_deferred: bool,
+    skip_room_check: bool,
+    race_filter: SchedulingRaceFilter,
+) -> Result<
+    Option<(Transaction<'a, Postgres>, Race, Option<Team>)>,
+    Box<dyn std::error::Error + Send + Sync>,
+> {
     let (mut transaction, http_client) = {
         let data = ctx.data.read().await;
         (
-            data.get::<DbPool>().expect("database connection pool missing from Discord context").begin().await?,
-            data.get::<HttpClient>().expect("HTTP client missing from Discord context").clone(),
+            data.get::<DbPool>()
+                .expect("database connection pool missing from Discord context")
+                .begin()
+                .await?,
+            data.get::<HttpClient>()
+                .expect("HTTP client missing from Discord context")
+                .clone(),
         )
     };
-    let mut applicable_races = Race::for_scheduling_channel(&mut transaction, &http_client, interaction.channel_id(), game, false).await?;
+    let mut applicable_races = Race::for_scheduling_channel(
+        &mut transaction,
+        &http_client,
+        interaction.channel_id(),
+        game,
+        false,
+    )
+    .await?;
     let mut filtered_out_played_async = false;
     if race_filter == SchedulingRaceFilter::UnplayedAsyncPart && game.is_none() {
         let mut unplayed_races = Vec::with_capacity(applicable_races.len());
         for race in applicable_races {
             let mut async_part = None;
             for (index, team) in race.teams().enumerate() {
-                if team.members(&mut transaction).await?.into_iter().any(|member| member.discord.is_some_and(|discord| discord.id == interaction.user_id())) {
+                if team
+                    .members(&mut transaction)
+                    .await?
+                    .into_iter()
+                    .any(|member| {
+                        member
+                            .discord
+                            .is_some_and(|discord| discord.id == interaction.user_id())
+                    })
+                {
                     async_part = u8::try_from(index + 1).ok();
-                    break
+                    break;
                 }
             }
             if let Some(async_part) = async_part {
                 if async_part_has_been_played(&mut transaction, &race, async_part).await? {
                     filtered_out_played_async = true;
-                    continue
+                    continue;
                 }
             }
             unplayed_races.push(race);
@@ -816,26 +1187,50 @@ async fn check_scheduling_thread_permissions<'a>(ctx: &'a DiscordCtx, interactio
     }
     Ok(match applicable_races.into_iter().at_most_one() {
         Ok(None) => {
-            let command_ids = ctx.data.read().await.get::<CommandIds>().and_then(|command_ids| command_ids.get(&interaction.guild_id()?))
+            let command_ids = ctx
+                .data
+                .read()
+                .await
+                .get::<CommandIds>()
+                .and_then(|command_ids| command_ids.get(&interaction.guild_id()?))
                 .expect("interaction called from outside registered guild")
                 .expect("interaction called from guild with conflicting draft kinds");
             let mut content = MessageBuilder::default();
             if filtered_out_played_async {
-                content.push("Sorry, you don't have any remaining unplayed async games in this thread.");
+                content.push(
+                    "Sorry, you don't have any remaining unplayed async games in this thread.",
+                );
                 if already_deferred {
-                    interaction.edit_response(ctx, EditInteractionResponse::new()
-                        .content(content.build())
-                    ).await?;
+                    interaction
+                        .edit_response(ctx, EditInteractionResponse::new().content(content.build()))
+                        .await?;
                 } else {
-                    interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
-                        .ephemeral(true)
-                        .content(content.build())
-                    )).await?;
+                    interaction
+                        .create_response(
+                            ctx,
+                            CreateInteractionResponse::Message(
+                                CreateInteractionResponseMessage::new()
+                                    .ephemeral(true)
+                                    .content(content.build()),
+                            ),
+                        )
+                        .await?;
                 }
                 transaction.rollback().await?;
-                return Ok(None)
+                return Ok(None);
             }
-            match (Race::for_scheduling_channel(&mut transaction, &http_client, interaction.channel_id(), game, true).await?.is_empty(), game.is_some()) {
+            match (
+                Race::for_scheduling_channel(
+                    &mut transaction,
+                    &http_client,
+                    interaction.channel_id(),
+                    game,
+                    true,
+                )
+                .await?
+                .is_empty(),
+                game.is_some(),
+            ) {
                 (false, false) => {
                     content.push("Sorry, this thread is not associated with any upcoming races. ");
                     if let Some(alternative_instructions) = alternative_instructions {
@@ -858,18 +1253,28 @@ async fn check_scheduling_thread_permissions<'a>(ctx: &'a DiscordCtx, interactio
                     content.mention_command(command_ids.reset_race, "reset-race");
                     content.push(" if necessary.");
                 }
-                (true, false) => { content.push("Sorry, this thread is not associated with any upcoming races. Please contact a tournament organizer to fix this."); }
-                (true, true) => { content.push("Sorry, there don't seem to be any upcoming races with that game number associated with this thread. If this seems wrong, please contact a tournament organizer to fix this."); }
+                (true, false) => {
+                    content.push("Sorry, this thread is not associated with any upcoming races. Please contact a tournament organizer to fix this.");
+                }
+                (true, true) => {
+                    content.push("Sorry, there don't seem to be any upcoming races with that game number associated with this thread. If this seems wrong, please contact a tournament organizer to fix this.");
+                }
             }
             if already_deferred {
-                interaction.edit_response(ctx, EditInteractionResponse::new()
-                    .content(content.build())
-                ).await?;
+                interaction
+                    .edit_response(ctx, EditInteractionResponse::new().content(content.build()))
+                    .await?;
             } else {
-                interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
-                    .ephemeral(true)
-                    .content(content.build())
-                )).await?;
+                interaction
+                    .create_response(
+                        ctx,
+                        CreateInteractionResponse::Message(
+                            CreateInteractionResponseMessage::new()
+                                .ephemeral(true)
+                                .content(content.build()),
+                        ),
+                    )
+                    .await?;
             }
             transaction.rollback().await?;
             None
@@ -877,9 +1282,18 @@ async fn check_scheduling_thread_permissions<'a>(ctx: &'a DiscordCtx, interactio
         Ok(Some(race)) => {
             let mut team = None;
             for iter_team in race.teams() {
-                if iter_team.members(&mut transaction).await?.into_iter().any(|member| member.discord.is_some_and(|discord| discord.id == interaction.user_id())) {
+                if iter_team
+                    .members(&mut transaction)
+                    .await?
+                    .into_iter()
+                    .any(|member| {
+                        member
+                            .discord
+                            .is_some_and(|discord| discord.id == interaction.user_id())
+                    })
+                {
                     team = Some(iter_team.clone());
-                    break
+                    break;
                 }
             }
             if let Some(ref team) = team {
@@ -900,7 +1314,7 @@ async fn check_scheduling_thread_permissions<'a>(ctx: &'a DiscordCtx, interactio
                         )).await?;
                     }
                     transaction.rollback().await?;
-                    return Ok(None)
+                    return Ok(None);
                 }
             }
             Some((transaction, race, team))
@@ -922,32 +1336,81 @@ async fn check_scheduling_thread_permissions<'a>(ctx: &'a DiscordCtx, interactio
     })
 }
 
-async fn check_draft_permissions<'a>(ctx: &'a DiscordCtx, interaction: &impl GenericInteraction) -> Result<Option<(event::Data<'static>, Race, draft::Kind, draft::MessageContext<'a>)>, Box<dyn std::error::Error + Send + Sync>> {
-    let Some((mut transaction, race, team)) = check_scheduling_thread_permissions(ctx, interaction, None, false, Some("You can continue the draft in the race room"), false, true, SchedulingRaceFilter::Upcoming).await? else { return Ok(None) };
-    let guild_id = interaction.guild_id().expect("Received interaction from outside of a guild");
+async fn check_draft_permissions<'a>(
+    ctx: &'a DiscordCtx,
+    interaction: &impl GenericInteraction,
+) -> Result<
+    Option<(
+        event::Data<'static>,
+        Race,
+        draft::Kind,
+        draft::MessageContext<'a>,
+    )>,
+    Box<dyn std::error::Error + Send + Sync>,
+> {
+    let Some((mut transaction, race, team)) = check_scheduling_thread_permissions(
+        ctx,
+        interaction,
+        None,
+        false,
+        Some("You can continue the draft in the race room"),
+        false,
+        true,
+        SchedulingRaceFilter::Upcoming,
+    )
+    .await?
+    else {
+        return Ok(None);
+    };
+    let guild_id = interaction
+        .guild_id()
+        .expect("Received interaction from outside of a guild");
     let event = race.event(&mut transaction).await?;
     Ok(if let Some(team) = team {
         if let Some(draft_kind) = event.draft_kind() {
             if let Some(ref draft) = race.draft {
-                if draft.is_active_team(&draft_kind, race.game, team.id).await? {
+                if draft
+                    .is_active_team(&draft_kind, race.game, team.id)
+                    .await?
+                {
                     let msg_ctx = draft::MessageContext::Discord {
-                        command_ids: ctx.data.read().await.get::<CommandIds>().and_then(|command_ids| command_ids.get(&guild_id))
+                        command_ids: ctx
+                            .data
+                            .read()
+                            .await
+                            .get::<CommandIds>()
+                            .and_then(|command_ids| command_ids.get(&guild_id))
                             .expect("draft action called from outside registered guild")
                             .expect("interaction called from guild with conflicting draft kinds"),
                         teams: race.teams().cloned().collect(),
-                        transaction, guild_id, team,
+                        transaction,
+                        guild_id,
+                        team,
                     };
                     Some((event, race, draft_kind, msg_ctx))
                 } else {
                     let response_content = if let French = event.language {
                         format!("Désolé, mais ce n'est pas votre tour.")
                     } else {
-                        format!("Sorry, it's not {} turn in the settings draft.", if let TeamConfig::Solo = event.team_config { "your" } else { "your team's" })
+                        format!(
+                            "Sorry, it's not {} turn in the settings draft.",
+                            if let TeamConfig::Solo = event.team_config {
+                                "your"
+                            } else {
+                                "your team's"
+                            }
+                        )
                     };
-                    interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
-                        .ephemeral(true)
-                        .content(response_content)
-                    )).await?;
+                    interaction
+                        .create_response(
+                            ctx,
+                            CreateInteractionResponse::Message(
+                                CreateInteractionResponseMessage::new()
+                                    .ephemeral(true)
+                                    .content(response_content),
+                            ),
+                        )
+                        .await?;
                     transaction.rollback().await?;
                     None
                 }
@@ -960,10 +1423,16 @@ async fn check_draft_permissions<'a>(ctx: &'a DiscordCtx, interaction: &impl Gen
                 None
             }
         } else {
-            interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
-                .ephemeral(true)
-                .content("Sorry, there is no settings draft for this event.")
-            )).await?;
+            interaction
+                .create_response(
+                    ctx,
+                    CreateInteractionResponse::Message(
+                        CreateInteractionResponseMessage::new()
+                            .ephemeral(true)
+                            .content("Sorry, there is no settings draft for this event."),
+                    ),
+                )
+                .await?;
             transaction.rollback().await?;
             None
         }
@@ -973,30 +1442,79 @@ async fn check_draft_permissions<'a>(ctx: &'a DiscordCtx, interaction: &impl Gen
         } else {
             "Sorry, only participants in this race can use this command."
         };
-        interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
-            .ephemeral(true)
-            .content(response_content)
-        )).await?;
+        interaction
+            .create_response(
+                ctx,
+                CreateInteractionResponse::Message(
+                    CreateInteractionResponseMessage::new()
+                        .ephemeral(true)
+                        .content(response_content),
+                ),
+            )
+            .await?;
         transaction.rollback().await?;
         None
     })
 }
 
-async fn send_draft_settings_page(ctx: &DiscordCtx, interaction: &impl GenericInteraction, action: &str, page: usize) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let Some((event, mut race, draft_kind, mut msg_ctx)) = check_draft_permissions(ctx, interaction).await? else { return Ok(()) };
-    match race.draft.as_ref().unwrap().next_step(&draft_kind, race.game, &mut msg_ctx).await?.kind {
-        draft::StepKind::GoFirst | draft::StepKind::BooleanChoice { .. } | draft::StepKind::Done(_) | draft::StepKind::DoneRsl { .. } => match race.draft.as_mut().unwrap().apply(&draft_kind, race.game, &mut msg_ctx, draft::Action::Pick { setting: format!("@placeholder"), value: format!("@placeholder") }).await? {
+async fn send_draft_settings_page(
+    ctx: &DiscordCtx,
+    interaction: &impl GenericInteraction,
+    action: &str,
+    page: usize,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let Some((event, mut race, draft_kind, mut msg_ctx)) =
+        check_draft_permissions(ctx, interaction).await?
+    else {
+        return Ok(());
+    };
+    match race
+        .draft
+        .as_ref()
+        .unwrap()
+        .next_step(&draft_kind, race.game, &mut msg_ctx)
+        .await?
+        .kind
+    {
+        draft::StepKind::GoFirst
+        | draft::StepKind::BooleanChoice { .. }
+        | draft::StepKind::Done(_)
+        | draft::StepKind::DoneRsl { .. } => match race
+            .draft
+            .as_mut()
+            .unwrap()
+            .apply(
+                &draft_kind,
+                race.game,
+                &mut msg_ctx,
+                draft::Action::Pick {
+                    setting: format!("@placeholder"),
+                    value: format!("@placeholder"),
+                },
+            )
+            .await?
+        {
             Ok(_) => unreachable!(),
             Err(error_msg) => {
-                interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
-                    .ephemeral(true)
-                    .content(error_msg)
-                )).await?;
+                interaction
+                    .create_response(
+                        ctx,
+                        CreateInteractionResponse::Message(
+                            CreateInteractionResponseMessage::new()
+                                .ephemeral(true)
+                                .content(error_msg),
+                        ),
+                    )
+                    .await?;
                 msg_ctx.into_transaction().rollback().await?;
-                return Ok(())
+                return Ok(());
             }
         },
-        draft::StepKind::Ban { available_settings, rsl, .. } => {
+        draft::StepKind::Ban {
+            available_settings,
+            rsl,
+            ..
+        } => {
             let response_content = if_chain! {
                 if let French = event.language;
                 if let Some(action) = match action {
@@ -1015,22 +1533,49 @@ async fn send_draft_settings_page(ctx: &DiscordCtx, interaction: &impl GenericIn
                 .content(response_content);
             if available_settings.num_settings() <= BUTTONS_PER_PAGE {
                 for draft::BanSetting { name, display, .. } in available_settings.all() {
-                    response_msg = response_msg.button(CreateButton::new(format!("{action}_setting_{name}")).label(display));
+                    response_msg = response_msg.button(
+                        CreateButton::new(format!("{action}_setting_{name}")).label(display),
+                    );
                 }
             } else {
-                if let Some((page_name, _)) = page.checked_sub(1).and_then(|prev_page| available_settings.page(prev_page)) {
-                    response_msg = response_msg.button(CreateButton::new(format!("{action}_page_{}", page - 1)).label(page_name).style(ButtonStyle::Secondary));
+                if let Some((page_name, _)) = page
+                    .checked_sub(1)
+                    .and_then(|prev_page| available_settings.page(prev_page))
+                {
+                    response_msg = response_msg.button(
+                        CreateButton::new(format!("{action}_page_{}", page - 1))
+                            .label(page_name)
+                            .style(ButtonStyle::Secondary),
+                    );
                 }
-                for draft::BanSetting { name, display, .. } in available_settings.page(page).unwrap().1 {
-                    response_msg = response_msg.button(CreateButton::new(format!("{action}_setting_{name}")).label(display.to_string()));
+                for draft::BanSetting { name, display, .. } in
+                    available_settings.page(page).unwrap().1
+                {
+                    response_msg = response_msg.button(
+                        CreateButton::new(format!("{action}_setting_{name}"))
+                            .label(display.to_string()),
+                    );
                 }
-                if let Some((page_name, _)) = page.checked_add(1).and_then(|next_page| available_settings.page(next_page)) {
-                    response_msg = response_msg.button(CreateButton::new(format!("{action}_page_{}", page + 1)).label(page_name).style(ButtonStyle::Secondary));
+                if let Some((page_name, _)) = page
+                    .checked_add(1)
+                    .and_then(|next_page| available_settings.page(next_page))
+                {
+                    response_msg = response_msg.button(
+                        CreateButton::new(format!("{action}_page_{}", page + 1))
+                            .label(page_name)
+                            .style(ButtonStyle::Secondary),
+                    );
                 }
             }
-            interaction.create_response(ctx, CreateInteractionResponse::Message(response_msg)).await?;
+            interaction
+                .create_response(ctx, CreateInteractionResponse::Message(response_msg))
+                .await?;
         }
-        draft::StepKind::Pick { available_choices, rsl, .. } => {
+        draft::StepKind::Pick {
+            available_choices,
+            rsl,
+            ..
+        } => {
             let response_content = if_chain! {
                 if let French = event.language;
                 if let Some(action) = match action {
@@ -1049,51 +1594,118 @@ async fn send_draft_settings_page(ctx: &DiscordCtx, interaction: &impl GenericIn
                 .content(response_content);
             if available_choices.num_settings() <= BUTTONS_PER_PAGE {
                 for draft::DraftSetting { name, display, .. } in available_choices.all() {
-                    response_msg = response_msg.button(CreateButton::new(format!("{action}_setting_{name}")).label(display));
+                    response_msg = response_msg.button(
+                        CreateButton::new(format!("{action}_setting_{name}")).label(display),
+                    );
                 }
             } else {
-                if let Some((page_name, _)) = page.checked_sub(1).and_then(|prev_page| available_choices.page(prev_page)) {
-                    response_msg = response_msg.button(CreateButton::new(format!("{action}_page_{}", page - 1)).label(page_name).style(ButtonStyle::Secondary));
+                if let Some((page_name, _)) = page
+                    .checked_sub(1)
+                    .and_then(|prev_page| available_choices.page(prev_page))
+                {
+                    response_msg = response_msg.button(
+                        CreateButton::new(format!("{action}_page_{}", page - 1))
+                            .label(page_name)
+                            .style(ButtonStyle::Secondary),
+                    );
                 }
-                for draft::DraftSetting { name, display, .. } in available_choices.page(page).unwrap().1 {
-                    response_msg = response_msg.button(CreateButton::new(format!("{action}_setting_{name}")).label(*display));
+                for draft::DraftSetting { name, display, .. } in
+                    available_choices.page(page).unwrap().1
+                {
+                    response_msg = response_msg.button(
+                        CreateButton::new(format!("{action}_setting_{name}")).label(*display),
+                    );
                 }
-                if let Some((page_name, _)) = page.checked_add(1).and_then(|next_page| available_choices.page(next_page)) {
-                    response_msg = response_msg.button(CreateButton::new(format!("{action}_page_{}", page + 1)).label(page_name).style(ButtonStyle::Secondary));
+                if let Some((page_name, _)) = page
+                    .checked_add(1)
+                    .and_then(|next_page| available_choices.page(next_page))
+                {
+                    response_msg = response_msg.button(
+                        CreateButton::new(format!("{action}_page_{}", page + 1))
+                            .label(page_name)
+                            .style(ButtonStyle::Secondary),
+                    );
                 }
             }
-            interaction.create_response(ctx, CreateInteractionResponse::Message(response_msg)).await?;
+            interaction
+                .create_response(ctx, CreateInteractionResponse::Message(response_msg))
+                .await?;
         }
-        draft::StepKind::PickPreset { available_presets, game, .. } => {
+        draft::StepKind::PickPreset {
+            available_presets,
+            game,
+            ..
+        } => {
             let response_content = format!("Select the preset for Game {}:", game);
             let mut response_msg = CreateInteractionResponseMessage::new()
                 .ephemeral(true)
                 .content(response_content);
             for preset_opt in &available_presets {
-                response_msg = response_msg.button(CreateButton::new(format!("preset_pick_{}", preset_opt.preset)).label(&preset_opt.display_name));
+                response_msg = response_msg.button(
+                    CreateButton::new(format!("preset_pick_{}", preset_opt.preset))
+                        .label(&preset_opt.display_name),
+                );
             }
-            interaction.create_response(ctx, CreateInteractionResponse::Message(response_msg)).await?;
+            interaction
+                .create_response(ctx, CreateInteractionResponse::Message(response_msg))
+                .await?;
         }
     }
     msg_ctx.into_transaction().commit().await?;
     Ok(())
 }
 
-async fn post_button_draft_step(ctx: &DiscordCtx, channel_id: ChannelId, step: draft::Step) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+async fn post_button_draft_step(
+    ctx: &DiscordCtx,
+    channel_id: ChannelId,
+    step: draft::Step,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     match step.kind {
-        draft::StepKind::Ban { available_settings, .. } => {
-            let buttons = available_settings.all()
-                .map(|s| CreateButton::new(format!("draft_ban_preview_{}", s.name)).label(format!("Ban: {}", s.display)).style(ButtonStyle::Danger))
+        draft::StepKind::Ban {
+            available_settings, ..
+        } => {
+            let buttons = available_settings
+                .all()
+                .map(|s| {
+                    CreateButton::new(format!("draft_ban_preview_{}", s.name))
+                        .label(format!("Ban: {}", s.display))
+                        .style(ButtonStyle::Danger)
+                })
                 .collect::<Vec<_>>();
-            let rows = buttons.chunks(5).map(|chunk| CreateActionRow::Buttons(chunk.to_vec())).collect::<Vec<_>>();
-            channel_id.send_message(ctx, CreateMessage::new().content(step.message).components(rows)).await?;
+            let rows = buttons
+                .chunks(5)
+                .map(|chunk| CreateActionRow::Buttons(chunk.to_vec()))
+                .collect::<Vec<_>>();
+            channel_id
+                .send_message(
+                    ctx,
+                    CreateMessage::new().content(step.message).components(rows),
+                )
+                .await?;
         }
-        draft::StepKind::PickPreset { available_presets, game, .. } => {
-            let buttons = available_presets.iter()
-                .map(|p| CreateButton::new(format!("draft_pick_preview_{game}_{}", p.preset)).label(format!("Pick: {}", p.display_name)).style(ButtonStyle::Primary))
+        draft::StepKind::PickPreset {
+            available_presets,
+            game,
+            ..
+        } => {
+            let buttons = available_presets
+                .iter()
+                .map(|p| {
+                    CreateButton::new(format!("draft_pick_preview_{game}_{}", p.preset))
+                        .label(format!("Pick: {}", p.display_name))
+                        .style(ButtonStyle::Primary)
+                })
                 .collect::<Vec<_>>();
-            let rows = buttons.chunks(5).map(|chunk| CreateActionRow::Buttons(chunk.to_vec())).collect::<Vec<_>>();
-            channel_id.send_message(ctx, CreateMessage::new().content(step.message).components(rows)).await?;
+            let rows = buttons
+                .chunks(5)
+                .map(|chunk| CreateActionRow::Buttons(chunk.to_vec()))
+                .collect::<Vec<_>>();
+            channel_id
+                .send_message(
+                    ctx,
+                    CreateMessage::new().content(step.message).components(rows),
+                )
+                .await?;
         }
         draft::StepKind::Done(_) => {
             channel_id.say(ctx, step.message).await?;
@@ -1104,40 +1716,90 @@ async fn post_button_draft_step(ctx: &DiscordCtx, channel_id: ChannelId, step: d
     Ok(())
 }
 
-async fn draft_action(ctx: &DiscordCtx, interaction: &impl GenericInteraction, action: draft::Action, step_msg_id: Option<MessageId>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let Some((_event, mut race, draft_kind, mut msg_ctx)) = check_draft_permissions(ctx, interaction).await? else { return Ok(()) };
-    match race.draft.as_mut().unwrap().apply(&draft_kind, race.game, &mut msg_ctx, action).await? {
+async fn draft_action(
+    ctx: &DiscordCtx,
+    interaction: &impl GenericInteraction,
+    action: draft::Action,
+    step_msg_id: Option<MessageId>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let Some((_event, mut race, draft_kind, mut msg_ctx)) =
+        check_draft_permissions(ctx, interaction).await?
+    else {
+        return Ok(());
+    };
+    match race
+        .draft
+        .as_mut()
+        .unwrap()
+        .apply(&draft_kind, race.game, &mut msg_ctx, action)
+        .await?
+    {
         Ok(apply_response) => {
-            let step = race.draft.as_ref().unwrap().next_step(&draft_kind, race.game, &mut msg_ctx).await?;
+            let step = race
+                .draft
+                .as_ref()
+                .unwrap()
+                .next_step(&draft_kind, race.game, &mut msg_ctx)
+                .await?;
             let mut transaction = msg_ctx.into_transaction();
-            sqlx::query!("UPDATE races SET draft_state = $1 WHERE id = $2", Json(race.draft.as_ref().unwrap()) as _, race.id as _).execute(&mut *transaction).await?;
+            sqlx::query!(
+                "UPDATE races SET draft_state = $1 WHERE id = $2",
+                Json(race.draft.as_ref().unwrap()) as _,
+                race.id as _
+            )
+            .execute(&mut *transaction)
+            .await?;
             if matches!(step.kind, draft::StepKind::Done(_)) && draft_kind.uses_button_draft() {
-                race.copy_draft_to_remaining_games(&mut transaction, race.draft.as_ref().unwrap()).await?;
+                race.copy_draft_to_remaining_games(&mut transaction, race.draft.as_ref().unwrap())
+                    .await?;
             }
             transaction.commit().await?;
             if draft_kind.uses_button_draft() {
                 // Clear the ephemeral confirm dialog.
-                interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
-                    CreateInteractionResponseMessage::new().content("✓").components(vec![])
-                )).await?;
+                interaction
+                    .create_response(
+                        ctx,
+                        CreateInteractionResponse::UpdateMessage(
+                            CreateInteractionResponseMessage::new()
+                                .content("✓")
+                                .components(vec![]),
+                        ),
+                    )
+                    .await?;
                 // Remove buttons from the step message so old choices can't be clicked again.
                 if let Some(msg_id) = step_msg_id {
-                    interaction.channel_id().edit_message(ctx, msg_id, EditMessage::new().components(vec![])).await.ok();
+                    interaction
+                        .channel_id()
+                        .edit_message(ctx, msg_id, EditMessage::new().components(vec![]))
+                        .await
+                        .ok();
                 }
                 post_button_draft_step(ctx, interaction.channel_id(), step).await?;
             } else {
-                interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
-                    .ephemeral(false)
-                    .content(apply_response)
-                )).await?;
+                interaction
+                    .create_response(
+                        ctx,
+                        CreateInteractionResponse::Message(
+                            CreateInteractionResponseMessage::new()
+                                .ephemeral(false)
+                                .content(apply_response),
+                        ),
+                    )
+                    .await?;
                 interaction.channel_id().say(ctx, step.message).await?;
             }
         }
         Err(error_msg) => {
-            interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
-                .ephemeral(true)
-                .content(error_msg)
-            )).await?;
+            interaction
+                .create_response(
+                    ctx,
+                    CreateInteractionResponse::Message(
+                        CreateInteractionResponseMessage::new()
+                            .ephemeral(true)
+                            .content(error_msg),
+                    ),
+                )
+                .await?;
             msg_ctx.into_transaction().rollback().await?;
         }
     }
@@ -1182,7 +1844,12 @@ fn format_utc_offset(offset_seconds: i32) -> String {
 }
 
 fn timezone_utc_offset(tz: Tz, at: DateTime<Utc>) -> String {
-    format_utc_offset(tz.from_utc_datetime(&at.naive_utc()).offset().fix().local_minus_utc())
+    format_utc_offset(
+        tz.from_utc_datetime(&at.naive_utc())
+            .offset()
+            .fix()
+            .local_minus_utc(),
+    )
 }
 
 fn normalize_bare_meridiem_times(s: &str) -> Cow<'_, str> {
@@ -1203,16 +1870,20 @@ fn normalize_bare_meridiem_times(s: &str) -> Cow<'_, str> {
 
 fn parse_datetime_in_timezone_at(s: &str, tz: Tz, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
     let local_now = now.with_timezone(&tz);
-    let parser_now = Utc.with_ymd_and_hms(
-        local_now.year(),
-        local_now.month(),
-        local_now.day(),
-        local_now.hour(),
-        local_now.minute(),
-        local_now.second(),
-    ).single()?;
+    let parser_now = Utc
+        .with_ymd_and_hms(
+            local_now.year(),
+            local_now.month(),
+            local_now.day(),
+            local_now.hour(),
+            local_now.minute(),
+            local_now.second(),
+        )
+        .single()?;
     let normalized = normalize_bare_meridiem_times(s);
-    let as_utc = interim::parse_date_string(&normalized.to_lowercase(), parser_now, interim::Dialect::Us).ok()?;
+    let as_utc =
+        interim::parse_date_string(&normalized.to_lowercase(), parser_now, interim::Dialect::Us)
+            .ok()?;
     let naive = as_utc.naive_utc();
     tz.from_local_datetime(&naive)
         .single()
@@ -1226,15 +1897,24 @@ struct ParsedNaturalLanguageTimestamp {
     used_default_timezone: bool,
 }
 
-fn parse_natural_language_timestamp(s: &str, default_timezone: Option<Tz>) -> Option<ParsedNaturalLanguageTimestamp> {
+fn parse_natural_language_timestamp(
+    s: &str,
+    default_timezone: Option<Tz>,
+) -> Option<ParsedNaturalLanguageTimestamp> {
     parse_natural_language_timestamp_at(s, default_timezone, Utc::now())
 }
 
-fn parse_natural_language_timestamp_at(s: &str, default_timezone: Option<Tz>, now: DateTime<Utc>) -> Option<ParsedNaturalLanguageTimestamp> {
+fn parse_natural_language_timestamp_at(
+    s: &str,
+    default_timezone: Option<Tz>,
+    now: DateTime<Utc>,
+) -> Option<ParsedNaturalLanguageTimestamp> {
     // If the string ends with a known timezone abbreviation or IANA timezone,
     // strip it, parse the naive date/time with interim, then apply the zone so DST is handled correctly.
     if let Some((_, s_without_tz, tz_name)) = regex_captures!(r"^(.*\S)\s+(\S+)\s*$", s) {
-        if let Some(tz) = tz_from_abbr(&tz_name.to_ascii_uppercase()).or_else(|| tz_name.parse::<Tz>().ok()) {
+        if let Some(tz) =
+            tz_from_abbr(&tz_name.to_ascii_uppercase()).or_else(|| tz_name.parse::<Tz>().ok())
+        {
             return Some(ParsedNaturalLanguageTimestamp {
                 start: parse_datetime_in_timezone_at(s_without_tz, tz, now)?,
                 timezone: Some(tz),
@@ -1251,11 +1931,13 @@ fn parse_natural_language_timestamp_at(s: &str, default_timezone: Option<Tz>, no
     } else {
         // No recognized timezone; let interim handle it (supports Z and numeric offsets).
         let normalized = normalize_bare_meridiem_times(s);
-        interim::parse_date_string(&normalized.to_lowercase(), now, interim::Dialect::Us).ok().map(|start| ParsedNaturalLanguageTimestamp {
-            start,
-            timezone: None,
-            used_default_timezone: false,
-        })
+        interim::parse_date_string(&normalized.to_lowercase(), now, interim::Dialect::Us)
+            .ok()
+            .map(|start| ParsedNaturalLanguageTimestamp {
+                start,
+                timezone: None,
+                used_default_timezone: false,
+            })
     }
 }
 
@@ -1269,12 +1951,18 @@ mod tests {
 
     #[test]
     fn canceled_async_thread_name_adds_suffix() {
-        assert_eq!(canceled_async_thread_name("Async: Zelda"), "Async: Zelda (canceled)");
+        assert_eq!(
+            canceled_async_thread_name("Async: Zelda"),
+            "Async: Zelda (canceled)"
+        );
     }
 
     #[test]
     fn canceled_async_thread_name_does_not_duplicate_suffix() {
-        assert_eq!(canceled_async_thread_name("Async: Zelda (canceled)"), "Async: Zelda (canceled)");
+        assert_eq!(
+            canceled_async_thread_name("Async: Zelda (canceled)"),
+            "Async: Zelda (canceled)"
+        );
     }
 
     #[test]
@@ -1295,53 +1983,96 @@ mod tests {
 
     #[test]
     fn natural_language_normalizes_eastern_standard_abbreviation_in_summer() {
-        let parsed = parse_natural_language_timestamp_at("friday 3pm EST", None, fixed_now()).unwrap();
+        let parsed =
+            parse_natural_language_timestamp_at("friday 3pm EST", None, fixed_now()).unwrap();
 
         assert_eq!(parsed.timezone, Some(America::New_York));
-        assert_eq!(parsed.start, Utc.with_ymd_and_hms(2026, 7, 10, 19, 0, 0).unwrap());
+        assert_eq!(
+            parsed.start,
+            Utc.with_ymd_and_hms(2026, 7, 10, 19, 0, 0).unwrap()
+        );
         let tz = parsed.timezone.unwrap();
-        assert_eq!(tz.from_utc_datetime(&parsed.start.naive_utc()).format("%Z").to_string(), "EDT");
+        assert_eq!(
+            tz.from_utc_datetime(&parsed.start.naive_utc())
+                .format("%Z")
+                .to_string(),
+            "EDT"
+        );
         assert_eq!(timezone_utc_offset(tz, parsed.start), "UTC-4");
     }
 
     #[test]
     fn natural_language_handles_bare_noon_with_pacific_abbreviation() {
-        let parsed = parse_natural_language_timestamp_at("friday 12pm PST", None, fixed_now()).unwrap();
+        let parsed =
+            parse_natural_language_timestamp_at("friday 12pm PST", None, fixed_now()).unwrap();
 
         assert_eq!(parsed.timezone, Some(America::Los_Angeles));
-        assert_eq!(parsed.start, Utc.with_ymd_and_hms(2026, 7, 10, 19, 0, 0).unwrap());
+        assert_eq!(
+            parsed.start,
+            Utc.with_ymd_and_hms(2026, 7, 10, 19, 0, 0).unwrap()
+        );
         let tz = parsed.timezone.unwrap();
-        assert_eq!(tz.from_utc_datetime(&parsed.start.naive_utc()).format("%Z").to_string(), "PDT");
+        assert_eq!(
+            tz.from_utc_datetime(&parsed.start.naive_utc())
+                .format("%Z")
+                .to_string(),
+            "PDT"
+        );
         assert_eq!(timezone_utc_offset(tz, parsed.start), "UTC-7");
     }
 
     #[test]
     fn natural_language_handles_bare_noon_without_rolling_to_next_day() {
-        let parsed = parse_natural_language_timestamp_at("Sunday 12pm EDT", None, fixed_now()).unwrap();
+        let parsed =
+            parse_natural_language_timestamp_at("Sunday 12pm EDT", None, fixed_now()).unwrap();
 
         assert_eq!(parsed.timezone, Some(America::New_York));
-        assert_eq!(parsed.start, Utc.with_ymd_and_hms(2026, 7, 12, 16, 0, 0).unwrap());
+        assert_eq!(
+            parsed.start,
+            Utc.with_ymd_and_hms(2026, 7, 12, 16, 0, 0).unwrap()
+        );
     }
 
     #[test]
     fn natural_language_handles_bare_midnight() {
-        let parsed = parse_natural_language_timestamp_at("friday 12am PT", None, fixed_now()).unwrap();
+        let parsed =
+            parse_natural_language_timestamp_at("friday 12am PT", None, fixed_now()).unwrap();
 
         assert_eq!(parsed.timezone, Some(America::Los_Angeles));
-        assert_eq!(parsed.start, Utc.with_ymd_and_hms(2026, 7, 10, 7, 0, 0).unwrap());
+        assert_eq!(
+            parsed.start,
+            Utc.with_ymd_and_hms(2026, 7, 10, 7, 0, 0).unwrap()
+        );
     }
 
     #[test]
     fn natural_language_handles_default_timezone_with_bare_meridiem() {
-        let parsed = parse_natural_language_timestamp_at("friday 12 pm", Some(America::Los_Angeles), fixed_now()).unwrap();
+        let parsed = parse_natural_language_timestamp_at(
+            "friday 12 pm",
+            Some(America::Los_Angeles),
+            fixed_now(),
+        )
+        .unwrap();
 
         assert_eq!(parsed.timezone, Some(America::Los_Angeles));
         assert!(parsed.used_default_timezone);
-        assert_eq!(parsed.start, Utc.with_ymd_and_hms(2026, 7, 10, 19, 0, 0).unwrap());
+        assert_eq!(
+            parsed.start,
+            Utc.with_ymd_and_hms(2026, 7, 10, 19, 0, 0).unwrap()
+        );
     }
 }
 
-pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global_state: Arc<GlobalState>, db_pool: PgPool, http_client: reqwest::Client, config: Config, new_room_lock: Arc<Mutex<()>>, clean_shutdown: Arc<Mutex<CleanShutdown>>, shutdown: rocket::Shutdown) -> serenity_utils::Builder {
+pub(crate) fn configure_builder(
+    discord_builder: serenity_utils::Builder,
+    global_state: Arc<GlobalState>,
+    db_pool: PgPool,
+    http_client: reqwest::Client,
+    config: Config,
+    new_room_lock: Arc<Mutex<()>>,
+    clean_shutdown: Arc<Mutex<CleanShutdown>>,
+    shutdown: rocket::Shutdown,
+) -> serenity_utils::Builder {
     discord_builder
         .error_notifier(ErrorNotifier::User(ADMIN_USER)) //TODO also print to stderr and/or report to night
         .data::<GlobalState>(global_state)
@@ -2270,6 +3001,8 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                         Ok(Some(race)) => {
                                         let was_ended = race.is_ended();
                                         let race = Race {
+                                            is_qualifier: race.is_qualifier,
+                                            qualifier_number: race.qualifier_number,
                                             schedule: if reset_schedule { RaceSchedule::Unscheduled } else { race.schedule },
                                             schedule_updated_at: if reset_schedule { Some(Utc::now()) } else { race.schedule_updated_at },
                                             fpa_invoked: if reset_schedule { false } else { race.fpa_invoked },
@@ -2986,7 +3719,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                                         .collect();
 
                                                     // Build race description
-                                                    let race_description = if cal_event.race.phase.as_ref().is_some_and(|p| p == "Qualifier") {
+                                                    let race_description = if cal_event.race.is_qualifier {
                                                         match (&cal_event.race.round, &cal_event.race.phase) {
                                                             (Some(round), _) => round.clone(),
                                                             (None, Some(phase)) => phase.clone(),
@@ -3099,7 +3832,7 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                                         .collect();
 
                                                     // Build race description
-                                                    let race_description = if cal_event.race.phase.as_ref().is_some_and(|p| p == "Qualifier") {
+                                                    let race_description = if cal_event.race.is_qualifier {
                                                         match (&cal_event.race.round, &cal_event.race.phase) {
                                                             (Some(round), _) => round.clone(),
                                                             (None, Some(phase)) => phase.clone(),
@@ -4703,6 +5436,8 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                         };
                         let race_id_typed = race.id;
                         let race = Race {
+                            is_qualifier: race.is_qualifier,
+                            qualifier_number: race.qualifier_number,
                             schedule: RaceSchedule::Unscheduled,
                             schedule_updated_at: Some(Utc::now()),
                             fpa_invoked: false,
@@ -4919,7 +5654,74 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                             CreateInteractionResponseMessage::new()
                         )).await?;
 
-                        if let Some(qual_params) = params.strip_prefix("qual_") {
+                        if let Some(pool_params) = params.strip_prefix("pool_") {
+                            let Some(ref link) = link_str else {
+                                interaction.edit_response(ctx, EditInteractionResponse::new()
+                                    .content("Error: a VOD link is required for pooled qualifier results."))
+                                    .await?;
+                                return Ok(());
+                            };
+                            if Url::parse(link).is_err() {
+                                interaction.edit_response(ctx, EditInteractionResponse::new()
+                                    .content("Error: enter a valid VOD URL."))
+                                    .await?;
+                                return Ok(());
+                            }
+                            let mut parts = pool_params.rsplitn(2, '_');
+                            let control_version: i64 = parts.next().and_then(|value| value.parse().ok()).unwrap_or(-1);
+                            let attempt_id: i64 = parts.next().and_then(|value| value.parse().ok()).unwrap_or(-1);
+                            let result: Result<(), Box<dyn std::error::Error + Send + Sync>> = async {
+                                let pool = ctx.data.read().await.get::<DbPool>().expect("db pool missing").clone();
+                                let mut transaction = pool.begin().await?;
+                                let is_organizer = sqlx::query_scalar::<_, bool>(r#"SELECT EXISTS(
+                                    SELECT 1 FROM qualifier_attempts attempt
+                                    JOIN organizers organizer ON organizer.series = attempt.series AND organizer.event = attempt.event
+                                    JOIN users ON users.id = organizer.organizer
+                                    WHERE attempt.id = $1 AND attempt.control_version = $2
+                                      AND attempt.discord_thread = $3 AND users.discord_id = $4
+                                )"#)
+                                    .bind(attempt_id)
+                                    .bind(control_version)
+                                    .bind(interaction.channel_id.get() as i64)
+                                    .bind(interaction.user.id.get() as i64)
+                                    .fetch_one(&mut *transaction).await?;
+                                let user = User::from_discord(&mut *transaction, interaction.user.id).await?
+                                    .ok_or("User not found.")?;
+                                if !is_organizer && !user.is_global_admin() {
+                                    transaction.rollback().await?;
+                                    return Err("You must be an organizer for this event to record its result.".into());
+                                }
+                                event::pooled_qualifiers::finalize(
+                                    &mut transaction,
+                                    attempt_id,
+                                    control_version,
+                                    event::pooled_qualifiers::Outcome::Finished(
+                                        Duration::from_micros(
+                                            u64::try_from(pg_interval.microseconds)
+                                                .map_err(|_| "Finish time must be positive.")?,
+                                        ),
+                                    ),
+                                    link_str.as_deref(),
+                                    Some(user.id.into()),
+                                ).await?;
+                                transaction.commit().await?;
+                                Ok(())
+                            }.await;
+                            match result {
+                                Ok(()) => {
+                                    let run = async_race::AsyncRun::PooledQualifier { attempt_id, control_version };
+                                    async_race::clear_message_with_button(ctx, interaction.channel_id, &run.button_id("org_result")).await;
+                                    interaction.edit_response(ctx, EditInteractionResponse::new()
+                                        .content(format!("Time recorded: {time_str}"))
+                                    ).await?;
+                                }
+                                Err(error) => {
+                                    interaction.edit_response(ctx, EditInteractionResponse::new()
+                                        .content(format!("Error: {error}"))
+                                    ).await?;
+                                }
+                            }
+                        } else if let Some(qual_params) = params.strip_prefix("qual_") {
                             let mut parts = qual_params.rsplitn(2, '_');
                             let kind_int: i32 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(-1);
                             let team_id: i64 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(-1);
@@ -5003,6 +5805,67 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
                                     ).await?;
                                 }
                             }
+                        } else if let Some(bracket_params) = params.strip_prefix("bracket_") {
+                            let mut parts = bracket_params.rsplitn(2, '_');
+                            let async_part: i64 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(-1);
+                            let race_id: i64 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(-1);
+
+                            let result: Result<(), Box<dyn std::error::Error + Send + Sync>> = async {
+                                let pool = ctx.data.read().await.get::<DbPool>().expect("db pool missing").clone();
+                                let mut transaction = pool.begin().await?;
+
+                                let is_organizer = sqlx::query!(
+                                    r#"SELECT EXISTS(SELECT 1 FROM organizers eo JOIN users u ON eo.organizer = u.id WHERE u.discord_id = $1) AS "exists!""#,
+                                    interaction.user.id.get() as i64
+                                ).fetch_one(&mut *transaction).await?.exists;
+
+                                if !is_organizer {
+                                    transaction.rollback().await?;
+                                    return Err("You must be an event organizer to use this.".into());
+                                }
+
+                                let race = Race::from_id(&mut transaction, &reqwest::Client::new(), Id::from(race_id as u64)).await
+                                    .map_err(|_| "Race not found.")?;
+
+                                let already_submitted = sqlx::query!(
+                                    "SELECT finish_time FROM async_times WHERE race_id = $1 AND async_part = $2 AND recorded_at IS NOT NULL",
+                                    race_id,
+                                    async_part as i32,
+                                ).fetch_optional(&mut *transaction).await?.is_some();
+
+                                if already_submitted {
+                                    transaction.rollback().await?;
+                                    return Err("A result already exists for this half of the async. Use `/result-async` with race_id/async_part to override.".into());
+                                }
+
+                                let user = User::from_discord(&mut *transaction, interaction.user.id).await?
+                                    .ok_or("User not found.")?;
+
+                                async_race::record_bracket_result(
+                                    &mut transaction, race_id, async_part as i32,
+                                    Some(pg_interval), user.id, link_str.as_deref(),
+                                ).await?;
+
+                                finalize_async_if_complete(ctx, &mut transaction, race_id, &race).await?;
+
+                                transaction.commit().await?;
+                                Ok(())
+                            }.await;
+
+                            match result {
+                                Ok(()) => {
+                                    let run = async_race::AsyncRun::BracketRace { race_id, async_part: async_part as u8 };
+                                    async_race::clear_message_with_button(ctx, interaction.channel_id, &run.button_id("org_result")).await;
+                                    interaction.edit_response(ctx, EditInteractionResponse::new()
+                                        .content(format!("Time recorded: {}", time_str))
+                                    ).await?;
+                                }
+                                Err(e) => {
+                                    interaction.edit_response(ctx, EditInteractionResponse::new()
+                                        .content(format!("Error: {e}"))
+                                    ).await?;
+                                }
+                            }
                         }
                     }
                 },
@@ -5051,11 +5914,19 @@ pub(crate) fn configure_builder(discord_builder: serenity_utils::Builder, global
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum Error {
-    #[error(transparent)] Draft(#[from] draft::Error),
-    #[error(transparent)] EventData(#[from] event::DataError),
-    #[error(transparent)] Serenity(#[from] serenity::Error),
-    #[error(transparent)] Sql(#[from] sqlx::Error),
-    #[error("attempted to create scheduling thread in Discord guild that hasn't been initialized yet")]
+    #[error(transparent)]
+    SeedRoll(#[from] racetime_bot::RollError),
+    #[error(transparent)]
+    Draft(#[from] draft::Error),
+    #[error(transparent)]
+    EventData(#[from] event::DataError),
+    #[error(transparent)]
+    Serenity(#[from] serenity::Error),
+    #[error(transparent)]
+    Sql(#[from] sqlx::Error),
+    #[error(
+        "attempted to create scheduling thread in Discord guild that hasn't been initialized yet"
+    )]
     UninitializedDiscordGuild(GuildId),
     #[error("attempted to create scheduling thread in Discord guild without command IDs")]
     UnregisteredDiscordGuild(GuildId),
@@ -5066,27 +5937,35 @@ struct RunnerTimezone {
     timezone: Option<Tz>,
 }
 
-async fn runner_timezones_for_entrant(transaction: &mut Transaction<'_, Postgres>, ctx: &DiscordCtx, entrant: &Entrant) -> Result<Vec<RunnerTimezone>, Error> {
+async fn runner_timezones_for_entrant(
+    transaction: &mut Transaction<'_, Postgres>,
+    ctx: &DiscordCtx,
+    entrant: &Entrant,
+) -> Result<Vec<RunnerTimezone>, Error> {
     Ok(match entrant {
-        Entrant::MidosHouseTeam(team) => team.members(transaction).await?
+        Entrant::MidosHouseTeam(team) => team
+            .members(transaction)
+            .await?
             .into_iter()
             .map(|member| RunnerTimezone {
                 name: member.display_name().to_owned(),
                 timezone: member.timezone,
             })
             .collect(),
-        Entrant::Discord { id, .. } => if let Some(user) = User::from_discord(&mut **transaction, *id).await? {
-            vec![RunnerTimezone {
-                name: user.display_name().to_owned(),
-                timezone: user.timezone,
-            }]
-        } else {
-            let user = id.to_user(ctx).await?;
-            vec![RunnerTimezone {
-                name: user.global_name.unwrap_or(user.name),
-                timezone: None,
-            }]
-        },
+        Entrant::Discord { id, .. } => {
+            if let Some(user) = User::from_discord(&mut **transaction, *id).await? {
+                vec![RunnerTimezone {
+                    name: user.display_name().to_owned(),
+                    timezone: user.timezone,
+                }]
+            } else {
+                let user = id.to_user(ctx).await?;
+                vec![RunnerTimezone {
+                    name: user.global_name.unwrap_or(user.name),
+                    timezone: None,
+                }]
+            }
+        }
         Entrant::Named { name, .. } => vec![RunnerTimezone {
             name: name.clone(),
             timezone: None,
@@ -5094,7 +5973,11 @@ async fn runner_timezones_for_entrant(transaction: &mut Transaction<'_, Postgres
     })
 }
 
-async fn runner_timezones_for_race(transaction: &mut Transaction<'_, Postgres>, ctx: &DiscordCtx, race: &Race) -> Result<Vec<RunnerTimezone>, Error> {
+async fn runner_timezones_for_race(
+    transaction: &mut Transaction<'_, Postgres>,
+    ctx: &DiscordCtx,
+    race: &Race,
+) -> Result<Vec<RunnerTimezone>, Error> {
     let entrants = match &race.entrants {
         Entrants::Two(entrants) => entrants.to_vec(),
         Entrants::Three(entrants) => entrants.to_vec(),
@@ -5108,9 +5991,13 @@ async fn runner_timezones_for_race(transaction: &mut Transaction<'_, Postgres>, 
     Ok(runners)
 }
 
-fn push_runner_timezones(content: &mut MessageBuilder, runners: &[RunnerTimezone], language: Language) {
+fn push_runner_timezones(
+    content: &mut MessageBuilder,
+    runners: &[RunnerTimezone],
+    language: Language,
+) {
     if runners.is_empty() {
-        return
+        return;
     }
     let now = Utc::now();
     content.push_line("");
@@ -5159,7 +6046,9 @@ fn split_discord_message(mut content: String) -> Vec<String> {
     let mut chunks = Vec::new();
     while content.len() > LIMIT {
         let mut cutoff = LIMIT;
-        while !content.is_char_boundary(cutoff) { cutoff -= 1 }
+        while !content.is_char_boundary(cutoff) {
+            cutoff -= 1
+        }
         if let Some(line_break) = content[..cutoff].rfind('\n') {
             cutoff = line_break + 1;
         } else if let Some(space) = content[..cutoff].rfind(' ') {
@@ -5174,10 +6063,25 @@ fn split_discord_message(mut content: String) -> Vec<String> {
     chunks
 }
 
-pub(crate) async fn create_scheduling_thread<'a>(ctx: &DiscordCtx, mut transaction: Transaction<'a, Postgres>, race: &mut Race, game_count: i16) -> Result<Transaction<'a, Postgres>, Error> {
+pub(crate) async fn create_scheduling_thread<'a>(
+    ctx: &DiscordCtx,
+    mut transaction: Transaction<'a, Postgres>,
+    race: &mut Race,
+    game_count: i16,
+) -> Result<Transaction<'a, Postgres>, Error> {
     let event = race.event(&mut transaction).await?;
-    let (Some(guild_id), Some(scheduling_channel)) = (event.discord_guild, event.discord_scheduling_channel) else { return Ok(transaction) };
-    let command_ids = match ctx.data.read().await.get::<CommandIds>().and_then(|command_ids| command_ids.get(&guild_id).copied()) {
+    let (Some(guild_id), Some(scheduling_channel)) =
+        (event.discord_guild, event.discord_scheduling_channel)
+    else {
+        return Ok(transaction);
+    };
+    let command_ids = match ctx
+        .data
+        .read()
+        .await
+        .get::<CommandIds>()
+        .and_then(|command_ids| command_ids.get(&guild_id).copied())
+    {
         None => return Err(Error::UninitializedDiscordGuild(guild_id)),
         Some(None) => return Err(Error::UnregisteredDiscordGuild(guild_id)),
         Some(Some(command_ids)) => command_ids,
@@ -5185,7 +6089,9 @@ pub(crate) async fn create_scheduling_thread<'a>(ctx: &DiscordCtx, mut transacti
     let participant_chunks = if matches!(race.entrants, Entrants::Many(_)) {
         let mut participants = MessageBuilder::default();
         for team in race.teams() {
-            participants.mention_team(&mut transaction, Some(guild_id), team).await?;
+            participants
+                .mention_team(&mut transaction, Some(guild_id), team)
+                .await?;
             participants.push_line("");
         }
         split_discord_message(participants.build())
@@ -5345,12 +6251,21 @@ pub(crate) async fn create_scheduling_thread<'a>(ctx: &DiscordCtx, mut transacti
     if !choice_requirements.is_empty() {
         let team_ids = race.teams().map(|t| t.id).collect_vec();
         if team_ids.len() > 1 {
-            let rows = sqlx::query!("SELECT custom_choices FROM teams WHERE id = ANY($1)", team_ids as _)
-                .fetch_all(&mut *transaction).await?;
-            let choices = racetime_bot::resolve_choice_values(rows.iter().map(|row| &row.custom_choices));
-            let agreed = choice_requirements.into_iter()
+            let rows = sqlx::query!(
+                "SELECT custom_choices FROM teams WHERE id = ANY($1)",
+                team_ids as _
+            )
+            .fetch_all(&mut *transaction)
+            .await?;
+            let choices =
+                racetime_bot::resolve_choice_values(rows.iter().map(|row| &row.custom_choices));
+            let agreed = choice_requirements
+                .into_iter()
                 .filter_map(|(key, label)| {
-                    racetime_bot::format_choice_label(&label, choices.get(key).copied().unwrap_or_default())
+                    racetime_bot::format_choice_label(
+                        &label,
+                        choices.get(key).copied().unwrap_or_default(),
+                    )
                 })
                 .collect_vec();
             if !agreed.is_empty() {
@@ -5365,12 +6280,17 @@ pub(crate) async fn create_scheduling_thread<'a>(ctx: &DiscordCtx, mut transacti
     if let Some(deadline) = race.scheduling_deadline {
         content.push_line("");
         content.push_line("");
-        content.push(format!("You have until <t:{}:F> to schedule this race.", deadline.timestamp()));
+        content.push(format!(
+            "You have until <t:{}:F> to schedule this race.",
+            deadline.timestamp()
+        ));
     }
     if title.len() > 100 {
         // Discord thread titles are limited to 100 characters, unclear on specifics, limit to 100 bytes to be safe
         let mut cutoff = 100 - "[…]".len();
-        while !title.is_char_boundary(cutoff) { cutoff -= 1 }
+        while !title.is_char_boundary(cutoff) {
+            cutoff -= 1
+        }
         title.truncate(cutoff);
         title.push_str("[…]");
     }
@@ -5380,33 +6300,64 @@ pub(crate) async fn create_scheduling_thread<'a>(ctx: &DiscordCtx, mut transacti
                 let mut msg_ctx = draft::MessageContext::Discord {
                     teams: race.teams().cloned().collect(),
                     team: Team::dummy(),
-                    transaction, guild_id, command_ids,
+                    transaction,
+                    guild_id,
+                    command_ids,
                 };
                 content.push_line("");
                 content.push_line("");
-                content.push(draft.next_step(&draft_kind, race.game, &mut msg_ctx).await?.message);
+                content.push(
+                    draft
+                        .next_step(&draft_kind, race.game, &mut msg_ctx)
+                        .await?
+                        .message,
+                );
                 transaction = msg_ctx.into_transaction();
             }
         }
     }
     if let Some(ref sgt) = event.seed_gen_type {
-        let db_pool = ctx.data.read().await.get::<DbPool>().expect("database connection pool missing from Discord context").clone();
-        let is_async = event.automated_asyncs || matches!(race.schedule, RaceSchedule::Async { .. });
-        if let Some(display_str) = sgt.scheduling_thread_str(&db_pool, race, event.round_modes.as_ref(), is_async).await {
+        let db_pool = ctx
+            .data
+            .read()
+            .await
+            .get::<DbPool>()
+            .expect("database connection pool missing from Discord context")
+            .clone();
+        let is_async =
+            event.automated_asyncs || matches!(race.schedule, RaceSchedule::Async { .. });
+        if let Some(display_str) = sgt
+            .scheduling_thread_str(&db_pool, race, event.round_modes.as_ref(), is_async)
+            .await
+        {
             content.push_line("");
             content.push_line("");
             content.push(display_str);
         }
     }
-    let thread_id = if let Some(ChannelType::Forum) = scheduling_channel.to_channel(ctx).await?.guild().map(|c| c.kind) {
-        scheduling_channel.create_forum_post(ctx, CreateForumPost::new(
-            title,
-            CreateMessage::default().content(content.build()),
-        ).auto_archive_duration(AutoArchiveDuration::OneWeek)).await?.id
+    let thread_id = if let Some(ChannelType::Forum) = scheduling_channel
+        .to_channel(ctx)
+        .await?
+        .guild()
+        .map(|c| c.kind)
+    {
+        scheduling_channel
+            .create_forum_post(
+                ctx,
+                CreateForumPost::new(title, CreateMessage::default().content(content.build()))
+                    .auto_archive_duration(AutoArchiveDuration::OneWeek),
+            )
+            .await?
+            .id
     } else {
-        let thread = scheduling_channel.create_thread(ctx, CreateThread::new(
-            title,
-        ).kind(ChannelType::PublicThread).auto_archive_duration(AutoArchiveDuration::OneWeek)).await?;
+        let thread = scheduling_channel
+            .create_thread(
+                ctx,
+                CreateThread::new(title)
+                    .kind(ChannelType::PublicThread)
+                    .auto_archive_duration(AutoArchiveDuration::OneWeek),
+            )
+            .await?;
         thread.say(ctx, content.build()).await?;
         thread.id
     };
@@ -5415,41 +6366,64 @@ pub(crate) async fn create_scheduling_thread<'a>(ctx: &DiscordCtx, mut transacti
     }
     race.scheduling_thread = Some(thread_id);
     if let Some(draft_kind) = event.draft_kind() {
-        if matches!(race.entrants, Entrants::Two(_) | Entrants::Three(_)) && draft_kind.uses_button_draft() {
-            thread_id.send_message(ctx, CreateMessage::new()
-                .content("Any participant may click **Start Draft** to start the draft.")
-                .button(CreateButton::new("draft_start").label("Start Draft").style(ButtonStyle::Primary))
-            ).await?;
+        if matches!(race.entrants, Entrants::Two(_) | Entrants::Three(_))
+            && draft_kind.uses_button_draft()
+        {
+            thread_id
+                .send_message(
+                    ctx,
+                    CreateMessage::new()
+                        .content("Any participant may click **Start Draft** to start the draft.")
+                        .button(
+                            CreateButton::new("draft_start")
+                                .label("Start Draft")
+                                .style(ButtonStyle::Primary),
+                        ),
+                )
+                .await?;
         }
     }
     Ok(transaction)
 }
 
-pub(crate) async fn handle_race(discord_ctx: DiscordCtx, cal_event: cal::Event, event: event::Data<'_>) -> Result<(),Error > {
-
+pub(crate) async fn handle_race(
+    discord_ctx: DiscordCtx,
+    cal_event: cal::Event,
+    event: event::Data<'_>,
+) -> Result<(), Error> {
     let discord_ctx = discord_ctx.clone();
     let cal_event = cal_event.clone();
     let event = event.clone();
 
     let mut transaction = {
         let discord_data = discord_ctx.data.read().await;
-        discord_data.get::<DbPool>().expect("database connection pool missing from Discord context").begin().await?
+        discord_data
+            .get::<DbPool>()
+            .expect("database connection pool missing from Discord context")
+            .begin()
+            .await?
     };
 
     // The async manager may observe the same due race more than once. Do not roll or announce a
     // second seed after this async part has already been handled.
     let already_notified = match cal_event.kind {
-        cal::EventKind::Async1 => sqlx::query_scalar::<_, bool>("SELECT async_notified_1 FROM races WHERE id = $1"),
-        cal::EventKind::Async2 => sqlx::query_scalar::<_, bool>("SELECT async_notified_2 FROM races WHERE id = $1"),
-        cal::EventKind::Async3 => sqlx::query_scalar::<_, bool>("SELECT async_notified_3 FROM races WHERE id = $1"),
+        cal::EventKind::Async1 => {
+            sqlx::query_scalar::<_, bool>("SELECT async_notified_1 FROM races WHERE id = $1")
+        }
+        cal::EventKind::Async2 => {
+            sqlx::query_scalar::<_, bool>("SELECT async_notified_2 FROM races WHERE id = $1")
+        }
+        cal::EventKind::Async3 => {
+            sqlx::query_scalar::<_, bool>("SELECT async_notified_3 FROM races WHERE id = $1")
+        }
         cal::EventKind::Normal => panic!("attempted to handle a normal race as an async"),
     }
-        .bind(i64::from(cal_event.race.id))
-        .fetch_one(&mut *transaction)
-        .await?;
+    .bind(i64::from(cal_event.race.id))
+    .fetch_one(&mut *transaction)
+    .await?;
     if already_notified {
         transaction.commit().await?;
-        return Ok(())
+        return Ok(());
     }
 
     let is_second_part = cal_event.race.seed.files().is_some();
@@ -5457,7 +6431,11 @@ pub(crate) async fn handle_race(discord_ctx: DiscordCtx, cal_event: cal::Event, 
     // For the second part, the seed (and any resolved randoms) was already rolled and persisted
     // during the first part; read it back from the already-loaded seed data instead of re-rolling.
     let mut resolved_randoms = if is_second_part {
-        cal_event.race.seed.seed_data.as_ref()
+        cal_event
+            .race
+            .seed
+            .seed_data
+            .as_ref()
             .and_then(|data| data.get("resolved_randoms"))
             .and_then(|v| v.as_str())
             .map(str::to_owned)
@@ -5467,19 +6445,30 @@ pub(crate) async fn handle_race(discord_ctx: DiscordCtx, cal_event: cal::Event, 
 
     if !is_second_part {
         let discord_data = discord_ctx.data.read().await;
-        let global_state = discord_data.get::<GlobalState>().expect("Global State missing from Discord context");
-        let Some(ref seed_gen_type) = event.seed_gen_type else { return Ok(()); };
-        let mut updates = global_state.clone().roll_seed_for_event(seed_gen_type, &cal_event, &event).await;
+        let global_state = discord_data
+            .get::<GlobalState>()
+            .expect("Global State missing from Discord context");
+        let Some(ref seed_gen_type) = event.seed_gen_type else {
+            return Ok(());
+        };
+        let mut updates = global_state
+            .clone()
+            .roll_seed_for_event(seed_gen_type, &cal_event, &event)
+            .await;
 
         // Loop until we get an update saying the seed data is done rolling.
         let seed = loop {
             match updates.recv().await {
-                Some(racetime_bot::SeedRollUpdate::Done { seed, resolved_randoms: seed_resolved_randoms, .. }) => {
+                Some(racetime_bot::SeedRollUpdate::Done {
+                    seed,
+                    resolved_randoms: seed_resolved_randoms,
+                    ..
+                }) => {
                     resolved_randoms = seed_resolved_randoms;
-                    break seed
+                    break seed;
                 }
-                Some(racetime_bot::SeedRollUpdate::Error(e)) => panic!("error rolling seed: {e} ({e:?})"),
-                None => panic!(),
+                Some(racetime_bot::SeedRollUpdate::Error(e)) => return Err(e.into()),
+                None => return Err(racetime_bot::RollError::ChannelClosed.into()),
                 _ => {}
             }
         };
@@ -5489,7 +6478,13 @@ pub(crate) async fn handle_race(discord_ctx: DiscordCtx, cal_event: cal::Event, 
             if let Some(ref resolved_randoms) = resolved_randoms {
                 seed_data_json["resolved_randoms"] = serde_json::json!(resolved_randoms);
             }
-            sqlx::query!("UPDATE races SET seed_data = $1 WHERE id = $2", seed_data_json, cal_event.race.id as _,).execute(&mut *transaction).await?;
+            sqlx::query!(
+                "UPDATE races SET seed_data = $1 WHERE id = $2",
+                seed_data_json,
+                cal_event.race.id as _,
+            )
+            .execute(&mut *transaction)
+            .await?;
         }
         // Also keep hash1..5 columns in sync (still present for display compatibility)
         if let Some([ref hash1, ref hash2, ref hash3, ref hash4, ref hash5]) = seed.file_hash {
@@ -5500,7 +6495,9 @@ pub(crate) async fn handle_race(discord_ctx: DiscordCtx, cal_event: cal::Event, 
     for team in cal_event.active_teams() {
         let mut content = MessageBuilder::default();
         content.push("Async starting for ");
-        content.mention_team(&mut transaction, event.discord_guild, team).await?;
+        content
+            .mention_team(&mut transaction, event.discord_guild, team)
+            .await?;
 
         if is_second_part {
             content.push(". **This is the second part of the async.** The runner will receive the previously generated seed as soon as they hit the READY button. Please work with them in their async channel in case of issues.");
@@ -5521,14 +6518,29 @@ pub(crate) async fn handle_race(discord_ctx: DiscordCtx, cal_event: cal::Event, 
 
     match cal_event.kind {
         cal::EventKind::Async1 => {
-            sqlx::query!("UPDATE races SET async_notified_1 = TRUE WHERE id = $1", cal_event.race.id as _).execute(&mut *transaction).await?;
-        },
+            sqlx::query!(
+                "UPDATE races SET async_notified_1 = TRUE WHERE id = $1",
+                cal_event.race.id as _
+            )
+            .execute(&mut *transaction)
+            .await?;
+        }
         cal::EventKind::Async2 => {
-            sqlx::query!("UPDATE races SET async_notified_2 = TRUE WHERE id = $1", cal_event.race.id as _).execute(&mut *transaction).await?;
+            sqlx::query!(
+                "UPDATE races SET async_notified_2 = TRUE WHERE id = $1",
+                cal_event.race.id as _
+            )
+            .execute(&mut *transaction)
+            .await?;
         }
         cal::EventKind::Async3 => {
-            sqlx::query!("UPDATE races SET async_notified_3 = TRUE WHERE id = $1", cal_event.race.id as _).execute(&mut *transaction).await?;
-        },
+            sqlx::query!(
+                "UPDATE races SET async_notified_3 = TRUE WHERE id = $1",
+                cal_event.race.id as _
+            )
+            .execute(&mut *transaction)
+            .await?;
+        }
         cal::EventKind::Normal => panic!("Why are we having a normal race in an async"),
     };
 
@@ -5555,7 +6567,9 @@ async fn find_race_from_thread(
         WHERE async_thread1 = $1 OR async_thread2 = $1 OR async_thread3 = $1
         "#,
         thread_id
-    ).fetch_optional(&mut **transaction).await?;
+    )
+    .fetch_optional(&mut **transaction)
+    .await?;
 
     Ok(race_row.map(|row| (row.id, row.async_part.unwrap_or(0))))
 }
@@ -5570,8 +6584,10 @@ async fn find_qualifier_from_thread(
            FROM async_teams
            WHERE discord_thread = $1"#,
         thread_id
-    ).fetch_optional(&mut **transaction).await
-        .map(|row| row.map(|r| (r.team, r.kind)))
+    )
+    .fetch_optional(&mut **transaction)
+    .await
+    .map(|row| row.map(|r| (r.team, r.kind)))
 }
 
 pub(crate) async fn result_async_command(
@@ -5596,19 +6612,35 @@ async fn report_async_race_to_external_platforms(
     results: &[(i32, Duration)],
 ) -> Result<(), Error> {
     // --- Begin external reporting code ---
-    let cal_event = cal::Event { race: race.clone(), kind: cal::EventKind::Normal };
+    let cal_event = cal::Event {
+        race: race.clone(),
+        kind: cal::EventKind::Normal,
+    };
     let (db_pool, http_client, startgg_token, challonge_api_key) = {
         let discord_data = ctx.data.read().await;
         (
-            discord_data.get::<DbPool>().expect("database connection pool missing from Discord context").clone(),
-            discord_data.get::<HttpClient>().expect("HTTP client missing from Discord context").clone(),
-            discord_data.get::<StartggToken>().expect("start.gg token missing from Discord context").clone(),
-            discord_data.get::<ChallongeApiKey>().expect("Challonge API key missing from Discord context").clone(),
+            discord_data
+                .get::<DbPool>()
+                .expect("database connection pool missing from Discord context")
+                .clone(),
+            discord_data
+                .get::<HttpClient>()
+                .expect("HTTP client missing from Discord context")
+                .clone(),
+            discord_data
+                .get::<StartggToken>()
+                .expect("start.gg token missing from Discord context")
+                .clone(),
+            discord_data
+                .get::<ChallongeApiKey>()
+                .expect("Challonge API key missing from Discord context")
+                .clone(),
         )
     };
     // Report to start.gg if applicable
     if let Ok(Some(startgg_set_url)) = cal_event.race.startgg_set_url() {
-        let mut total_times: Vec<(i32, Option<Duration>)> = results.iter()
+        let mut total_times: Vec<(i32, Option<Duration>)> = results
+            .iter()
             .map(|(part, time)| (*part, Some(*time)))
             .collect();
         for (async_part, finish_time) in async_times {
@@ -5616,13 +6648,11 @@ async fn report_async_race_to_external_platforms(
                 total_times.push((*async_part, None));
             }
         }
-        total_times.sort_by(|a, b| {
-            match (a.1, b.1) {
-                (Some(a_time), Some(b_time)) => a_time.cmp(&b_time),
-                (Some(_), None) => Less,
-                (None, Some(_)) => Greater,
-                (None, None) => Equal,
-            }
+        total_times.sort_by(|a, b| match (a.1, b.1) {
+            (Some(a_time), Some(b_time)) => a_time.cmp(&b_time),
+            (Some(_), None) => Less,
+            (None, Some(_)) => Greater,
+            (None, None) => Equal,
         });
         if let Some((winner_part, _)) = total_times.first() {
             let winner_team = match winner_part {
@@ -5633,7 +6663,8 @@ async fn report_async_race_to_external_platforms(
             };
             if let Some(winner_team) = winner_team {
                 if let Some(startgg_id) = &winner_team.startgg_id {
-                    let set_id = if let Some(set_id) = startgg_set_url.path_segments()
+                    let set_id = if let Some(set_id) = startgg_set_url
+                        .path_segments()
                         .and_then(|segments| segments.last())
                         .and_then(|last| last.parse::<u64>().ok())
                     {
@@ -5647,8 +6678,10 @@ async fn report_async_race_to_external_platforms(
                         startgg::report_one_game_result_mutation::Variables {
                             set_id,
                             winner_entrant_id: startgg_id.clone(),
-                        }
-                    ).await {
+                        },
+                    )
+                    .await
+                    {
                         Ok(_) => {
                             let mut transaction = db_pool.begin().await?;
                             let event = race.event(&mut transaction).await?;
@@ -5658,10 +6691,11 @@ async fn report_async_race_to_external_platforms(
                                         http_client.clone(),
                                         event.clone(),
                                         startgg_token.clone(),
-                                    ).await;
+                                    )
+                                    .await;
                                 }
                             }
-                        },
+                        }
                         Err(e) => {
                             eprintln!("Failed to report async race result to start.gg: {:?}", e);
                         }
@@ -5672,7 +6706,8 @@ async fn report_async_race_to_external_platforms(
     }
     // Report to challonge if applicable
     if let cal::Source::Challonge { ref id } = cal_event.race.source {
-        let mut total_times: Vec<(i32, Option<Duration>)> = results.iter()
+        let mut total_times: Vec<(i32, Option<Duration>)> = results
+            .iter()
             .map(|(part, time)| (*part, Some(*time)))
             .collect();
         for (async_part, finish_time) in async_times {
@@ -5680,13 +6715,11 @@ async fn report_async_race_to_external_platforms(
                 total_times.push((*async_part, None));
             }
         }
-        total_times.sort_by(|a, b| {
-            match (a.1, b.1) {
-                (Some(a_time), Some(b_time)) => a_time.cmp(&b_time),
-                (Some(_), None) => Less,
-                (None, Some(_)) => Greater,
-                (None, None) => Equal,
-            }
+        total_times.sort_by(|a, b| match (a.1, b.1) {
+            (Some(a_time), Some(b_time)) => a_time.cmp(&b_time),
+            (Some(_), None) => Less,
+            (None, Some(_)) => Greater,
+            (None, None) => Equal,
         });
         if let Some((winner_part, _)) = total_times.first() {
             let winner_team = match winner_part {
@@ -5698,10 +6731,18 @@ async fn report_async_race_to_external_platforms(
             if let Some(winner_team) = winner_team {
                 if let Some(ref winner_id) = winner_team.challonge_id {
                     match challonge::report::report_result(
-                        &http_client, &challonge_api_key, id, winner_id, &[(1, 0)],
-                    ).await {
-                        Ok(()) => {},
-                        Err(e) => log::error!("Failed to report async race result to Challonge: {e:?}"),
+                        &http_client,
+                        &challonge_api_key,
+                        id,
+                        winner_id,
+                        &[(1, 0)],
+                    )
+                    .await
+                    {
+                        Ok(()) => {}
+                        Err(e) => {
+                            log::error!("Failed to report async race result to Challonge: {e:?}")
+                        }
                     }
                 }
             }
@@ -5712,18 +6753,32 @@ async fn report_async_race_to_external_platforms(
 
 fn get_display_order(race: &Race, async_part: i32) -> i32 {
     match &race.schedule {
-        RaceSchedule::Async { start1, start2, start3, .. } => {
+        RaceSchedule::Async {
+            start1,
+            start2,
+            start3,
+            ..
+        } => {
             // Get all scheduled start times that are not None
             let mut scheduled_times = Vec::new();
-            if let Some(time) = start1 { scheduled_times.push((1, *time)); }
-            if let Some(time) = start2 { scheduled_times.push((2, *time)); }
-            if let Some(time) = start3 { scheduled_times.push((3, *time)); }
+            if let Some(time) = start1 {
+                scheduled_times.push((1, *time));
+            }
+            if let Some(time) = start2 {
+                scheduled_times.push((2, *time));
+            }
+            if let Some(time) = start3 {
+                scheduled_times.push((3, *time));
+            }
 
             // Sort by start time
             scheduled_times.sort_by_key(|&(_, time)| time);
 
             // Find the position of this async part in the sorted list
-            if let Some(position) = scheduled_times.iter().position(|&(part, _)| part == async_part as u8) {
+            if let Some(position) = scheduled_times
+                .iter()
+                .position(|&(part, _)| part == async_part as u8)
+            {
                 (position + 1) as i32 // Convert to 1-based display order
             } else {
                 // Fallback to async_part number if not found
@@ -5740,11 +6795,19 @@ async fn handle_async_command(
     is_forfeit: bool,
 ) -> Result<(), Error> {
     // Defer the response immediately to prevent timeout
-    interaction.create_response(ctx, CreateInteractionResponse::Defer(CreateInteractionResponseMessage::new()
-        .ephemeral(false)
-    )).await?;
+    interaction
+        .create_response(
+            ctx,
+            CreateInteractionResponse::Defer(
+                CreateInteractionResponseMessage::new().ephemeral(false),
+            ),
+        )
+        .await?;
 
-    let pool = ctx.data.read().await
+    let pool = ctx
+        .data
+        .read()
+        .await
         .get::<DbPool>()
         .expect("database connection pool missing from Discord context")
         .clone();
@@ -5761,28 +6824,41 @@ async fn handle_async_command(
         ) as "exists!"
         "#,
         user_id.get() as i64
-    ).fetch_one(&mut *transaction).await?.exists;
+    )
+    .fetch_one(&mut *transaction)
+    .await?
+    .exists;
 
     if !is_organizer {
-        interaction.edit_response(ctx, EditInteractionResponse::new()
-            .content("You must be an event organizer to use this command.")
-        ).await?;
+        interaction
+            .edit_response(
+                ctx,
+                EditInteractionResponse::new()
+                    .content("You must be an event organizer to use this command."),
+            )
+            .await?;
         transaction.rollback().await?;
         return Ok(());
     }
 
     // Try to get race_id and async_part from command options first (for backward compatibility)
     let (race_id, async_part) = if let (Some(race_id_opt), Some(async_part_opt)) = (
-        interaction.data.options.iter()
+        interaction
+            .data
+            .options
+            .iter()
             .find(|opt| opt.name == "race_id")
             .and_then(|opt| opt.value.as_str())
             .and_then(|s| s.parse::<i64>().ok()),
-        interaction.data.options.iter()
+        interaction
+            .data
+            .options
+            .iter()
             .find(|opt| opt.name == "async_part")
             .and_then(|opt| match opt.value {
                 CommandDataOptionValue::Integer(part) => Some(part),
                 _ => None,
-            })
+            }),
     ) {
         (race_id_opt, async_part_opt)
     } else {
@@ -5792,28 +6868,45 @@ async fn handle_async_command(
             Some((race_id, async_part)) => (race_id, async_part as i64),
             None => {
                 // Check if it's a qualifier thread
-                if let Some((team_id, async_kind)) = find_qualifier_from_thread(&mut transaction, thread_id).await? {
+                if let Some((team_id, async_kind)) =
+                    find_qualifier_from_thread(&mut transaction, thread_id).await?
+                {
                     // Check if request has link parameter
-                    let link: Option<String> = interaction.data.options.iter()
+                    let link: Option<String> = interaction
+                        .data
+                        .options
+                        .iter()
                         .find(|opt| opt.name == "link")
                         .and_then(|opt| opt.value.as_str())
                         .map(|s| s.to_string());
 
-                    let team = Team::from_id(&mut transaction, team_id).await?.ok_or(sqlx::Error::RowNotFound)?;
-                    let team_name = team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into());
+                    let team = Team::from_id(&mut transaction, team_id)
+                        .await?
+                        .ok_or(sqlx::Error::RowNotFound)?;
+                    let team_name = team
+                        .name(&mut transaction)
+                        .await?
+                        .unwrap_or_else(|| "Unknown Team".to_string().into());
 
                     // For result commands, parse time before checking for an existing submission
                     let (qual_time_str, qual_total_seconds, qual_pg_interval) = if !is_forfeit {
-                        let time_str = interaction.data.options.iter()
+                        let time_str = interaction
+                            .data
+                            .options
+                            .iter()
                             .find(|opt| opt.name == "time")
                             .and_then(|opt| opt.value.as_str())
                             .ok_or_else(|| Error::Sql(sqlx::Error::RowNotFound))?
                             .to_string();
 
                         let Some((total_seconds, pg_interval)) = parse_hms(&time_str) else {
-                            interaction.edit_response(ctx, EditInteractionResponse::new()
-                                .content("Time must be in format hh:mm:ss")
-                            ).await?;
+                            interaction
+                                .edit_response(
+                                    ctx,
+                                    EditInteractionResponse::new()
+                                        .content("Time must be in format hh:mm:ss"),
+                                )
+                                .await?;
                             transaction.rollback().await?;
                             return Ok(());
                         };
@@ -5828,37 +6921,63 @@ async fn handle_async_command(
                         "SELECT submitted FROM async_teams WHERE team = $1 AND kind = $2",
                         team_id as _,
                         async_kind as _,
-                    ).fetch_optional(&mut *transaction).await?
-                        .flatten()
-                        .is_some();
+                    )
+                    .fetch_optional(&mut *transaction)
+                    .await?
+                    .flatten()
+                    .is_some();
 
                     if already_submitted {
-                        let new_desc = if is_forfeit { "forfeit".to_string() } else { qual_time_str.as_ref().unwrap().clone() };
+                        let new_desc = if is_forfeit {
+                            "forfeit".to_string()
+                        } else {
+                            qual_time_str.as_ref().unwrap().clone()
+                        };
                         let nonce = interaction.id.get();
 
                         let confirm_id = if is_forfeit {
-                            format!("async_override_qualifier_forfeit_{}_{}_{}", team_id, async_kind as i32, nonce)
+                            format!(
+                                "async_override_qualifier_forfeit_{}_{}_{}",
+                                team_id, async_kind as i32, nonce
+                            )
                         } else {
-                            format!("async_override_qualifier_result_{}_{}_{}_{}", team_id, async_kind as i32, qual_total_seconds.unwrap(), nonce)
+                            format!(
+                                "async_override_qualifier_result_{}_{}_{}_{}",
+                                team_id,
+                                async_kind as i32,
+                                qual_total_seconds.unwrap(),
+                                nonce
+                            )
                         };
 
                         // Stash the vod link so the override-confirmation button click can persist it
                         // (it can't be safely encoded into the button's custom_id, see PendingAsyncVod)
                         transaction.rollback().await?;
-                        pending_async_vods(ctx).await.lock().await.insert(nonce, link);
+                        pending_async_vods(ctx)
+                            .await
+                            .lock()
+                            .await
+                            .insert(nonce, link);
 
-                        interaction.edit_response(ctx, EditInteractionResponse::new()
-                            .content(format!(
-                                "A result already exists for **{}**. Override with **{}**?",
-                                team_name, new_desc
-                            ))
-                            .components(vec![override_confirm_buttons(confirm_id, nonce)])
-                        ).await?;
+                        interaction
+                            .edit_response(
+                                ctx,
+                                EditInteractionResponse::new()
+                                    .content(format!(
+                                        "A result already exists for **{}**. Override with **{}**?",
+                                        team_name, new_desc
+                                    ))
+                                    .components(vec![override_confirm_buttons(confirm_id, nonce)]),
+                            )
+                            .await?;
                         return Ok(());
                     }
 
                     // No existing result — proceed with write
-                    let qual_run = async_race::AsyncRun::Qualifier { team_id: i64::from(team_id), async_kind };
+                    let qual_run = async_race::AsyncRun::Qualifier {
+                        team_id: i64::from(team_id),
+                        async_kind,
+                    };
                     if is_forfeit {
                         sqlx::query!("UPDATE async_teams SET submitted = NOW(), finish_time = NULL WHERE team = $1 AND kind = $2", team_id as _, async_kind as _).execute(&mut *transaction).await?;
 
@@ -5873,18 +6992,32 @@ async fn handle_async_command(
                             ).execute(&mut *transaction).await?;
                         }
 
-                        interaction.edit_response(ctx, EditInteractionResponse::new()
-                            .content(format!("Forfeit recorded for {}.", team_name))
-                        ).await?;
-                        async_race::clear_message_with_button(ctx, interaction.channel_id, &qual_run.button_id("org_forfeit")).await;
-                        async_race::clear_message_with_button(ctx, interaction.channel_id, &qual_run.button_id("org_result")).await;
+                        interaction
+                            .edit_response(
+                                ctx,
+                                EditInteractionResponse::new()
+                                    .content(format!("Forfeit recorded for {}.", team_name)),
+                            )
+                            .await?;
+                        async_race::clear_message_with_button(
+                            ctx,
+                            interaction.channel_id,
+                            &qual_run.button_id("org_forfeit"),
+                        )
+                        .await;
+                        async_race::clear_message_with_button(
+                            ctx,
+                            interaction.channel_id,
+                            &qual_run.button_id("org_result"),
+                        )
+                        .await;
                     } else {
                         let pg_interval = qual_pg_interval.unwrap();
                         sqlx::query!("UPDATE async_teams SET submitted = NOW(), finish_time = $1 WHERE team = $2 AND kind = $3", pg_interval, team_id as _, async_kind as _).execute(&mut *transaction).await?;
 
                         let members = team.members(&mut transaction).await?;
                         for member in members {
-                             sqlx::query!(
+                            sqlx::query!(
                                 "INSERT INTO async_players (series, event, player, kind, time, vod) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (series, event, player, kind) DO UPDATE SET time = EXCLUDED.time, vod = COALESCE(EXCLUDED.vod, async_players.vod)",
                                 team.series as _,
                                 team.event,
@@ -5895,11 +7028,28 @@ async fn handle_async_command(
                             ).execute(&mut *transaction).await?;
                         }
 
-                        interaction.edit_response(ctx, EditInteractionResponse::new()
-                            .content(format!("Time recorded for {}: {}", team_name, qual_time_str.unwrap()))
-                        ).await?;
-                        async_race::clear_message_with_button(ctx, interaction.channel_id, &qual_run.button_id("org_result")).await;
-                        async_race::clear_message_with_button(ctx, interaction.channel_id, &qual_run.button_id("org_forfeit")).await;
+                        interaction
+                            .edit_response(
+                                ctx,
+                                EditInteractionResponse::new().content(format!(
+                                    "Time recorded for {}: {}",
+                                    team_name,
+                                    qual_time_str.unwrap()
+                                )),
+                            )
+                            .await?;
+                        async_race::clear_message_with_button(
+                            ctx,
+                            interaction.channel_id,
+                            &qual_run.button_id("org_result"),
+                        )
+                        .await;
+                        async_race::clear_message_with_button(
+                            ctx,
+                            interaction.channel_id,
+                            &qual_run.button_id("org_forfeit"),
+                        )
+                        .await;
                     }
 
                     transaction.commit().await?;
@@ -5916,29 +7066,46 @@ async fn handle_async_command(
     };
 
     // Get the optional link parameter
-    let link: Option<String> = interaction.data.options.iter()
+    let link: Option<String> = interaction
+        .data
+        .options
+        .iter()
         .find(|opt| opt.name == "link")
         .and_then(|opt| opt.value.as_str())
         .map(|s| s.to_string());
 
     // Get the user who ran the command
-    let user = User::from_discord(&mut *transaction, user_id).await?.ok_or_else(|| Error::Sql(sqlx::Error::RowNotFound))?;
+    let user = User::from_discord(&mut *transaction, user_id)
+        .await?
+        .ok_or_else(|| Error::Sql(sqlx::Error::RowNotFound))?;
 
     // Load race data early so we can use it for display order
-    let race = Race::from_id(&mut transaction, &reqwest::Client::new(), Id::from(race_id as u64)).await.map_err(|_e| Error::Sql(sqlx::Error::RowNotFound))?;
+    let race = Race::from_id(
+        &mut transaction,
+        &reqwest::Client::new(),
+        Id::from(race_id as u64),
+    )
+    .await
+    .map_err(|_e| Error::Sql(sqlx::Error::RowNotFound))?;
 
     // For result commands, parse time before checking for an existing record
     let (time_str, total_seconds, pg_interval) = if !is_forfeit {
-        let time_str = interaction.data.options.iter()
+        let time_str = interaction
+            .data
+            .options
+            .iter()
             .find(|opt| opt.name == "time")
             .and_then(|opt| opt.value.as_str())
             .ok_or_else(|| Error::Sql(sqlx::Error::RowNotFound))?
             .to_string();
 
         let Some((total_seconds, pg_interval)) = parse_hms(&time_str) else {
-            interaction.edit_response(ctx, EditInteractionResponse::new()
-                .content("Time must be in format hh:mm:ss")
-            ).await?;
+            interaction
+                .edit_response(
+                    ctx,
+                    EditInteractionResponse::new().content("Time must be in format hh:mm:ss"),
+                )
+                .await?;
             transaction.rollback().await?;
             return Ok(());
         };
@@ -5958,27 +7125,56 @@ async fn handle_async_command(
 
     if let Some(existing_row) = existing {
         let existing_desc = if let Some(ft) = existing_row.finish_time {
-            let secs = ft.microseconds / 1_000_000 + (ft.days as i64) * 86400 + (ft.months as i64) * 2592000;
-            format!("{:02}:{:02}:{:02}", secs / 3600, (secs % 3600) / 60, secs % 60)
+            let secs = ft.microseconds / 1_000_000
+                + (ft.days as i64) * 86400
+                + (ft.months as i64) * 2592000;
+            format!(
+                "{:02}:{:02}:{:02}",
+                secs / 3600,
+                (secs % 3600) / 60,
+                secs % 60
+            )
         } else {
             "forfeit".to_string()
         };
-        let new_desc = if is_forfeit { "forfeit".to_string() } else { time_str.as_ref().unwrap().clone() };
+        let new_desc = if is_forfeit {
+            "forfeit".to_string()
+        } else {
+            time_str.as_ref().unwrap().clone()
+        };
         let nonce = interaction.id.get();
 
         let display_order = get_display_order(&race, async_part as i32);
-        let ordinal = match display_order { 1 => "1st", 2 => "2nd", 3 => "3rd", n => &format!("{}th", n) };
+        let ordinal = match display_order {
+            1 => "1st",
+            2 => "2nd",
+            3 => "3rd",
+            n => &format!("{}th", n),
+        };
 
         let confirm_id = if is_forfeit {
-            format!("async_override_forfeit_{}_{}_{}", race_id, async_part, nonce)
+            format!(
+                "async_override_forfeit_{}_{}_{}",
+                race_id, async_part, nonce
+            )
         } else {
-            format!("async_override_result_{}_{}_{}_{}", race_id, async_part, total_seconds.unwrap(), nonce)
+            format!(
+                "async_override_result_{}_{}_{}_{}",
+                race_id,
+                async_part,
+                total_seconds.unwrap(),
+                nonce
+            )
         };
 
         // Stash the vod link so the override-confirmation button click can persist it
         // (it can't be safely encoded into the button's custom_id, see PendingAsyncVod)
         transaction.rollback().await?;
-        pending_async_vods(ctx).await.lock().await.insert(nonce, link);
+        pending_async_vods(ctx)
+            .await
+            .lock()
+            .await
+            .insert(nonce, link);
 
         interaction.edit_response(ctx, EditInteractionResponse::new()
             .content(format!(
@@ -5991,7 +7187,10 @@ async fn handle_async_command(
     }
 
     // No existing result — proceed with write
-    let bracket_run = async_race::AsyncRun::BracketRace { race_id, async_part: async_part as u8 };
+    let bracket_run = async_race::AsyncRun::BracketRace {
+        race_id,
+        async_part: async_part as u8,
+    };
     if is_forfeit {
         sqlx::query!(
             r#"
@@ -6007,15 +7206,38 @@ async fn handle_async_command(
             async_part as i32,
             user.id as _,
             link,
-        ).execute(&mut *transaction).await?;
+        )
+        .execute(&mut *transaction)
+        .await?;
 
         let display_order = get_display_order(&race, async_part as i32);
-        let ordinal = match display_order { 1 => "1st", 2 => "2nd", 3 => "3rd", n => &format!("{}th", n) };
-        interaction.edit_response(ctx, EditInteractionResponse::new()
-            .content(format!("Forfeit recorded for {} half of this async.", ordinal))
-        ).await?;
-        async_race::clear_message_with_button(ctx, interaction.channel_id, &bracket_run.button_id("org_forfeit")).await;
-        async_race::clear_message_with_button(ctx, interaction.channel_id, &bracket_run.button_id("org_result")).await;
+        let ordinal = match display_order {
+            1 => "1st",
+            2 => "2nd",
+            3 => "3rd",
+            n => &format!("{}th", n),
+        };
+        interaction
+            .edit_response(
+                ctx,
+                EditInteractionResponse::new().content(format!(
+                    "Forfeit recorded for {} half of this async.",
+                    ordinal
+                )),
+            )
+            .await?;
+        async_race::clear_message_with_button(
+            ctx,
+            interaction.channel_id,
+            &bracket_run.button_id("org_forfeit"),
+        )
+        .await;
+        async_race::clear_message_with_button(
+            ctx,
+            interaction.channel_id,
+            &bracket_run.button_id("org_result"),
+        )
+        .await;
     } else {
         sqlx::query!(
             r#"
@@ -6032,15 +7254,39 @@ async fn handle_async_command(
             pg_interval.unwrap(),
             user.id as _,
             link,
-        ).execute(&mut *transaction).await?;
+        )
+        .execute(&mut *transaction)
+        .await?;
 
         let display_order = get_display_order(&race, async_part as i32);
-        let ordinal = match display_order { 1 => "1st", 2 => "2nd", 3 => "3rd", n => &format!("{}th", n) };
-        interaction.edit_response(ctx, EditInteractionResponse::new()
-            .content(format!("Time recorded for {} half of this async: {}", ordinal, time_str.unwrap()))
-        ).await?;
-        async_race::clear_message_with_button(ctx, interaction.channel_id, &bracket_run.button_id("org_result")).await;
-        async_race::clear_message_with_button(ctx, interaction.channel_id, &bracket_run.button_id("org_forfeit")).await;
+        let ordinal = match display_order {
+            1 => "1st",
+            2 => "2nd",
+            3 => "3rd",
+            n => &format!("{}th", n),
+        };
+        interaction
+            .edit_response(
+                ctx,
+                EditInteractionResponse::new().content(format!(
+                    "Time recorded for {} half of this async: {}",
+                    ordinal,
+                    time_str.unwrap()
+                )),
+            )
+            .await?;
+        async_race::clear_message_with_button(
+            ctx,
+            interaction.channel_id,
+            &bracket_run.button_id("org_result"),
+        )
+        .await;
+        async_race::clear_message_with_button(
+            ctx,
+            interaction.channel_id,
+            &bracket_run.button_id("org_forfeit"),
+        )
+        .await;
     }
 
     finalize_async_if_complete(ctx, &mut transaction, race_id, &race).await?;
@@ -6049,7 +7295,7 @@ async fn handle_async_command(
     Ok(())
 }
 
-async fn finalize_async_if_complete(
+pub(crate) async fn finalize_async_if_complete(
     ctx: &DiscordCtx,
     transaction: &mut Transaction<'_, Postgres>,
     race_id: i64,
@@ -6062,7 +7308,9 @@ async fn finalize_async_if_complete(
         ORDER BY async_part
         "#,
         race_id
-    ).fetch_all(&mut **transaction).await?;
+    )
+    .fetch_all(&mut **transaction)
+    .await?;
 
     let expected_parts = race.teams().count();
     if async_times.len() < expected_parts {
@@ -6071,15 +7319,28 @@ async fn finalize_async_if_complete(
 
     // All parts are complete, finalize the race
     let event_name = race.event.clone();
-    let event = event::Data::new(transaction, race.series, &event_name).await?
+    let event = event::Data::new(transaction, race.series, &event_name)
+        .await?
         .ok_or_else(|| Error::Sql(sqlx::Error::RowNotFound))?;
 
     // Update race end times
     for async_time in &async_times {
         let start_time = match async_time.async_part {
-            1 => sqlx::query_scalar!("SELECT async_start1 FROM races WHERE id = $1", race_id).fetch_one(&mut **transaction).await?,
-            2 => sqlx::query_scalar!("SELECT async_start2 FROM races WHERE id = $1", race_id).fetch_one(&mut **transaction).await?,
-            3 => sqlx::query_scalar!("SELECT async_start3 FROM races WHERE id = $1", race_id).fetch_one(&mut **transaction).await?,
+            1 => {
+                sqlx::query_scalar!("SELECT async_start1 FROM races WHERE id = $1", race_id)
+                    .fetch_one(&mut **transaction)
+                    .await?
+            }
+            2 => {
+                sqlx::query_scalar!("SELECT async_start2 FROM races WHERE id = $1", race_id)
+                    .fetch_one(&mut **transaction)
+                    .await?
+            }
+            3 => {
+                sqlx::query_scalar!("SELECT async_start3 FROM races WHERE id = $1", race_id)
+                    .fetch_one(&mut **transaction)
+                    .await?
+            }
             _ => continue,
         };
 
@@ -6102,28 +7363,56 @@ async fn finalize_async_if_complete(
             };
 
             match async_time.async_part {
-                1 => sqlx::query!("UPDATE races SET async_end1 = $1 WHERE id = $2", end_time, race_id).execute(&mut **transaction).await?,
-                2 => sqlx::query!("UPDATE races SET async_end2 = $1 WHERE id = $2", end_time, race_id).execute(&mut **transaction).await?,
-                3 => sqlx::query!("UPDATE races SET async_end3 = $1 WHERE id = $2", end_time, race_id).execute(&mut **transaction).await?,
+                1 => {
+                    sqlx::query!(
+                        "UPDATE races SET async_end1 = $1 WHERE id = $2",
+                        end_time,
+                        race_id
+                    )
+                    .execute(&mut **transaction)
+                    .await?
+                }
+                2 => {
+                    sqlx::query!(
+                        "UPDATE races SET async_end2 = $1 WHERE id = $2",
+                        end_time,
+                        race_id
+                    )
+                    .execute(&mut **transaction)
+                    .await?
+                }
+                3 => {
+                    sqlx::query!(
+                        "UPDATE races SET async_end3 = $1 WHERE id = $2",
+                        end_time,
+                        race_id
+                    )
+                    .execute(&mut **transaction)
+                    .await?
+                }
                 _ => return Ok(()),
             };
         }
     }
 
     // Report the results
-    let results = async_times.iter().filter_map(|at| {
-        if let Some(finish_time) = &at.finish_time {
-            let seconds = finish_time.microseconds / 1_000_000
-                + (finish_time.days as i64) * 86400
-                + (finish_time.months as i64) * 30 * 86400;
-            Some((at.async_part, Duration::from_secs(seconds as u64)))
-        } else {
-            None
-        }
-    }).collect::<Vec<_>>();
+    let results = async_times
+        .iter()
+        .filter_map(|at| {
+            if let Some(finish_time) = &at.finish_time {
+                let seconds = finish_time.microseconds / 1_000_000
+                    + (finish_time.days as i64) * 86400
+                    + (finish_time.months as i64) * 30 * 86400;
+                Some((at.async_part, Duration::from_secs(seconds as u64)))
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
 
     // Find the winning and losing players
-    let mut total_times: Vec<(i32, Option<Duration>, &Team)> = results.iter()
+    let mut total_times: Vec<(i32, Option<Duration>, &Team)> = results
+        .iter()
         .map(|(part, time)| {
             let team = match part {
                 1 => race.teams().next(),
@@ -6149,21 +7438,27 @@ async fn finalize_async_if_complete(
         }
     }
 
-    total_times.sort_by(|a, b| {
-        match (a.1, b.1) {
-            (Some(a_time), Some(b_time)) => a_time.cmp(&b_time),
-            (Some(_), None) => Less,
-            (None, Some(_)) => Greater,
-            (None, None) => Equal,
-        }
+    total_times.sort_by(|a, b| match (a.1, b.1) {
+        (Some(a_time), Some(b_time)) => a_time.cmp(&b_time),
+        (Some(_), None) => Less,
+        (None, Some(_)) => Greater,
+        (None, None) => Equal,
     });
 
     let (_winner_part, winner_time, winner_team) = &total_times[0];
     let (_loser_part, loser_time, loser_team) = &total_times[1];
 
-    let winner_player = winner_team.members(transaction).await?.into_iter().next()
+    let winner_player = winner_team
+        .members(transaction)
+        .await?
+        .into_iter()
+        .next()
         .ok_or_else(|| Error::Sql(sqlx::Error::RowNotFound))?;
-    let loser_player = loser_team.members(transaction).await?.into_iter().next()
+    let loser_player = loser_team
+        .members(transaction)
+        .await?
+        .into_iter()
+        .next()
         .ok_or_else(|| Error::Sql(sqlx::Error::RowNotFound))?;
 
     let mut content = MessageBuilder::default();
@@ -6181,7 +7476,8 @@ async fn finalize_async_if_complete(
     content.mention_user(&winner_player);
     content.push(" (");
     if let Some(winner_time) = winner_time {
-        content.push(format!("{:02}:{:02}:{:02}",
+        content.push(format!(
+            "{:02}:{:02}:{:02}",
             winner_time.as_secs() / 3600,
             (winner_time.as_secs() % 3600) / 60,
             winner_time.as_secs() % 60
@@ -6193,7 +7489,8 @@ async fn finalize_async_if_complete(
     content.mention_user(&loser_player);
     content.push(" (");
     if let Some(loser_time) = loser_time {
-        content.push(format!("{:02}:{:02}:{:02}",
+        content.push(format!(
+            "{:02}:{:02}:{:02}",
             loser_time.as_secs() / 3600,
             (loser_time.as_secs() % 3600) / 60,
             loser_time.as_secs() % 60
@@ -6221,7 +7518,10 @@ async fn finalize_async_if_complete(
                 _ => None,
             };
             if let Some(player) = player {
-                let player_name = player.name(transaction).await?.unwrap_or_else(|| "Unknown Player".to_string().into());
+                let player_name = player
+                    .name(transaction)
+                    .await?
+                    .unwrap_or_else(|| "Unknown Player".to_string().into());
                 links_content.push_safe(player_name);
                 links_content.push(": <");
                 links_content.push(link);
@@ -6242,7 +7542,8 @@ async fn finalize_async_if_complete(
         scheduling_thread.say(ctx, content.build()).await?;
     }
 
-    let async_times_parsed: Vec<(i32, Option<PgInterval>)> = async_times.iter()
+    let async_times_parsed: Vec<(i32, Option<PgInterval>)> = async_times
+        .iter()
         .map(|at| (at.async_part, at.finish_time.clone()))
         .collect();
 
@@ -6252,7 +7553,8 @@ async fn finalize_async_if_complete(
     // confirmed and successfully reported. `team3`, rather than `async_start3`,
     // determines whether a third result is required: that entrant may not have
     // scheduled their part yet.
-    sqlx::query!(r#"
+    sqlx::query!(
+        r#"
         UPDATE races
         SET end_time = CASE
             WHEN team3 IS NULL THEN GREATEST(async_end1, async_end2)
@@ -6262,21 +7564,32 @@ async fn finalize_async_if_complete(
           AND async_end1 IS NOT NULL
           AND async_end2 IS NOT NULL
           AND (team3 IS NULL OR async_end3 IS NOT NULL)
-    "#, race_id)
-        .execute(&mut **transaction)
-        .await?;
+    "#,
+        race_id
+    )
+    .execute(&mut **transaction)
+    .await?;
 
     Ok(())
 }
 
 fn parse_hms(s: &str) -> Option<(i64, PgInterval)> {
     let parts: Vec<&str> = s.split(':').collect();
-    if parts.len() != 3 { return None; }
+    if parts.len() != 3 {
+        return None;
+    }
     let h: i64 = parts[0].parse().ok()?;
     let m: i64 = parts[1].parse().ok()?;
     let s: i64 = parts[2].parse().ok()?;
     let total_seconds = h * 3600 + m * 60 + s;
-    Some((total_seconds, PgInterval { months: 0, days: 0, microseconds: total_seconds * 1_000_000 }))
+    Some((
+        total_seconds,
+        PgInterval {
+            months: 0,
+            days: 0,
+            microseconds: total_seconds * 1_000_000,
+        },
+    ))
 }
 
 async fn verify_organizer_for_button(
@@ -6291,20 +7604,27 @@ async fn verify_organizer_for_button(
     ).fetch_one(&mut **transaction).await?.exists;
 
     if !is_organizer {
-        interaction.edit_response(ctx, EditInteractionResponse::new()
-            .content("You must be an event organizer to use this command.")
-            .components(vec![])
-        ).await?;
+        interaction
+            .edit_response(
+                ctx,
+                EditInteractionResponse::new()
+                    .content("You must be an event organizer to use this command.")
+                    .components(vec![]),
+            )
+            .await?;
         // Transaction will be auto-rolled back on drop when the caller returns.
         return Ok(None);
     }
 
-    let user = User::from_discord(&mut **transaction, user_id).await?
+    let user = User::from_discord(&mut **transaction, user_id)
+        .await?
         .ok_or_else(|| Error::Sql(sqlx::Error::RowNotFound))?;
     Ok(Some(user))
 }
 
-async fn pending_async_vods(ctx: &DiscordCtx) -> Arc<tokio::sync::Mutex<HashMap<u64, Option<String>>>> {
+async fn pending_async_vods(
+    ctx: &DiscordCtx,
+) -> Arc<tokio::sync::Mutex<HashMap<u64, Option<String>>>> {
     let data = ctx.data.read().await;
     data.get::<PendingAsyncVod>()
         .expect("pending async VOD cache missing from Discord context")
@@ -6313,7 +7633,11 @@ async fn pending_async_vods(ctx: &DiscordCtx) -> Arc<tokio::sync::Mutex<HashMap<
 
 fn override_confirm_buttons(confirm_id: impl Into<String>, nonce: u64) -> CreateActionRow {
     CreateActionRow::Buttons(vec![
-        CreateButton::new(confirm_id.into()).label("Yes, override").style(ButtonStyle::Danger),
-        CreateButton::new(format!("async_override_cancel_{nonce}")).label("Cancel").style(ButtonStyle::Secondary),
+        CreateButton::new(confirm_id.into())
+            .label("Yes, override")
+            .style(ButtonStyle::Danger),
+        CreateButton::new(format!("async_override_cancel_{nonce}"))
+            .label("Cancel")
+            .style(ButtonStyle::Secondary),
     ])
 }

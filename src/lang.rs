@@ -2,7 +2,21 @@
 
 use crate::prelude::*;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Sequence, Deserialize, sqlx::Type, async_graphql::Enum, FromFormField)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Sequence,
+    Deserialize,
+    sqlx::Type,
+    async_graphql::Enum,
+    FromFormField,
+)]
 #[sqlx(type_name = "language")]
 pub(crate) enum Language {
     #[serde(rename = "en", alias = "English")]
@@ -41,16 +55,34 @@ impl Language {
         if running_text {
             match self {
                 French => {
-                    let parts = (hours > 0).then(|| format!("{hours} heure{}", if hours == 1 { "" } else { "s" })).into_iter()
-                        .chain((mins > 0).then(|| format!("{mins} minute{}", if mins == 1 { "" } else { "s" })))
-                        .chain((secs > 0).then(|| format!("{secs} seconde{}", if secs == 1 { "" } else { "s" })));
-                    French.join_str_opt(parts).unwrap_or_else(|| format!("0 secondes"))
+                    let parts =
+                        (hours > 0)
+                            .then(|| format!("{hours} heure{}", if hours == 1 { "" } else { "s" }))
+                            .into_iter()
+                            .chain((mins > 0).then(|| {
+                                format!("{mins} minute{}", if mins == 1 { "" } else { "s" })
+                            }))
+                            .chain((secs > 0).then(|| {
+                                format!("{secs} seconde{}", if secs == 1 { "" } else { "s" })
+                            }));
+                    French
+                        .join_str_opt(parts)
+                        .unwrap_or_else(|| format!("0 secondes"))
                 }
                 _ => {
-                    let parts = (hours > 0).then(|| format!("{hours} hour{}", if hours == 1 { "" } else { "s" })).into_iter()
-                        .chain((mins > 0).then(|| format!("{mins} minute{}", if mins == 1 { "" } else { "s" })))
-                        .chain((secs > 0).then(|| format!("{secs} second{}", if secs == 1 { "" } else { "s" })));
-                    English.join_str_opt(parts).unwrap_or_else(|| format!("0 seconds"))
+                    let parts =
+                        (hours > 0)
+                            .then(|| format!("{hours} hour{}", if hours == 1 { "" } else { "s" }))
+                            .into_iter()
+                            .chain((mins > 0).then(|| {
+                                format!("{mins} minute{}", if mins == 1 { "" } else { "s" })
+                            }))
+                            .chain((secs > 0).then(|| {
+                                format!("{secs} second{}", if secs == 1 { "" } else { "s" })
+                            }));
+                    English
+                        .join_str_opt(parts)
+                        .unwrap_or_else(|| format!("0 seconds"))
                 }
             }
         } else {
@@ -58,7 +90,10 @@ impl Language {
         }
     }
 
-    pub(crate) fn join_html<T: ToHtml>(&self, elts: impl IntoNonEmptyIterator<Item = T>) -> RawHtml<String> {
+    pub(crate) fn join_html<T: ToHtml>(
+        &self,
+        elts: impl IntoNonEmptyIterator<Item = T>,
+    ) -> RawHtml<String> {
         match self {
             French | German | Portuguese => {
                 let (first, rest) = elts.into_nonempty_iter().next();
@@ -95,7 +130,10 @@ impl Language {
                         : second;
                     },
                     (Some(second), Some(third)) => {
-                        let mut rest = [second, third].into_nonempty_iter().chain(rest).collect::<NEVec<_>>();
+                        let mut rest = [second, third]
+                            .into_nonempty_iter()
+                            .chain(rest)
+                            .collect::<NEVec<_>>();
                         let last = rest.pop().expect("rest contains at least second and third");
                         html! {
                             : first;
@@ -112,11 +150,18 @@ impl Language {
         }
     }
 
-    pub(crate) fn join_html_opt<T: ToHtml>(&self, elts: impl IntoIterator<Item = T>) -> Option<RawHtml<String>> {
-        elts.try_into_nonempty_iter().map(|iter| self.join_html(iter))
+    pub(crate) fn join_html_opt<T: ToHtml>(
+        &self,
+        elts: impl IntoIterator<Item = T>,
+    ) -> Option<RawHtml<String>> {
+        elts.try_into_nonempty_iter()
+            .map(|iter| self.join_html(iter))
     }
 
-    pub(crate) fn join_str<T: fmt::Display>(&self, elts: impl IntoNonEmptyIterator<Item = T>) -> String {
+    pub(crate) fn join_str<T: fmt::Display>(
+        &self,
+        elts: impl IntoNonEmptyIterator<Item = T>,
+    ) -> String {
         match self {
             French => French.join_str_with("et", elts),
             German => German.join_str_with("und", elts),
@@ -125,11 +170,19 @@ impl Language {
         }
     }
 
-    pub(crate) fn join_str_opt<T: fmt::Display>(&self, elts: impl IntoIterator<Item = T>) -> Option<String> {
-        elts.try_into_nonempty_iter().map(|iter| self.join_str(iter))
+    pub(crate) fn join_str_opt<T: fmt::Display>(
+        &self,
+        elts: impl IntoIterator<Item = T>,
+    ) -> Option<String> {
+        elts.try_into_nonempty_iter()
+            .map(|iter| self.join_str(iter))
     }
 
-    pub(crate) fn join_str_with<T: fmt::Display>(&self, conjunction: &str, elts: impl IntoNonEmptyIterator<Item = T>) -> String {
+    pub(crate) fn join_str_with<T: fmt::Display>(
+        &self,
+        conjunction: &str,
+        elts: impl IntoNonEmptyIterator<Item = T>,
+    ) -> String {
         match self {
             French | German | Portuguese => {
                 let (first, rest) = elts.into_nonempty_iter().next();
@@ -137,7 +190,10 @@ impl Language {
                 if let Some(second) = rest.next() {
                     let mut rest = iter::once(second).chain(rest).collect_vec();
                     let last = rest.pop().expect("rest contains at least second");
-                    format!("{first}{} {conjunction} {last}", rest.into_iter().map(|elt| format!(", {elt}")).format(""))
+                    format!(
+                        "{first}{} {conjunction} {last}",
+                        rest.into_iter().map(|elt| format!(", {elt}")).format("")
+                    )
                 } else {
                     first.to_string()
                 }
@@ -149,17 +205,28 @@ impl Language {
                     (None, _) => first.to_string(),
                     (Some(second), None) => format!("{first} {conjunction} {second}"),
                     (Some(second), Some(third)) => {
-                        let mut rest = [second, third].into_nonempty_iter().chain(rest).collect::<NEVec<_>>();
+                        let mut rest = [second, third]
+                            .into_nonempty_iter()
+                            .chain(rest)
+                            .collect::<NEVec<_>>();
                         let last = rest.pop().expect("rest contains at least second and third");
-                        format!("{first}, {}, {conjunction} {last}", rest.into_iter().format(", "))
+                        format!(
+                            "{first}, {}, {conjunction} {last}",
+                            rest.into_iter().format(", ")
+                        )
                     }
                 }
             }
         }
     }
 
-    pub(crate) fn join_str_opt_with<T: fmt::Display>(&self, conjunction: &str, elts: impl IntoIterator<Item = T>) -> Option<String> {
-        elts.try_into_nonempty_iter().map(|iter| self.join_str_with(conjunction, iter))
+    pub(crate) fn join_str_opt_with<T: fmt::Display>(
+        &self,
+        conjunction: &str,
+        elts: impl IntoIterator<Item = T>,
+    ) -> Option<String> {
+        elts.try_into_nonempty_iter()
+            .map(|iter| self.join_str_with(conjunction, iter))
     }
 }
 
@@ -187,7 +254,8 @@ impl ToHtml for Language {
             French => write!(&mut buf.0, "French"),
             German => write!(&mut buf.0, "German"),
             Portuguese => write!(&mut buf.0, "Portuguese"),
-        }.unwrap();
+        }
+        .unwrap();
     }
 }
 

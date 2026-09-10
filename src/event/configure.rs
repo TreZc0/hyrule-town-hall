@@ -1,23 +1,27 @@
+use rocket::response::content::RawText;
+use serde::Serializer;
 use {
-    serenity::model::id::{ChannelId, RoleId},
     crate::{
         config::Config,
         discord_bot::PgSnowflake,
-        event::{
-            Data,
-            Tab,
-            enter,
-        },
+        event::{Data, Tab, enter},
         prelude::*,
         racetime_bot::VersionedBranch,
         startgg,
         user::DisplaySource,
     },
+    serenity::model::id::{ChannelId, RoleId},
 };
-use rocket::response::content::RawText;
-use serde::Serializer;
 
-async fn configure_form(mut transaction: Transaction<'_, Postgres>, http_client: &reqwest::Client, me: Option<User>, uri: Origin<'_>, csrf: Option<&CsrfToken>, event: Data<'_>, ctx: Context<'_>) -> Result<RawHtml<String>, event::Error> {
+async fn configure_form(
+    mut transaction: Transaction<'_, Postgres>,
+    http_client: &reqwest::Client,
+    me: Option<User>,
+    uri: Origin<'_>,
+    csrf: Option<&CsrfToken>,
+    event: Data<'_>,
+    ctx: Context<'_>,
+) -> Result<RawHtml<String>, event::Error> {
     let query_string = uri.0.query().map(|q| q.to_string());
     let sync_success = query_string.as_deref().and_then(|q| {
         q.split('&')
@@ -25,14 +29,16 @@ async fn configure_form(mut transaction: Transaction<'_, Postgres>, http_client:
             .and_then(|param| param.split('=').nth(1))
             .and_then(|encoded| urlencoding::decode(encoded).ok())
     });
-    
+
     let sync_failed = query_string.as_deref().and_then(|q| {
         q.split('&')
             .find(|param| param.starts_with("sync_failed="))
             .and_then(|param| param.split('=').nth(1))
             .and_then(|encoded| urlencoding::decode(encoded).ok())
     });
-    let header = event.header(&mut transaction, me.as_ref(), Tab::Configure, false).await?;
+    let header = event
+        .header(&mut transaction, me.as_ref(), Tab::Configure, false)
+        .await?;
     let success_message = if let Some(success) = sync_success {
         if let Some(failed) = sync_failed {
             html! {
@@ -56,7 +62,7 @@ async fn configure_form(mut transaction: Transaction<'_, Postgres>, http_client:
     } else {
         html! {}
     };
-    
+
     let content = if event.is_ended() {
         html! {
             article {
@@ -64,49 +70,84 @@ async fn configure_form(mut transaction: Transaction<'_, Postgres>, http_client:
             }
         }
     } else if let Some(ref me) = me {
-        let is_organizer_or_global = event.organizers(&mut transaction).await?.contains(me) || me.is_global_admin();
+        let is_organizer_or_global =
+            event.organizers(&mut transaction).await?.contains(me) || me.is_global_admin();
         let is_game_admin = if let Some(game) = event.game(&mut transaction).await? {
-            game.is_admin(&mut transaction, me).await.map_err(event::Error::from)?
+            game.is_admin(&mut transaction, me)
+                .await
+                .map_err(event::Error::from)?
         } else {
             false
         };
         if is_organizer_or_global {
-            let startgg_bulk_add: Option<(String, Vec<(String, String)>)> = if let MatchSource::StartGG(event_slug) = event.match_source() {
-                let tournament_slug = event_slug.split('/').nth(1).map(str::to_string).unwrap_or_default();
-                let qualifier_kind = event.qualifier_kind(&mut transaction, Some(me)).await?;
-                let mut cache = super::teams::Cache::new(http_client.clone());
-                let signups = super::teams::signups_sorted(
-                    &mut transaction, &mut cache, None, &event,
-                    is_organizer_or_global, qualifier_kind, None, true, false,
-                ).await?;
-                let names: Vec<String> = signups.into_iter()
-                    .filter(|s| match (&qualifier_kind, &s.qualification) {
-                        (QualifierKind::None, _) => true,
-                        (_, super::teams::Qualification::Single { qualified } | super::teams::Qualification::TriforceBlitz { qualified, .. }) => *qualified,
-                        (QualifierKind::Score(score_kind), super::teams::Qualification::Multiple { num_finished, .. }) => *num_finished >= score_kind.required_qualifiers(),
-                        (_, super::teams::Qualification::Multiple { num_finished, .. }) => *num_finished >= 1,
-                    })
-                    .flat_map(|s| s.members.into_iter().filter_map(|m| match m.user {
-                        super::teams::MemberUser::MidosHouse(user) => Some(user.display_name().to_owned()),
-                        super::teams::MemberUser::RaceTime { name, .. } => Some(name),
-                        _ => None,
-                    }))
-                    .collect();
-                let chunks: Vec<(String, String)> = names.chunks(50)
-                    .enumerate()
-                    .map(|(i, chunk)| {
-                        let start = i * 50 + 1;
-                        let end = start + chunk.len() - 1;
-                        (
-                            format!("Copy seeds {}–{}", start, end),
-                            serde_json::to_string(chunk).unwrap_or_else(|_| "[]".to_string()),
-                        )
-                    })
-                    .collect();
-                if chunks.is_empty() { None } else { Some((tournament_slug, chunks)) }
-            } else {
-                None
-            };
+            let startgg_bulk_add: Option<(String, Vec<(String, String)>)> =
+                if let MatchSource::StartGG(event_slug) = event.match_source() {
+                    let tournament_slug = event_slug
+                        .split('/')
+                        .nth(1)
+                        .map(str::to_string)
+                        .unwrap_or_default();
+                    let qualifier_kind = event.qualifier_kind(&mut transaction, Some(me)).await?;
+                    let mut cache = super::teams::Cache::new(http_client.clone());
+                    let signups = super::teams::signups_sorted(
+                        &mut transaction,
+                        &mut cache,
+                        None,
+                        &event,
+                        is_organizer_or_global,
+                        qualifier_kind,
+                        None,
+                        true,
+                        false,
+                    )
+                    .await?;
+                    let names: Vec<String> = signups
+                        .into_iter()
+                        .filter(|s| match (&qualifier_kind, &s.qualification) {
+                            (QualifierKind::None, _) => true,
+                            (
+                                _,
+                                super::teams::Qualification::Single { qualified }
+                                | super::teams::Qualification::TriforceBlitz { qualified, .. },
+                            ) => *qualified,
+                            (
+                                QualifierKind::Score(score_kind),
+                                super::teams::Qualification::Multiple { num_finished, .. },
+                            ) => *num_finished >= score_kind.required_qualifiers(),
+                            (_, super::teams::Qualification::Multiple { num_finished, .. }) => {
+                                *num_finished >= 1
+                            }
+                        })
+                        .flat_map(|s| {
+                            s.members.into_iter().filter_map(|m| match m.user {
+                                super::teams::MemberUser::MidosHouse(user) => {
+                                    Some(user.display_name().to_owned())
+                                }
+                                super::teams::MemberUser::RaceTime { name, .. } => Some(name),
+                                _ => None,
+                            })
+                        })
+                        .collect();
+                    let chunks: Vec<(String, String)> = names
+                        .chunks(50)
+                        .enumerate()
+                        .map(|(i, chunk)| {
+                            let start = i * 50 + 1;
+                            let end = start + chunk.len() - 1;
+                            (
+                                format!("Copy seeds {}–{}", start, end),
+                                serde_json::to_string(chunk).unwrap_or_else(|_| "[]".to_string()),
+                            )
+                        })
+                        .collect();
+                    if chunks.is_empty() {
+                        None
+                    } else {
+                        Some((tournament_slug, chunks))
+                    }
+                } else {
+                    None
+                };
             let mut errors = ctx.errors().collect_vec();
             html! {
                 : full_form(uri!(post(event.series, &*event.event)), csrf, html! {
@@ -170,7 +211,7 @@ async fn configure_form(mut transaction: Transaction<'_, Postgres>, http_client:
                         @if let Some(VersionedBranch::Tww { identifier, .. }) = &event.rando_version {
                             : form_field("settings_string", &mut errors, html! {
                                 label(for = "settings_string") : "Settings string:";
-                                input(type = "text", id = "settings_string", name = "settings_string", value? = ctx.field_value("settings_string").or(event.settings_string.as_deref()));
+                                input(type = "text", id = "settings_string", name = "settings_string", value? = ctx.field_value("settings_string").or(event.twwr_permalink()));
                                 label(class = "help") : format!("(needs to be compatible with version {})", identifier);
                             });
                         }
@@ -258,18 +299,48 @@ async fn configure_form(mut transaction: Transaction<'_, Postgres>, http_client:
             }
         }
     };
-    Ok(page(transaction, &me, &uri, PageStyle { chests: event.chests().await?, ..PageStyle::default() }, &format!("Configure — {}", event.display_name), html! {
-        : header;
-        : success_message;
-        : content;
-    }).await?)
+    Ok(page(
+        transaction,
+        &me,
+        &uri,
+        PageStyle {
+            chests: event.chests().await?,
+            ..PageStyle::default()
+        },
+        &format!("Configure — {}", event.display_name),
+        html! {
+            : header;
+            : success_message;
+            : content;
+        },
+    )
+    .await?)
 }
 
 #[rocket::get("/event/<series>/<event>/configure")]
-pub(crate) async fn get(pool: &State<PgPool>, http_client: &State<reqwest::Client>, me: Option<User>, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: String) -> Result<RawHtml<String>, StatusOrError<event::Error>> {
+pub(crate) async fn get(
+    pool: &State<PgPool>,
+    http_client: &State<reqwest::Client>,
+    me: Option<User>,
+    uri: Origin<'_>,
+    csrf: Option<CsrfToken>,
+    series: Series,
+    event: String,
+) -> Result<RawHtml<String>, StatusOrError<event::Error>> {
     let mut transaction = pool.begin().await?;
-    let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
-    Ok(configure_form(transaction, http_client, me, uri, csrf.as_ref(), data, Context::default()).await?)
+    let data = Data::new(&mut transaction, series, event)
+        .await?
+        .ok_or(StatusOrError::Status(Status::NotFound))?;
+    Ok(configure_form(
+        transaction,
+        http_client,
+        me,
+        uri,
+        csrf.as_ref(),
+        data,
+        Context::default(),
+    )
+    .await?)
 }
 
 #[derive(FromForm, CsrfForm)]
@@ -293,29 +364,55 @@ pub(crate) struct ConfigureForm {
 }
 
 #[rocket::post("/event/<series>/<event>/configure", data = "<form>")]
-pub(crate) async fn post(pool: &State<PgPool>, http_client: &State<reqwest::Client>, me: User, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, form: Form<Contextual<'_, ConfigureForm>>) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
+pub(crate) async fn post(
+    pool: &State<PgPool>,
+    http_client: &State<reqwest::Client>,
+    me: User,
+    uri: Origin<'_>,
+    csrf: Option<CsrfToken>,
+    series: Series,
+    event: &str,
+    form: Form<Contextual<'_, ConfigureForm>>,
+) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
     let mut transaction = pool.begin().await?;
-    let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+    let data = Data::new(&mut transaction, series, event)
+        .await?
+        .ok_or(StatusOrError::Status(Status::NotFound))?;
     let mut form = form.into_inner();
     form.verify(&csrf);
     Ok(if let Some(ref value) = form.value {
         if data.is_ended() {
-            form.context.push_error(form::Error::validation("This event has ended and can no longer be configured"));
+            form.context.push_error(form::Error::validation(
+                "This event has ended and can no longer be configured",
+            ));
         }
         if !data.organizers(&mut transaction).await?.contains(&me) && !me.is_global_admin() {
-            form.context.push_error(form::Error::validation("You must be an organizer to configure this event."));
+            form.context.push_error(form::Error::validation(
+                "You must be an organizer to configure this event.",
+            ));
         }
-        let min_schedule_notice = if let Some(time) = parse_duration(&value.min_schedule_notice, None) {
-            Some(time)
-        } else {
-            form.context.push_error(form::Error::validation("Duration must be formatted like '1:23:45' or '1h 23m 45s'.").with_name("min_schedule_notice"));
-            None
-        };
+        let min_schedule_notice =
+            if let Some(time) = parse_duration(&value.min_schedule_notice, None) {
+                Some(time)
+            } else {
+                form.context.push_error(
+                    form::Error::validation(
+                        "Duration must be formatted like '1:23:45' or '1h 23m 45s'.",
+                    )
+                    .with_name("min_schedule_notice"),
+                );
+                None
+            };
         let retime_window = if let Some(retime_window) = &value.retime_window {
             if let Some(time) = parse_duration(retime_window, None) {
                 Some(time)
             } else {
-                form.context.push_error(form::Error::validation("Duration must be formatted like '1:23:45' or '1h 23m 45s'.").with_name("retime_window"));
+                form.context.push_error(
+                    form::Error::validation(
+                        "Duration must be formatted like '1:23:45' or '1h 23m 45s'.",
+                    )
+                    .with_name("retime_window"),
+                );
                 None
             }
         } else {
@@ -327,75 +424,158 @@ pub(crate) async fn post(pool: &State<PgPool>, http_client: &State<reqwest::Clie
                 MatchSource::StartGG(event_slug) => {
                     sync_startgg_participant_ids(&mut transaction, &data, &event_slug).await
                 }
-                MatchSource::Challonge { community, tournament } => {
-                    match Config::load().await {
-                        Ok(config) => {
-                            let http_client = reqwest::Client::new();
-                            match challonge::import::sync_team_challonge_ids(&mut transaction, &http_client, &config, data.series, &data.event, community, tournament).await {
-                                Ok(synced_count) => Ok(SyncResult {
-                                    synced_count,
-                                    failed_count: 0,
-                                    failed_teams: Vec::new(),
-                                    error_message: None,
-                                }),
-                                Err(e) => Err(format!("Challonge sync error: {e}").into()),
-                            }
+                MatchSource::Challonge {
+                    community,
+                    tournament,
+                } => match Config::load().await {
+                    Ok(config) => {
+                        let http_client = reqwest::Client::new();
+                        match challonge::import::sync_team_challonge_ids(
+                            &mut transaction,
+                            &http_client,
+                            &config,
+                            data.series,
+                            &data.event,
+                            community,
+                            tournament,
+                        )
+                        .await
+                        {
+                            Ok(synced_count) => Ok(SyncResult {
+                                synced_count,
+                                failed_count: 0,
+                                failed_teams: Vec::new(),
+                                error_message: None,
+                            }),
+                            Err(e) => Err(format!("Challonge sync error: {e}").into()),
                         }
-                        Err(e) => Err(format!("Failed to load config: {e}").into()),
                     }
-                }
+                    Err(e) => Err(format!("Failed to load config: {e}").into()),
+                },
                 _ => Err("This event does not have a tournament source configured.".into()),
             };
             match sync_result {
                 Ok(sync_result) => {
                     transaction.commit().await?;
                     let redirect_url = if let Some(ref msg) = sync_result.error_message {
-                        format!("{}?sync_failed={}",
+                        format!(
+                            "{}?sync_failed={}",
                             uri!(get(series, event)),
-                            urlencoding::encode(msg))
+                            urlencoding::encode(msg)
+                        )
                     } else {
-                        let success_msg = format!("Sync completed: {} teams synced, {} teams could not be synced",
-                            sync_result.synced_count, sync_result.failed_count);
+                        let success_msg = format!(
+                            "Sync completed: {} teams synced, {} teams could not be synced",
+                            sync_result.synced_count, sync_result.failed_count
+                        );
                         if !sync_result.failed_teams.is_empty() {
                             let failed_list = sync_result.failed_teams.join(", ");
-                            format!("{}?sync_success={}&sync_failed={}",
+                            format!(
+                                "{}?sync_success={}&sync_failed={}",
                                 uri!(get(series, event)),
                                 urlencoding::encode(&success_msg),
-                                urlencoding::encode(&failed_list))
+                                urlencoding::encode(&failed_list)
+                            )
                         } else {
-                            format!("{}?sync_success={}",
+                            format!(
+                                "{}?sync_success={}",
                                 uri!(get(series, event)),
-                                urlencoding::encode(&success_msg))
+                                urlencoding::encode(&success_msg)
+                            )
                         }
                     };
                     return Ok(RedirectOrContent::Redirect(Redirect::to(redirect_url)));
                 }
                 Err(sync_error) => {
-                    form.context.push_error(form::Error::validation(format!("Failed to sync participant IDs: {}", sync_error)));
+                    form.context.push_error(form::Error::validation(format!(
+                        "Failed to sync participant IDs: {}",
+                        sync_error
+                    )));
                 }
             }
         }
 
+        if matches!(
+            data.seed_gen_type,
+            Some(racetime_bot::seed_gen_type::SeedGenType::TWWR { .. })
+        ) && value
+            .settings_string
+            .as_deref()
+            .is_none_or(|s| s.trim().is_empty())
+        {
+            form.context.push_error(
+                form::Error::validation("A TWWR event requires a non-empty settings permalink.")
+                    .with_name("settings_string"),
+            );
+        }
         if form.context.errors().next().is_some() {
-            RedirectOrContent::Content(configure_form(transaction, http_client, Some(me), uri, csrf.as_ref(), data, form.context).await?)
+            RedirectOrContent::Content(
+                configure_form(
+                    transaction,
+                    http_client,
+                    Some(me),
+                    uri,
+                    csrf.as_ref(),
+                    data,
+                    form.context,
+                )
+                .await?,
+            )
         } else {
             if let MatchSource::StartGG(_) = data.match_source() {
-                sqlx::query!("UPDATE events SET auto_import = $1 WHERE series = $2 AND event = $3", value.auto_import, data.series as _, &data.event).execute(&mut *transaction).await?;
+                sqlx::query!(
+                    "UPDATE events SET auto_import = $1 WHERE series = $2 AND event = $3",
+                    value.auto_import,
+                    data.series as _,
+                    &data.event
+                )
+                .execute(&mut *transaction)
+                .await?;
             }
             if let Some(min_schedule_notice) = min_schedule_notice {
-                sqlx::query!("UPDATE events SET min_schedule_notice = $1 WHERE series = $2 AND event = $3", min_schedule_notice as _, data.series as _, &data.event).execute(&mut *transaction).await?;
+                sqlx::query!(
+                    "UPDATE events SET min_schedule_notice = $1 WHERE series = $2 AND event = $3",
+                    min_schedule_notice as _,
+                    data.series as _,
+                    &data.event
+                )
+                .execute(&mut *transaction)
+                .await?;
             }
             if let Some(retime_window) = retime_window {
-                sqlx::query!("UPDATE events SET retime_window = $1 WHERE series = $2 AND event = $3", retime_window as _, data.series as _, &data.event).execute(&mut *transaction).await?;
+                sqlx::query!(
+                    "UPDATE events SET retime_window = $1 WHERE series = $2 AND event = $3",
+                    retime_window as _,
+                    data.series as _,
+                    &data.event
+                )
+                .execute(&mut *transaction)
+                .await?;
             }
-            if matches!(data.match_source(), MatchSource::StartGG(_)) || data.discord_race_results_channel.is_some() {
+            if matches!(data.match_source(), MatchSource::StartGG(_))
+                || data.discord_race_results_channel.is_some()
+            {
                 sqlx::query!("UPDATE events SET manual_reporting_with_breaks = $1 WHERE series = $2 AND event = $3", value.manual_reporting_with_breaks, data.series as _, &data.event).execute(&mut *transaction).await?;
             }
             if value.asyncs_active != data.asyncs_active {
-                sqlx::query!("UPDATE events SET asyncs_active = $1 WHERE series = $2 AND event = $3", value.asyncs_active, data.series as _, &data.event).execute(&mut *transaction).await?;
+                sqlx::query!(
+                    "UPDATE events SET asyncs_active = $1 WHERE series = $2 AND event = $3",
+                    value.asyncs_active,
+                    data.series as _,
+                    &data.event
+                )
+                .execute(&mut *transaction)
+                .await?;
             }
             if value.async_start_delay != data.async_start_delay {
-                sqlx::query!("UPDATE events SET async_start_delay = $1 WHERE series = $2 AND event = $3", value.async_start_delay, data.series as _, &data.event).execute(&mut *transaction).await?;
+                sqlx::query!(
+                    "UPDATE events SET async_start_delay = $1 WHERE series = $2 AND event = $3",
+                    value.async_start_delay,
+                    data.series as _,
+                    &data.event
+                )
+                .execute(&mut *transaction)
+                .await?;
             }
             if value.discord_events_enabled != data.discord_events_enabled {
                 sqlx::query!("UPDATE events SET discord_events_enabled = $1 WHERE series = $2 AND event = $3", value.discord_events_enabled, data.series as _, &data.event).execute(&mut *transaction).await?;
@@ -404,22 +584,52 @@ pub(crate) async fn post(pool: &State<PgPool>, http_client: &State<reqwest::Clie
                 sqlx::query!("UPDATE events SET discord_events_require_restream = $1 WHERE series = $2 AND event = $3", value.discord_events_require_restream, data.series as _, &data.event).execute(&mut *transaction).await?;
             }
             if value.fpa_enabled != data.fpa_enabled {
-                sqlx::query!("UPDATE events SET fpa_enabled = $1 WHERE series = $2 AND event = $3", value.fpa_enabled, data.series as _, &data.event).execute(&mut *transaction).await?;
+                sqlx::query!(
+                    "UPDATE events SET fpa_enabled = $1 WHERE series = $2 AND event = $3",
+                    value.fpa_enabled,
+                    data.series as _,
+                    &data.event
+                )
+                .execute(&mut *transaction)
+                .await?;
             }
             if value.auto_start_with_restream != data.auto_start_with_restream {
                 sqlx::query!("UPDATE events SET auto_start_with_restream = $1 WHERE series = $2 AND event = $3", value.auto_start_with_restream, data.series as _, &data.event).execute(&mut *transaction).await?;
             }
             if matches!(data.rando_version, Some(VersionedBranch::Tww { .. })) {
-                let new_settings_string = value.settings_string.as_deref().filter(|s| !s.trim().is_empty()).map(|s| s.trim().to_owned());
-                if new_settings_string != data.settings_string {
-                    sqlx::query!("UPDATE events SET settings_string = $1 WHERE series = $2 AND event = $3", new_settings_string, data.series as _, &data.event).execute(&mut *transaction).await?;
+                let new_settings_string = value
+                    .settings_string
+                    .as_deref()
+                    .filter(|s| !s.trim().is_empty())
+                    .map(|s| s.trim().to_owned());
+                if new_settings_string.as_deref() != data.twwr_permalink() {
+                    if let Some(permalink) = new_settings_string {
+                        event::configuration::save_twwr_permalink(
+                            &mut transaction,
+                            data.series,
+                            &data.event,
+                            &permalink,
+                        )
+                        .await?;
+                    }
                 }
             }
             transaction.commit().await?;
             RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event))))
         }
     } else {
-        RedirectOrContent::Content(configure_form(transaction, http_client, Some(me), uri, csrf.as_ref(), data, form.context).await?)
+        RedirectOrContent::Content(
+            configure_form(
+                transaction,
+                http_client,
+                Some(me),
+                uri,
+                csrf.as_ref(),
+                data,
+                form.context,
+            )
+            .await?,
+        )
     })
 }
 
@@ -433,7 +643,9 @@ enum RestreamersFormDefaults<'v> {
 impl<'v> RestreamersFormDefaults<'v> {
     fn remove_errors(&self, for_restreamer: Id<Users>) -> Vec<&form::Error<'v>> {
         match self {
-            Self::RemoveContext(restreamer, ctx) if *restreamer == for_restreamer => ctx.errors().collect(),
+            Self::RemoveContext(restreamer, ctx) if *restreamer == for_restreamer => {
+                ctx.errors().collect()
+            }
             _ => Vec::default(),
         }
     }
@@ -473,7 +685,10 @@ fn parse_language_code(language: &str) -> Option<Language> {
     }
 }
 
-async fn restream_coordinator_discord_roles(transaction: &mut Transaction<'_, Postgres>, data: &Data<'_>) -> Result<HashMap<Language, i64>, event::Error> {
+async fn restream_coordinator_discord_roles(
+    transaction: &mut Transaction<'_, Postgres>,
+    data: &Data<'_>,
+) -> Result<HashMap<Language, i64>, event::Error> {
     Ok(sqlx::query_as::<_, (Language, i64)>(
         "SELECT language, discord_role_id FROM event_restreamer_discord_roles WHERE series = $1 AND event = $2",
     )
@@ -485,7 +700,11 @@ async fn restream_coordinator_discord_roles(transaction: &mut Transaction<'_, Po
     .collect())
 }
 
-async fn event_restreamers_for_language(transaction: &mut Transaction<'_, Postgres>, data: &Data<'_>, language: Language) -> Result<Vec<Id<Users>>, event::Error> {
+async fn event_restreamers_for_language(
+    transaction: &mut Transaction<'_, Postgres>,
+    data: &Data<'_>,
+    language: Language,
+) -> Result<Vec<Id<Users>>, event::Error> {
     Ok(sqlx::query_scalar::<_, i64>(
         "SELECT DISTINCT restreamer FROM restreamers WHERE series = $1 AND event = $2 AND language = $3",
     )
@@ -506,9 +725,15 @@ async fn sync_restream_coordinator_discord_roles(
     user_id: Id<Users>,
     extra_managed_role_ids: &[i64],
 ) -> Result<(), event::Error> {
-    let Some(discord_guild) = data.discord_guild else { return Ok(()) };
-    let Some(user) = User::from_id(&mut **transaction, user_id).await? else { return Ok(()) };
-    let Some(discord_user) = user.discord else { return Ok(()) };
+    let Some(discord_guild) = data.discord_guild else {
+        return Ok(());
+    };
+    let Some(user) = User::from_id(&mut **transaction, user_id).await? else {
+        return Ok(());
+    };
+    let Some(discord_user) = user.discord else {
+        return Ok(());
+    };
 
     let mut managed_role_ids: HashSet<i64> = sqlx::query_scalar::<_, i64>(
         "SELECT DISTINCT discord_role_id FROM event_restreamer_discord_roles WHERE series = $1 AND event = $2",
@@ -538,25 +763,50 @@ async fn sync_restream_coordinator_discord_roles(
     .into_iter()
     .collect();
 
-    let Ok(member) = discord_guild.member(discord_ctx, discord_user.id).await else { return Ok(()) };
-    let current_role_ids: HashSet<i64> = member.roles.iter().map(|role| role.get() as i64).collect();
+    let Ok(member) = discord_guild.member(discord_ctx, discord_user.id).await else {
+        return Ok(());
+    };
+    let current_role_ids: HashSet<i64> =
+        member.roles.iter().map(|role| role.get() as i64).collect();
     for role_id in desired_role_ids.difference(&current_role_ids) {
-        if let Err(e) = member.add_role(discord_ctx, RoleId::new(*role_id as u64)).await {
-            eprintln!("Failed to assign restream coordinator Discord role {} to user {}: {}", role_id, discord_user.id, e);
+        if let Err(e) = member
+            .add_role(discord_ctx, RoleId::new(*role_id as u64))
+            .await
+        {
+            eprintln!(
+                "Failed to assign restream coordinator Discord role {} to user {}: {}",
+                role_id, discord_user.id, e
+            );
         }
     }
     for role_id in managed_role_ids.difference(&desired_role_ids) {
         if current_role_ids.contains(role_id) {
-            if let Err(e) = member.remove_role(discord_ctx, RoleId::new(*role_id as u64)).await {
-                eprintln!("Failed to remove restream coordinator Discord role {} from user {}: {}", role_id, discord_user.id, e);
+            if let Err(e) = member
+                .remove_role(discord_ctx, RoleId::new(*role_id as u64))
+                .await
+            {
+                eprintln!(
+                    "Failed to remove restream coordinator Discord role {} from user {}: {}",
+                    role_id, discord_user.id, e
+                );
             }
         }
     }
     Ok(())
 }
 
-async fn restreamers_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>, uri: Origin<'_>, csrf: Option<&CsrfToken>, event: Data<'_>, defaults: RestreamersFormDefaults<'_>, selected_lang: Option<Language>) -> Result<RawHtml<String>, event::Error> {
-    let header = event.header(&mut transaction, me.as_ref(), Tab::Configure, true).await?;
+async fn restreamers_form(
+    mut transaction: Transaction<'_, Postgres>,
+    me: Option<User>,
+    uri: Origin<'_>,
+    csrf: Option<&CsrfToken>,
+    event: Data<'_>,
+    defaults: RestreamersFormDefaults<'_>,
+    selected_lang: Option<Language>,
+) -> Result<RawHtml<String>, event::Error> {
+    let header = event
+        .header(&mut transaction, me.as_ref(), Tab::Configure, true)
+        .await?;
     let content = if event.is_ended() {
         html! {
             article {
@@ -565,28 +815,64 @@ async fn restreamers_form(mut transaction: Transaction<'_, Postgres>, me: Option
         }
     } else if let Some(ref me) = me {
         let is_game_admin = if let Some(game) = event.game(&mut transaction).await? {
-            game.is_admin(&mut transaction, me).await.map_err(event::Error::from)?
+            game.is_admin(&mut transaction, me)
+                .await
+                .map_err(event::Error::from)?
         } else {
             false
         };
-        if event.organizers(&mut transaction).await?.contains(me) || me.is_global_admin() || is_game_admin {
-            let event_restreamers_with_langs = event.restreamers_with_languages(&mut transaction).await?;
-            let effective_bindings = super::roles::EffectiveRoleBinding::for_event(&mut transaction, event.series, &event.event).await?;
-            let active_languages = super::roles::EffectiveRoleBinding::active_languages(&effective_bindings, event.default_volunteer_language);
-            let coordinator_role_ids = restream_coordinator_discord_roles(&mut transaction, &event).await?;
+        if event.organizers(&mut transaction).await?.contains(me)
+            || me.is_global_admin()
+            || is_game_admin
+        {
+            let event_restreamers_with_langs =
+                event.restreamers_with_languages(&mut transaction).await?;
+            let effective_bindings = super::roles::EffectiveRoleBinding::for_event(
+                &mut transaction,
+                event.series,
+                &event.event,
+            )
+            .await?;
+            let active_languages = super::roles::EffectiveRoleBinding::active_languages(
+                &effective_bindings,
+                event.default_volunteer_language,
+            );
+            let coordinator_role_ids =
+                restream_coordinator_discord_roles(&mut transaction, &event).await?;
             let current_language = selected_lang
                 .filter(|l| active_languages.contains(l))
-                .or_else(|| active_languages.iter().find(|&&l| l == event.default_volunteer_language).copied())
+                .or_else(|| {
+                    active_languages
+                        .iter()
+                        .find(|&&l| l == event.default_volunteer_language)
+                        .copied()
+                })
                 .or_else(|| active_languages.first().copied())
                 .unwrap_or(English);
-            let active_language_codes = active_languages.iter().map(|l| l.short_code()).collect::<Vec<_>>().join(",");
-            let base_url = format!("/event/{}/{}/configure/restreamers", event.series.slug(), &event.event);
+            let active_language_codes = active_languages
+                .iter()
+                .map(|l| l.short_code())
+                .collect::<Vec<_>>()
+                .join(",");
+            let base_url = format!(
+                "/event/{}/{}/configure/restreamers",
+                event.series.slug(),
+                &event.event
+            );
             // Fetch game-level coordinators (grouped by user)
             let game_coordinator_ids: HashSet<Id<Users>>;
             let game_restreamers_grouped: Vec<(User, Vec<Language>)>;
-            if let Some(game) = event.game(&mut transaction).await.map_err(event::Error::from)? {
-                let flat = game.restreamers(&mut transaction).await.map_err(event::Error::from)?;
-                let mut by_id: std::collections::BTreeMap<Id<Users>, (User, Vec<Language>)> = std::collections::BTreeMap::new();
+            if let Some(game) = event
+                .game(&mut transaction)
+                .await
+                .map_err(event::Error::from)?
+            {
+                let flat = game
+                    .restreamers(&mut transaction)
+                    .await
+                    .map_err(event::Error::from)?;
+                let mut by_id: std::collections::BTreeMap<Id<Users>, (User, Vec<Language>)> =
+                    std::collections::BTreeMap::new();
                 for (user, lang) in flat {
                     let entry = by_id.entry(user.id).or_insert_with(|| (user, Vec::new()));
                     entry.1.push(lang);
@@ -607,12 +893,15 @@ async fn restreamers_form(mut transaction: Transaction<'_, Postgres>, me: Option
                 .iter()
                 .filter(|(_, langs)| langs.contains(&current_language))
                 .collect();
-            let filtered_event_only_restreamers: Vec<&&(User, Vec<Language>)> = event_only_restreamers
-                .iter()
-                .filter(|(_, langs)| langs.contains(&current_language))
-                .collect();
-            let any_coordinators = !game_restreamers_grouped.is_empty() || !event_only_restreamers.is_empty();
-            let any_filtered = !filtered_game_coordinators.is_empty() || !filtered_event_only_restreamers.is_empty();
+            let filtered_event_only_restreamers: Vec<&&(User, Vec<Language>)> =
+                event_only_restreamers
+                    .iter()
+                    .filter(|(_, langs)| langs.contains(&current_language))
+                    .collect();
+            let any_coordinators =
+                !game_restreamers_grouped.is_empty() || !event_only_restreamers.is_empty();
+            let any_filtered = !filtered_game_coordinators.is_empty()
+                || !filtered_event_only_restreamers.is_empty();
             let is_elevated = me.is_global_admin() || is_game_admin;
             let all_events = sqlx::query!(
                 r#"SELECT e.series AS "series: Series", e.event, e.display_name FROM events e WHERE ($1::bool) OR EXISTS (SELECT 1 FROM organizers o WHERE o.series = e.series AND o.event = e.event AND o.organizer = $2) ORDER BY e.series, e.event"#,
@@ -760,17 +1049,47 @@ async fn restreamers_form(mut transaction: Transaction<'_, Postgres>, me: Option
             }
         }
     };
-    Ok(page(transaction, &me, &uri, PageStyle { chests: event.chests().await?, ..PageStyle::default() }, &format!("Manage restream coordinators — {}", event.display_name), html! {
-        : header;
-        : content;
-    }).await?)
+    Ok(page(
+        transaction,
+        &me,
+        &uri,
+        PageStyle {
+            chests: event.chests().await?,
+            ..PageStyle::default()
+        },
+        &format!("Manage restream coordinators — {}", event.display_name),
+        html! {
+            : header;
+            : content;
+        },
+    )
+    .await?)
 }
 
 #[rocket::get("/event/<series>/<event>/configure/restreamers?<lang>")]
-pub(crate) async fn restreamers_get(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: String, lang: Option<Language>) -> Result<RawHtml<String>, StatusOrError<event::Error>> {
+pub(crate) async fn restreamers_get(
+    pool: &State<PgPool>,
+    me: Option<User>,
+    uri: Origin<'_>,
+    csrf: Option<CsrfToken>,
+    series: Series,
+    event: String,
+    lang: Option<Language>,
+) -> Result<RawHtml<String>, StatusOrError<event::Error>> {
     let mut transaction = pool.begin().await?;
-    let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
-    Ok(restreamers_form(transaction, me, uri, csrf.as_ref(), data, RestreamersFormDefaults::None, lang).await?)
+    let data = Data::new(&mut transaction, series, event)
+        .await?
+        .ok_or(StatusOrError::Status(Status::NotFound))?;
+    Ok(restreamers_form(
+        transaction,
+        me,
+        uri,
+        csrf.as_ref(),
+        data,
+        RestreamersFormDefaults::None,
+        lang,
+    )
+    .await?)
 }
 
 #[derive(FromForm, CsrfForm)]
@@ -783,48 +1102,101 @@ pub(crate) struct AddRestreamerForm {
 }
 
 #[rocket::post("/event/<series>/<event>/configure/restreamers", data = "<form>")]
-pub(crate) async fn add_restreamer(pool: &State<PgPool>, discord_ctx: &State<RwFuture<DiscordCtx>>, me: User, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, form: Form<Contextual<'_, AddRestreamerForm>>) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
+pub(crate) async fn add_restreamer(
+    pool: &State<PgPool>,
+    discord_ctx: &State<RwFuture<DiscordCtx>>,
+    me: User,
+    uri: Origin<'_>,
+    csrf: Option<CsrfToken>,
+    series: Series,
+    event: &str,
+    form: Form<Contextual<'_, AddRestreamerForm>>,
+) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
     let mut transaction = pool.begin().await?;
-    let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+    let data = Data::new(&mut transaction, series, event)
+        .await?
+        .ok_or(StatusOrError::Status(Status::NotFound))?;
     let mut form = form.into_inner();
     form.verify(&csrf);
     Ok(if let Some(ref value) = form.value {
         if data.is_ended() {
-            form.context.push_error(form::Error::validation("This event has ended and can no longer be configured"));
+            form.context.push_error(form::Error::validation(
+                "This event has ended and can no longer be configured",
+            ));
         }
         let is_game_admin = if let Some(game) = data.game(&mut transaction).await? {
-            game.is_admin(&mut transaction, &me).await.map_err(event::Error::from)?
+            game.is_admin(&mut transaction, &me)
+                .await
+                .map_err(event::Error::from)?
         } else {
             false
         };
-        if !data.organizers(&mut transaction).await?.contains(&me) && !me.is_global_admin() && !is_game_admin {
-            form.context.push_error(form::Error::validation("You must be an organizer to configure this event."));
+        if !data.organizers(&mut transaction).await?.contains(&me)
+            && !me.is_global_admin()
+            && !is_game_admin
+        {
+            form.context.push_error(form::Error::validation(
+                "You must be an organizer to configure this event.",
+            ));
         }
         let restreamer_id = match value.restreamer.parse::<u64>() {
             Ok(id) => id,
             Err(_) => {
-                form.context.push_error(form::Error::validation("Invalid user ID format.").with_name("restreamer"));
-                return Ok(RedirectOrContent::Content(restreamers_form(transaction, Some(me), uri, csrf.as_ref(), data, RestreamersFormDefaults::AddContext(form.context), None).await?));
+                form.context.push_error(
+                    form::Error::validation("Invalid user ID format.").with_name("restreamer"),
+                );
+                return Ok(RedirectOrContent::Content(
+                    restreamers_form(
+                        transaction,
+                        Some(me),
+                        uri,
+                        csrf.as_ref(),
+                        data,
+                        RestreamersFormDefaults::AddContext(form.context),
+                        None,
+                    )
+                    .await?,
+                ));
             }
         };
         let restreamer_id = Id::<Users>::from(restreamer_id);
 
         match User::from_id(&mut *transaction, restreamer_id).await? {
-            None => form.context.push_error(form::Error::validation("There is no user with this ID.").with_name("restreamer")),
+            None => form.context.push_error(
+                form::Error::validation("There is no user with this ID.").with_name("restreamer"),
+            ),
             Some(ref candidate) => {
                 // Block adding someone who is already a game-level coordinator
                 if let Some(game) = data.game(&mut transaction).await? {
-                    if game.is_restreamer_any_language(&mut transaction, candidate).await.map_err(event::Error::from)? {
+                    if game
+                        .is_restreamer_any_language(&mut transaction, candidate)
+                        .await
+                        .map_err(event::Error::from)?
+                    {
                         form.context.push_error(form::Error::validation("This user is already a game-level restream coordinator and is automatically included.").with_name("restreamer"));
                     }
                 }
             }
         }
         if value.languages.is_empty() {
-            form.context.push_error(form::Error::validation("Please select at least one language.").with_name("languages"));
+            form.context.push_error(
+                form::Error::validation("Please select at least one language.")
+                    .with_name("languages"),
+            );
         }
         if form.context.errors().next().is_some() {
-            RedirectOrContent::Content(restreamers_form(transaction, Some(me), uri, csrf.as_ref(), data, RestreamersFormDefaults::AddContext(form.context), None).await?)
+            RedirectOrContent::Content(
+                restreamers_form(
+                    transaction,
+                    Some(me),
+                    uri,
+                    csrf.as_ref(),
+                    data,
+                    RestreamersFormDefaults::AddContext(form.context),
+                    None,
+                )
+                .await?,
+            )
         } else {
             for &lang in &value.languages {
                 sqlx::query!(
@@ -833,51 +1205,136 @@ pub(crate) async fn add_restreamer(pool: &State<PgPool>, discord_ctx: &State<RwF
                 ).execute(&mut *transaction).await?;
             }
             let discord_ctx = discord_ctx.read().await;
-            sync_restream_coordinator_discord_roles(&mut transaction, &discord_ctx, &data, restreamer_id, &[]).await?;
+            sync_restream_coordinator_discord_roles(
+                &mut transaction,
+                &discord_ctx,
+                &data,
+                restreamer_id,
+                &[],
+            )
+            .await?;
             transaction.commit().await?;
             RedirectOrContent::Redirect(Redirect::to(uri!(restreamers_get(series, event, _))))
         }
     } else {
-        RedirectOrContent::Content(restreamers_form(transaction, Some(me), uri, csrf.as_ref(), data, RestreamersFormDefaults::AddContext(form.context), None).await?)
+        RedirectOrContent::Content(
+            restreamers_form(
+                transaction,
+                Some(me),
+                uri,
+                csrf.as_ref(),
+                data,
+                RestreamersFormDefaults::AddContext(form.context),
+                None,
+            )
+            .await?,
+        )
     })
 }
 
-#[rocket::post("/event/<series>/<event>/configure/restreamers/<restreamer>/remove", data = "<form>")]
-pub(crate) async fn remove_restreamer(pool: &State<PgPool>, discord_ctx: &State<RwFuture<DiscordCtx>>, me: User, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, restreamer: Id<Users>, form: Form<Contextual<'_, EmptyForm>>) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
+#[rocket::post(
+    "/event/<series>/<event>/configure/restreamers/<restreamer>/remove",
+    data = "<form>"
+)]
+pub(crate) async fn remove_restreamer(
+    pool: &State<PgPool>,
+    discord_ctx: &State<RwFuture<DiscordCtx>>,
+    me: User,
+    uri: Origin<'_>,
+    csrf: Option<CsrfToken>,
+    series: Series,
+    event: &str,
+    restreamer: Id<Users>,
+    form: Form<Contextual<'_, EmptyForm>>,
+) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
     let mut transaction = pool.begin().await?;
-    let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+    let data = Data::new(&mut transaction, series, event)
+        .await?
+        .ok_or(StatusOrError::Status(Status::NotFound))?;
     let mut form = form.into_inner();
     form.verify(&csrf);
     Ok(if form.value.is_some() {
         if data.is_ended() {
-            form.context.push_error(form::Error::validation("This event has ended and can no longer be configured"));
+            form.context.push_error(form::Error::validation(
+                "This event has ended and can no longer be configured",
+            ));
         }
         let is_game_admin = if let Some(game) = data.game(&mut transaction).await? {
-            game.is_admin(&mut transaction, &me).await.map_err(event::Error::from)?
+            game.is_admin(&mut transaction, &me)
+                .await
+                .map_err(event::Error::from)?
         } else {
             false
         };
-        if !data.organizers(&mut transaction).await?.contains(&me) && !me.is_global_admin() && !is_game_admin {
-            form.context.push_error(form::Error::validation("You must be an organizer to configure this event."));
+        if !data.organizers(&mut transaction).await?.contains(&me)
+            && !me.is_global_admin()
+            && !is_game_admin
+        {
+            form.context.push_error(form::Error::validation(
+                "You must be an organizer to configure this event.",
+            ));
         }
         if let Some(restreamer) = User::from_id(&mut *transaction, restreamer).await? {
-            if !data.restreamers(&mut transaction).await?.contains(&restreamer) {
-                form.context.push_error(form::Error::validation("This user is already not a restream coordinator for this event."));
+            if !data
+                .restreamers(&mut transaction)
+                .await?
+                .contains(&restreamer)
+            {
+                form.context.push_error(form::Error::validation(
+                    "This user is already not a restream coordinator for this event.",
+                ));
             }
         } else {
-            form.context.push_error(form::Error::validation("There is no user with this ID."));
+            form.context
+                .push_error(form::Error::validation("There is no user with this ID."));
         }
         if form.context.errors().next().is_some() {
-            RedirectOrContent::Content(restreamers_form(transaction, Some(me), uri, csrf.as_ref(), data, RestreamersFormDefaults::RemoveContext(restreamer, form.context), None).await?)
+            RedirectOrContent::Content(
+                restreamers_form(
+                    transaction,
+                    Some(me),
+                    uri,
+                    csrf.as_ref(),
+                    data,
+                    RestreamersFormDefaults::RemoveContext(restreamer, form.context),
+                    None,
+                )
+                .await?,
+            )
         } else {
-            sqlx::query!("DELETE FROM restreamers WHERE series = $1 AND event = $2 AND restreamer = $3", data.series as _, &data.event, restreamer as _).execute(&mut *transaction).await?;
+            sqlx::query!(
+                "DELETE FROM restreamers WHERE series = $1 AND event = $2 AND restreamer = $3",
+                data.series as _,
+                &data.event,
+                restreamer as _
+            )
+            .execute(&mut *transaction)
+            .await?;
             let discord_ctx = discord_ctx.read().await;
-            sync_restream_coordinator_discord_roles(&mut transaction, &discord_ctx, &data, restreamer, &[]).await?;
+            sync_restream_coordinator_discord_roles(
+                &mut transaction,
+                &discord_ctx,
+                &data,
+                restreamer,
+                &[],
+            )
+            .await?;
             transaction.commit().await?;
             RedirectOrContent::Redirect(Redirect::to(uri!(restreamers_get(series, event, _))))
         }
     } else {
-        RedirectOrContent::Content(restreamers_form(transaction, Some(me), uri, csrf.as_ref(), data, RestreamersFormDefaults::RemoveContext(restreamer, form.context), None).await?)
+        RedirectOrContent::Content(
+            restreamers_form(
+                transaction,
+                Some(me),
+                uri,
+                csrf.as_ref(),
+                data,
+                RestreamersFormDefaults::RemoveContext(restreamer, form.context),
+                None,
+            )
+            .await?,
+        )
     })
 }
 
@@ -888,25 +1345,50 @@ pub(crate) struct SaveRestreamCoordinatorDiscordRoleForm {
     discord_role_id: String,
 }
 
-#[rocket::post("/event/<series>/<event>/configure/restreamer-discord-roles/<language>", data = "<form>")]
-pub(crate) async fn save_restream_coordinator_discord_role(pool: &State<PgPool>, discord_ctx: &State<RwFuture<DiscordCtx>>, me: User, csrf: Option<CsrfToken>, series: Series, event: &str, language: &str, form: Form<Contextual<'_, SaveRestreamCoordinatorDiscordRoleForm>>) -> Result<Redirect, StatusOrError<event::Error>> {
-    let language = parse_language_code(language).ok_or(StatusOrError::Status(Status::BadRequest))?;
+#[rocket::post(
+    "/event/<series>/<event>/configure/restreamer-discord-roles/<language>",
+    data = "<form>"
+)]
+pub(crate) async fn save_restream_coordinator_discord_role(
+    pool: &State<PgPool>,
+    discord_ctx: &State<RwFuture<DiscordCtx>>,
+    me: User,
+    csrf: Option<CsrfToken>,
+    series: Series,
+    event: &str,
+    language: &str,
+    form: Form<Contextual<'_, SaveRestreamCoordinatorDiscordRoleForm>>,
+) -> Result<Redirect, StatusOrError<event::Error>> {
+    let language =
+        parse_language_code(language).ok_or(StatusOrError::Status(Status::BadRequest))?;
     let mut form = form.into_inner();
     form.verify(&csrf);
     if let Some(ref value) = form.value {
-        let discord_role_id = value.discord_role_id.trim().parse::<i64>()
+        let discord_role_id = value
+            .discord_role_id
+            .trim()
+            .parse::<i64>()
             .ok()
             .filter(|id| *id > 0)
             .ok_or(StatusOrError::Status(Status::BadRequest))?;
         let mut transaction = pool.begin().await?;
-        let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
-        if data.is_ended() { return Err(StatusOrError::Status(Status::Forbidden)) }
+        let data = Data::new(&mut transaction, series, event)
+            .await?
+            .ok_or(StatusOrError::Status(Status::NotFound))?;
+        if data.is_ended() {
+            return Err(StatusOrError::Status(Status::Forbidden));
+        }
         let is_game_admin = if let Some(game) = data.game(&mut transaction).await? {
-            game.is_admin(&mut transaction, &me).await.map_err(event::Error::from)?
+            game.is_admin(&mut transaction, &me)
+                .await
+                .map_err(event::Error::from)?
         } else {
             false
         };
-        if !data.organizers(&mut transaction).await?.contains(&me) && !me.is_global_admin() && !is_game_admin {
+        if !data.organizers(&mut transaction).await?.contains(&me)
+            && !me.is_global_admin()
+            && !is_game_admin
+        {
             return Err(StatusOrError::Status(Status::Forbidden));
         }
         let old_role_id = sqlx::query_scalar::<_, i64>(
@@ -929,32 +1411,67 @@ pub(crate) async fn save_restream_coordinator_discord_role(pool: &State<PgPool>,
         .bind(discord_role_id)
         .execute(&mut *transaction)
         .await?;
-        let affected_users = event_restreamers_for_language(&mut transaction, &data, language).await?;
+        let affected_users =
+            event_restreamers_for_language(&mut transaction, &data, language).await?;
         let extra_roles = old_role_id.into_iter().collect::<Vec<_>>();
         let discord_ctx = discord_ctx.read().await;
         for user_id in affected_users {
-            sync_restream_coordinator_discord_roles(&mut transaction, &discord_ctx, &data, user_id, &extra_roles).await?;
+            sync_restream_coordinator_discord_roles(
+                &mut transaction,
+                &discord_ctx,
+                &data,
+                user_id,
+                &extra_roles,
+            )
+            .await?;
         }
         transaction.commit().await?;
     }
-    Ok(Redirect::to(format!("/event/{}/{}/configure/restreamers?lang={}", series.slug(), event, language.short_code())))
+    Ok(Redirect::to(format!(
+        "/event/{}/{}/configure/restreamers?lang={}",
+        series.slug(),
+        event,
+        language.short_code()
+    )))
 }
 
-#[rocket::post("/event/<series>/<event>/configure/restreamer-discord-roles/<language>/clear", data = "<form>")]
-pub(crate) async fn clear_restream_coordinator_discord_role(pool: &State<PgPool>, discord_ctx: &State<RwFuture<DiscordCtx>>, me: User, csrf: Option<CsrfToken>, series: Series, event: &str, language: &str, form: Form<Contextual<'_, EmptyForm>>) -> Result<Redirect, StatusOrError<event::Error>> {
-    let language = parse_language_code(language).ok_or(StatusOrError::Status(Status::BadRequest))?;
+#[rocket::post(
+    "/event/<series>/<event>/configure/restreamer-discord-roles/<language>/clear",
+    data = "<form>"
+)]
+pub(crate) async fn clear_restream_coordinator_discord_role(
+    pool: &State<PgPool>,
+    discord_ctx: &State<RwFuture<DiscordCtx>>,
+    me: User,
+    csrf: Option<CsrfToken>,
+    series: Series,
+    event: &str,
+    language: &str,
+    form: Form<Contextual<'_, EmptyForm>>,
+) -> Result<Redirect, StatusOrError<event::Error>> {
+    let language =
+        parse_language_code(language).ok_or(StatusOrError::Status(Status::BadRequest))?;
     let mut form = form.into_inner();
     form.verify(&csrf);
     if form.value.is_some() {
         let mut transaction = pool.begin().await?;
-        let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
-        if data.is_ended() { return Err(StatusOrError::Status(Status::Forbidden)) }
+        let data = Data::new(&mut transaction, series, event)
+            .await?
+            .ok_or(StatusOrError::Status(Status::NotFound))?;
+        if data.is_ended() {
+            return Err(StatusOrError::Status(Status::Forbidden));
+        }
         let is_game_admin = if let Some(game) = data.game(&mut transaction).await? {
-            game.is_admin(&mut transaction, &me).await.map_err(event::Error::from)?
+            game.is_admin(&mut transaction, &me)
+                .await
+                .map_err(event::Error::from)?
         } else {
             false
         };
-        if !data.organizers(&mut transaction).await?.contains(&me) && !me.is_global_admin() && !is_game_admin {
+        if !data.organizers(&mut transaction).await?.contains(&me)
+            && !me.is_global_admin()
+            && !is_game_admin
+        {
             return Err(StatusOrError::Status(Status::Forbidden));
         }
         let old_role_id = sqlx::query_scalar::<_, i64>(
@@ -965,15 +1482,28 @@ pub(crate) async fn clear_restream_coordinator_discord_role(pool: &State<PgPool>
         .bind(language)
         .fetch_optional(&mut *transaction)
         .await?;
-        let affected_users = event_restreamers_for_language(&mut transaction, &data, language).await?;
+        let affected_users =
+            event_restreamers_for_language(&mut transaction, &data, language).await?;
         let extra_roles = old_role_id.into_iter().collect::<Vec<_>>();
         let discord_ctx = discord_ctx.read().await;
         for user_id in affected_users {
-            sync_restream_coordinator_discord_roles(&mut transaction, &discord_ctx, &data, user_id, &extra_roles).await?;
+            sync_restream_coordinator_discord_roles(
+                &mut transaction,
+                &discord_ctx,
+                &data,
+                user_id,
+                &extra_roles,
+            )
+            .await?;
         }
         transaction.commit().await?;
     }
-    Ok(Redirect::to(format!("/event/{}/{}/configure/restreamers?lang={}", series.slug(), event, language.short_code())))
+    Ok(Redirect::to(format!(
+        "/event/{}/{}/configure/restreamers?lang={}",
+        series.slug(),
+        event,
+        language.short_code()
+    )))
 }
 
 #[derive(FromForm, CsrfForm)]
@@ -984,8 +1514,20 @@ pub(crate) struct UpdateRestreamerLanguagesForm {
     languages: Vec<Language>,
 }
 
-#[rocket::post("/event/<series>/<event>/configure/restreamers/<restreamer>/update-languages", data = "<form>")]
-pub(crate) async fn update_restreamer_languages(pool: &State<PgPool>, discord_ctx: &State<RwFuture<DiscordCtx>>, me: User, csrf: Option<CsrfToken>, series: Series, event: &str, restreamer: Id<Users>, form: Form<Contextual<'_, UpdateRestreamerLanguagesForm>>) -> Result<Redirect, StatusOrError<event::Error>> {
+#[rocket::post(
+    "/event/<series>/<event>/configure/restreamers/<restreamer>/update-languages",
+    data = "<form>"
+)]
+pub(crate) async fn update_restreamer_languages(
+    pool: &State<PgPool>,
+    discord_ctx: &State<RwFuture<DiscordCtx>>,
+    me: User,
+    csrf: Option<CsrfToken>,
+    series: Series,
+    event: &str,
+    restreamer: Id<Users>,
+    form: Form<Contextual<'_, UpdateRestreamerLanguagesForm>>,
+) -> Result<Redirect, StatusOrError<event::Error>> {
     let mut form = form.into_inner();
     form.verify(&csrf);
     if let Some(ref value) = form.value {
@@ -993,19 +1535,33 @@ pub(crate) async fn update_restreamer_languages(pool: &State<PgPool>, discord_ct
             return Err(StatusOrError::Status(Status::BadRequest));
         }
         let mut transaction = pool.begin().await?;
-        let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
-        if data.is_ended() { return Err(StatusOrError::Status(Status::Forbidden)) }
+        let data = Data::new(&mut transaction, series, event)
+            .await?
+            .ok_or(StatusOrError::Status(Status::NotFound))?;
+        if data.is_ended() {
+            return Err(StatusOrError::Status(Status::Forbidden));
+        }
         let is_game_admin = if let Some(game) = data.game(&mut transaction).await? {
-            game.is_admin(&mut transaction, &me).await.map_err(event::Error::from)?
+            game.is_admin(&mut transaction, &me)
+                .await
+                .map_err(event::Error::from)?
         } else {
             false
         };
-        if !data.organizers(&mut transaction).await?.contains(&me) && !me.is_global_admin() && !is_game_admin {
+        if !data.organizers(&mut transaction).await?.contains(&me)
+            && !me.is_global_admin()
+            && !is_game_admin
+        {
             return Err(StatusOrError::Status(Status::Forbidden));
         }
-        sqlx::query!("DELETE FROM restreamers WHERE series = $1 AND event = $2 AND restreamer = $3", data.series as _, &data.event, restreamer as _)
-            .execute(&mut *transaction)
-            .await?;
+        sqlx::query!(
+            "DELETE FROM restreamers WHERE series = $1 AND event = $2 AND restreamer = $3",
+            data.series as _,
+            &data.event,
+            restreamer as _
+        )
+        .execute(&mut *transaction)
+        .await?;
         for &language in &value.languages {
             sqlx::query!(
                 "INSERT INTO restreamers (series, event, restreamer, language) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING",
@@ -1013,7 +1569,14 @@ pub(crate) async fn update_restreamer_languages(pool: &State<PgPool>, discord_ct
             ).execute(&mut *transaction).await?;
         }
         let discord_ctx = discord_ctx.read().await;
-        sync_restream_coordinator_discord_roles(&mut transaction, &discord_ctx, &data, restreamer, &[]).await?;
+        sync_restream_coordinator_discord_roles(
+            &mut transaction,
+            &discord_ctx,
+            &data,
+            restreamer,
+            &[],
+        )
+        .await?;
         transaction.commit().await?;
     }
     Ok(Redirect::to(uri!(restreamers_get(series, event, _))))
@@ -1030,39 +1593,93 @@ pub(crate) struct CopyRestreamersForm {
     copy_role_ids: bool,
 }
 
-#[rocket::post("/event/<series>/<event>/configure/restreamers/copy-from", data = "<form>")]
-pub(crate) async fn copy_restreamers(pool: &State<PgPool>, discord_ctx: &State<RwFuture<DiscordCtx>>, me: User, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, form: Form<Contextual<'_, CopyRestreamersForm>>) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
+#[rocket::post(
+    "/event/<series>/<event>/configure/restreamers/copy-from",
+    data = "<form>"
+)]
+pub(crate) async fn copy_restreamers(
+    pool: &State<PgPool>,
+    discord_ctx: &State<RwFuture<DiscordCtx>>,
+    me: User,
+    uri: Origin<'_>,
+    csrf: Option<CsrfToken>,
+    series: Series,
+    event: &str,
+    form: Form<Contextual<'_, CopyRestreamersForm>>,
+) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
     let mut transaction = pool.begin().await?;
-    let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+    let data = Data::new(&mut transaction, series, event)
+        .await?
+        .ok_or(StatusOrError::Status(Status::NotFound))?;
     let mut form = form.into_inner();
     form.verify(&csrf);
     Ok(if let Some(ref value) = form.value {
         if data.is_ended() {
-            form.context.push_error(form::Error::validation("This event has ended and can no longer be configured."));
+            form.context.push_error(form::Error::validation(
+                "This event has ended and can no longer be configured.",
+            ));
         }
         let is_game_admin = if let Some(game) = data.game(&mut transaction).await? {
-            game.is_admin(&mut transaction, &me).await.map_err(event::Error::from)?
+            game.is_admin(&mut transaction, &me)
+                .await
+                .map_err(event::Error::from)?
         } else {
             false
         };
-        if !data.organizers(&mut transaction).await?.contains(&me) && !me.is_global_admin() && !is_game_admin {
-            form.context.push_error(form::Error::validation("You must be an organizer to configure this event."));
+        if !data.organizers(&mut transaction).await?.contains(&me)
+            && !me.is_global_admin()
+            && !is_game_admin
+        {
+            form.context.push_error(form::Error::validation(
+                "You must be an organizer to configure this event.",
+            ));
         }
-        let (source_series, source_event_slug) = match value.source_event.splitn(2, '/').collect::<Vec<_>>()[..] {
-            [s, e] => {
-                let source_series = s.parse::<Series>().map_err(|()| StatusOrError::Status(Status::BadRequest))?;
-                (source_series, e.to_owned())
-            }
-            _ => {
-                form.context.push_error(form::Error::validation("Please select a source event.").with_name("source_event"));
-                return Ok(RedirectOrContent::Content(restreamers_form(transaction, Some(me), uri, csrf.as_ref(), data, RestreamersFormDefaults::CopyContext(form.context), None).await?));
-            }
-        };
+        let (source_series, source_event_slug) =
+            match value.source_event.splitn(2, '/').collect::<Vec<_>>()[..] {
+                [s, e] => {
+                    let source_series = s
+                        .parse::<Series>()
+                        .map_err(|()| StatusOrError::Status(Status::BadRequest))?;
+                    (source_series, e.to_owned())
+                }
+                _ => {
+                    form.context.push_error(
+                        form::Error::validation("Please select a source event.")
+                            .with_name("source_event"),
+                    );
+                    return Ok(RedirectOrContent::Content(
+                        restreamers_form(
+                            transaction,
+                            Some(me),
+                            uri,
+                            csrf.as_ref(),
+                            data,
+                            RestreamersFormDefaults::CopyContext(form.context),
+                            None,
+                        )
+                        .await?,
+                    ));
+                }
+            };
         if value.languages.is_empty() {
-            form.context.push_error(form::Error::validation("Please select at least one language.").with_name("languages"));
+            form.context.push_error(
+                form::Error::validation("Please select at least one language.")
+                    .with_name("languages"),
+            );
         }
         if form.context.errors().next().is_some() {
-            return Ok(RedirectOrContent::Content(restreamers_form(transaction, Some(me), uri, csrf.as_ref(), data, RestreamersFormDefaults::CopyContext(form.context), None).await?));
+            return Ok(RedirectOrContent::Content(
+                restreamers_form(
+                    transaction,
+                    Some(me),
+                    uri,
+                    csrf.as_ref(),
+                    data,
+                    RestreamersFormDefaults::CopyContext(form.context),
+                    None,
+                )
+                .await?,
+            ));
         }
         let mut extra_managed_role_ids = Vec::new();
         if value.copy_role_ids {
@@ -1102,16 +1719,35 @@ pub(crate) async fn copy_restreamers(pool: &State<PgPool>, discord_ctx: &State<R
         }
         let mut affected_users = HashSet::new();
         for &lang in &value.languages {
-            affected_users.extend(event_restreamers_for_language(&mut transaction, &data, lang).await?);
+            affected_users
+                .extend(event_restreamers_for_language(&mut transaction, &data, lang).await?);
         }
         let discord_ctx = discord_ctx.read().await;
         for user_id in affected_users {
-            sync_restream_coordinator_discord_roles(&mut transaction, &discord_ctx, &data, user_id, &extra_managed_role_ids).await?;
+            sync_restream_coordinator_discord_roles(
+                &mut transaction,
+                &discord_ctx,
+                &data,
+                user_id,
+                &extra_managed_role_ids,
+            )
+            .await?;
         }
         transaction.commit().await?;
         RedirectOrContent::Redirect(Redirect::to(uri!(restreamers_get(series, event, _))))
     } else {
-        RedirectOrContent::Content(restreamers_form(transaction, Some(me), uri, csrf.as_ref(), data, RestreamersFormDefaults::CopyContext(form.context), None).await?)
+        RedirectOrContent::Content(
+            restreamers_form(
+                transaction,
+                Some(me),
+                uri,
+                csrf.as_ref(),
+                data,
+                RestreamersFormDefaults::CopyContext(form.context),
+                None,
+            )
+            .await?,
+        )
     })
 }
 
@@ -1123,28 +1759,44 @@ struct SyncResult {
     error_message: Option<String>,
 }
 
-async fn sync_startgg_participant_ids(transaction: &mut Transaction<'_, Postgres>, event: &Data<'_>, event_slug: &str) -> Result<SyncResult, Box<dyn std::error::Error + Send + Sync>> {
+async fn sync_startgg_participant_ids(
+    transaction: &mut Transaction<'_, Postgres>,
+    event: &Data<'_>,
+    event_slug: &str,
+) -> Result<SyncResult, Box<dyn std::error::Error + Send + Sync>> {
     use crate::config::Config;
-    
+
     let http_client = reqwest::Client::new();
     let config = Config::load().await.map_err(|e| {
         log::error!("Failed to load config for StartGG sync: {}", e);
         format!("Failed to load config: {}", e)
     })?;
-    
-    log::info!("Starting StartGG participant sync for event: {} (series: {})", event_slug, event.series.slug());
 
-    let entrants = startgg::fetch_event_entrants(&http_client, &config, event_slug).await
+    log::info!(
+        "Starting StartGG participant sync for event: {} (series: {})",
+        event_slug,
+        event.series.slug()
+    );
+
+    let entrants = startgg::fetch_event_entrants(&http_client, &config, event_slug)
+        .await
         .map_err(|e| {
             // Log detailed error information to systemd log
             match &e {
                 startgg::Error::GraphQL(errors) => {
-                    log::error!("StartGG GraphQL errors during participant sync for event '{}':", event_slug);
+                    log::error!(
+                        "StartGG GraphQL errors during participant sync for event '{}':",
+                        event_slug
+                    );
                     for (i, error) in errors.iter().enumerate() {
                         log::error!("  Error {}: {}", i + 1, error.message);
                         if let Some(locations) = &error.locations {
                             for location in locations {
-                                log::error!("    Location: line {}, column {}", location.line, location.column);
+                                log::error!(
+                                    "    Location: line {}, column {}",
+                                    location.line,
+                                    location.column
+                                );
                             }
                         }
                         if let Some(path) = &error.path {
@@ -1153,24 +1805,39 @@ async fn sync_startgg_participant_ids(transaction: &mut Transaction<'_, Postgres
                     }
                 }
                 startgg::Error::Reqwest(reqwest_err) => {
-                    log::error!("StartGG HTTP request failed for event '{}': {}", event_slug, reqwest_err);
+                    log::error!(
+                        "StartGG HTTP request failed for event '{}': {}",
+                        event_slug,
+                        reqwest_err
+                    );
                     if let Some(url) = reqwest_err.url() {
                         log::error!("  Request URL: {}", url);
                     }
                 }
                 startgg::Error::Wheel(wheel_err) => {
-                    log::error!("StartGG wheel error for event '{}': {}", event_slug, wheel_err);
+                    log::error!(
+                        "StartGG wheel error for event '{}': {}",
+                        event_slug,
+                        wheel_err
+                    );
                 }
                 startgg::Error::NoDataNoErrors => {
-                    log::error!("StartGG API returned no data and no errors for event '{}'", event_slug);
+                    log::error!(
+                        "StartGG API returned no data and no errors for event '{}'",
+                        event_slug
+                    );
                 }
                 startgg::Error::NoQueryMatch(response_data) => {
-                    log::error!("StartGG query did not match expected response format for event '{}': {:?}", event_slug, response_data);
+                    log::error!(
+                        "StartGG query did not match expected response format for event '{}': {:?}",
+                        event_slug,
+                        response_data
+                    );
                 }
             }
             format!("Failed to fetch entrants from StartGG: {}", e)
         })?;
-    
+
     let teams = sqlx::query_as!(Team, r#"
         SELECT id AS "id: Id<Teams>", series AS "series: Series", event, name, racetime_slug, startgg_id AS "startgg_id: startgg::ID", NULL as challonge_id, plural_name, restream_consent, mw_impl AS "mw_impl: mw::Impl", qualifier_rank 
         FROM teams
@@ -1185,23 +1852,35 @@ async fn sync_startgg_participant_ids(transaction: &mut Transaction<'_, Postgres
             log::error!("Database error while fetching teams for StartGG sync (event: {}, series: {}): {}", event_slug, event.series.slug(), e);
             e
         })?;
-    
-    log::info!("Fetched {} entrants from StartGG for event '{}'", entrants.len(), event_slug);
+
+    log::info!(
+        "Fetched {} entrants from StartGG for event '{}'",
+        entrants.len(),
+        event_slug
+    );
     if entrants.is_empty() {
         return Ok(SyncResult {
             synced_count: 0,
             failed_count: 0,
             failed_teams: Vec::new(),
-            error_message: Some(format!("StartGG returned 0 entrants for slug '{}' — check that the event URL is correct and entrants are registered", event_slug)),
+            error_message: Some(format!(
+                "StartGG returned 0 entrants for slug '{}' — check that the event URL is correct and entrants are registered",
+                event_slug
+            )),
         });
     }
-    log::info!("Found {} teams to sync for event '{}'", teams.len(), event_slug);
-    
+    log::info!(
+        "Found {} teams to sync for event '{}'",
+        teams.len(),
+        event_slug
+    );
+
     let mut synced_count = 0;
     let mut failed_teams = Vec::new();
-    
+
     for team in teams {
-        let team_members = sqlx::query!(r#"
+        let team_members = sqlx::query!(
+            r#"
             SELECT tm.member, tm.startgg_id AS "startgg_id: startgg::ID",
                    CASE WHEN u.display_source = 'racetime' THEN u.racetime_display_name
                         WHEN u.display_source = 'discord' THEN u.discord_display_name
@@ -1209,60 +1888,113 @@ async fn sync_startgg_participant_ids(transaction: &mut Transaction<'_, Postgres
             FROM team_members tm
             LEFT JOIN users u ON u.id = tm.member
             WHERE tm.team = $1
-        "#, team.id as _).fetch_all(&mut **transaction).await
-            .map_err(|e| {
-                log::error!("Database error while fetching team members for team {} (event: {}): {}", team.id, event_slug, e);
+        "#,
+            team.id as _
+        )
+        .fetch_all(&mut **transaction)
+        .await
+        .map_err(|e| {
+            log::error!(
+                "Database error while fetching team members for team {} (event: {}): {}",
+                team.id,
+                event_slug,
                 e
-            })?;
-        
+            );
+            e
+        })?;
+
         if team_members.len() == 1 {
             let member = &team_members[0];
-            
-            if let Some(entrant_id) = find_matching_entrant(&entrants, member.member.into(), transaction).await
-                .map_err(|e| {
-                    log::error!("Error finding matching entrant for team {} (event: {}): {}", team.id, event_slug, e);
-                    e
-                })? {
-                sqlx::query!(r#"
+
+            if let Some(entrant_id) =
+                find_matching_entrant(&entrants, member.member.into(), transaction)
+                    .await
+                    .map_err(|e| {
+                        log::error!(
+                            "Error finding matching entrant for team {} (event: {}): {}",
+                            team.id,
+                            event_slug,
+                            e
+                        );
+                        e
+                    })?
+            {
+                sqlx::query!(
+                    r#"
                     UPDATE teams 
                     SET startgg_id = $1 
                     WHERE id = $2
-                "#, entrant_id as _, team.id as _).execute(&mut **transaction).await
-                    .map_err(|e| {
-                        log::error!("Database error while updating team {} with StartGG ID {} (event: {}): {}", team.id, entrant_id, event_slug, e);
+                "#,
+                    entrant_id as _,
+                    team.id as _
+                )
+                .execute(&mut **transaction)
+                .await
+                .map_err(|e| {
+                    log::error!(
+                        "Database error while updating team {} with StartGG ID {} (event: {}): {}",
+                        team.id,
+                        entrant_id,
+                        event_slug,
                         e
-                    })?;
-                
+                    );
+                    e
+                })?;
+
                 synced_count += 1;
-                log::debug!("Successfully synced team '{}' (ID: {}) with StartGG entrant {}", 
-                    team.name.as_deref().unwrap_or("Unknown"), team.id, entrant_id);
+                log::debug!(
+                    "Successfully synced team '{}' (ID: {}) with StartGG entrant {}",
+                    team.name.as_deref().unwrap_or("Unknown"),
+                    team.id,
+                    entrant_id
+                );
             } else {
                 // Could not find a matching entrant
-                let team_label = team.name.clone().unwrap_or_else(|| format!("Team {}", team.id));
+                let team_label = team
+                    .name
+                    .clone()
+                    .unwrap_or_else(|| format!("Team {}", team.id));
                 let display = if let Some(ref display_name) = member.display_name {
                     format!("{} [{}]", team_label, display_name)
                 } else {
                     team_label
                 };
-                log::warn!("Could not find matching StartGG entrant for team '{}' (ID: {}) in event '{}'",
-                    display, team.id, event_slug);
+                log::warn!(
+                    "Could not find matching StartGG entrant for team '{}' (ID: {}) in event '{}'",
+                    display,
+                    team.id,
+                    event_slug
+                );
                 failed_teams.push(display);
             }
         } else {
-            log::warn!("Team '{}' (ID: {}) has {} members, expected 1 for StartGG sync (event: '{}')", 
-                team.name.as_deref().unwrap_or("Unknown"), team.id, team_members.len(), event_slug);
+            log::warn!(
+                "Team '{}' (ID: {}) has {} members, expected 1 for StartGG sync (event: '{}')",
+                team.name.as_deref().unwrap_or("Unknown"),
+                team.id,
+                team_members.len(),
+                event_slug
+            );
         }
     }
-    
+
     let failed_count = failed_teams.len();
-    
-    log::info!("StartGG participant sync completed for event '{}': {} teams synced, {} teams failed", 
-        event_slug, synced_count, failed_count);
-    
+
+    log::info!(
+        "StartGG participant sync completed for event '{}': {} teams synced, {} teams failed",
+        event_slug,
+        synced_count,
+        failed_count
+    );
+
     if !failed_teams.is_empty() {
-        log::warn!("Failed to sync teams for event '{}': {}", event_slug, failed_teams.join(", "));
+        log::warn!(
+            "Failed to sync teams for event '{}': {}",
+            event_slug,
+            failed_teams.join(", ")
+        );
     }
-    
+
     Ok(SyncResult {
         synced_count,
         failed_count,
@@ -1272,38 +2004,45 @@ async fn sync_startgg_participant_ids(transaction: &mut Transaction<'_, Postgres
 }
 
 async fn find_matching_entrant(
-    entrants: &[(startgg::ID, String, Vec<Option<startgg::ID>>)], 
-    member_id: Id<Users>, 
-    transaction: &mut Transaction<'_, Postgres>
+    entrants: &[(startgg::ID, String, Vec<Option<startgg::ID>>)],
+    member_id: Id<Users>,
+    transaction: &mut Transaction<'_, Postgres>,
 ) -> Result<Option<startgg::ID>, Box<dyn std::error::Error + Send + Sync>> {
-    let user = User::from_id(&mut **transaction, member_id).await?.ok_or("User not found")?;
-    
+    let user = User::from_id(&mut **transaction, member_id)
+        .await?
+        .ok_or("User not found")?;
+
     for (entrant_id, entrant_name, participant_user_ids) in entrants {
         if let Some(user_startgg_id) = &user.startgg_id {
-            if participant_user_ids.iter().any(|id| id.as_ref() == Some(user_startgg_id)) {
+            if participant_user_ids
+                .iter()
+                .any(|id| id.as_ref() == Some(user_startgg_id))
+            {
                 return Ok(Some(entrant_id.clone()));
             }
         }
-        
+
         let entrant_name_lower = entrant_name.to_lowercase();
-        
+
         let user_names = [
             user.racetime.as_ref().map(|r| r.display_name.as_str()),
             user.discord.as_ref().map(|d| d.display_name.as_str()),
-            user.discord.as_ref().and_then(|d| match &d.username_or_discriminator {
-                Either::Left(username) => Some(username.as_str()),
-                Either::Right(_) => None,
-            }),
+            user.discord
+                .as_ref()
+                .and_then(|d| match &d.username_or_discriminator {
+                    Either::Left(username) => Some(username.as_str()),
+                    Either::Right(_) => None,
+                }),
         ];
-        
+
         for user_name in user_names.iter().filter_map(|&name| name) {
             let user_name_lower = user_name.to_lowercase();
-            
+
             // First try exact match
             if entrant_name_lower == user_name_lower {
                 return Ok(Some(entrant_id.clone()));
             }
-            
+
             // If that fails, check if there's a clan tag (| character)
             if entrant_name_lower.contains('|') {
                 if let Some(stripped_entrant_name) = entrant_name_lower.split('|').nth(1) {
@@ -1315,7 +2054,7 @@ async fn find_matching_entrant(
             }
         }
     }
-    
+
     Ok(None)
 }
 
@@ -1325,12 +2064,14 @@ pub(crate) async fn search_users(
     query: Option<&str>,
 ) -> Result<RawText<String>, StatusOrError<event::Error>> {
     let mut transaction = pool.begin().await?;
-    
+
     let query = query.unwrap_or("").trim();
     if query.is_empty() {
-        return Ok(RawText(serde_json::to_string(&Vec::<UserSearchResult>::new())?));
+        return Ok(RawText(serde_json::to_string(
+            &Vec::<UserSearchResult>::new(),
+        )?));
     }
-    
+
     // Search for users by display name, racetime ID, or Discord username
     let users = sqlx::query_as!(
         UserSearchRow,
@@ -1364,15 +2105,19 @@ pub(crate) async fn search_users(
     )
     .fetch_all(&mut *transaction)
     .await?;
-    
+
     let results: Vec<UserSearchResult> = users
         .into_iter()
         .map(|row| {
             let display_name = match row.display_source {
-                DisplaySource::RaceTime => row.racetime_display_name.unwrap_or_else(|| "Unknown".to_string()),
-                DisplaySource::Discord => row.discord_display_name.unwrap_or_else(|| "Unknown".to_string()),
+                DisplaySource::RaceTime => row
+                    .racetime_display_name
+                    .unwrap_or_else(|| "Unknown".to_string()),
+                DisplaySource::Discord => row
+                    .discord_display_name
+                    .unwrap_or_else(|| "Unknown".to_string()),
             };
-            
+
             UserSearchResult {
                 id: row.id,
                 display_name,
@@ -1381,7 +2126,7 @@ pub(crate) async fn search_users(
             }
         })
         .collect();
-    
+
     Ok(RawText(serde_json::to_string(&results)?))
 }
 
@@ -1420,7 +2165,9 @@ pub(crate) async fn restreamer_search(
 
     let query = query.unwrap_or("").trim();
     if query.is_empty() {
-        return Ok(RawText(serde_json::to_string(&Vec::<UserSearchResult>::new())?));
+        return Ok(RawText(serde_json::to_string(
+            &Vec::<UserSearchResult>::new(),
+        )?));
     }
 
     // Search for users with racetime connections by display name, racetime ID, or Discord username
@@ -1464,8 +2211,12 @@ pub(crate) async fn restreamer_search(
         .into_iter()
         .map(|row| {
             let display_name = match row.display_source {
-                DisplaySource::RaceTime => row.racetime_display_name.unwrap_or_else(|| "Unknown".to_string()),
-                DisplaySource::Discord => row.discord_display_name.unwrap_or_else(|| "Unknown".to_string()),
+                DisplaySource::RaceTime => row
+                    .racetime_display_name
+                    .unwrap_or_else(|| "Unknown".to_string()),
+                DisplaySource::Discord => row
+                    .discord_display_name
+                    .unwrap_or_else(|| "Unknown".to_string()),
             };
 
             UserSearchResult {
@@ -1485,11 +2236,10 @@ pub(crate) async fn video_url_suggestions(
     pool: &State<PgPool>,
 ) -> Result<RawText<String>, StatusOrError<event::Error>> {
     // Lookup table entries take priority; stored as normalized patterns without scheme
-    let lookup_patterns = sqlx::query_scalar!(
-        "SELECT url_pattern FROM restream_channels ORDER BY url_pattern"
-    )
-    .fetch_all(pool.inner())
-    .await?;
+    let lookup_patterns =
+        sqlx::query_scalar!("SELECT url_pattern FROM restream_channels ORDER BY url_pattern")
+            .fetch_all(pool.inner())
+            .await?;
 
     // Cache of URLs used in past races
     let cached_urls = sqlx::query_scalar!(
@@ -1512,7 +2262,9 @@ pub(crate) async fn video_url_suggestions(
     let mut result: Vec<String> = Vec::new();
 
     for pattern in lookup_patterns {
-        if result.len() >= MAX { break; }
+        if result.len() >= MAX {
+            break;
+        }
         let normalized = crate::admin::normalize_restream_url_pattern(&pattern);
         if seen_normalized.insert(normalized) {
             result.push(format!("https://{}", pattern));
@@ -1520,7 +2272,9 @@ pub(crate) async fn video_url_suggestions(
     }
 
     for url in cached_urls.into_iter().flatten() {
-        if result.len() >= MAX { break; }
+        if result.len() >= MAX {
+            break;
+        }
         let normalized = crate::admin::normalize_restream_url_pattern(&url);
         if seen_normalized.insert(normalized) {
             result.push(url);
@@ -1543,14 +2297,18 @@ enum WeeklySchedulesFormDefaults<'v> {
 impl<'v> WeeklySchedulesFormDefaults<'v> {
     fn delete_errors(&self, for_schedule: Id<WeeklySchedules>) -> Vec<&form::Error<'v>> {
         match self {
-            Self::DeleteContext(schedule_id, ctx) if *schedule_id == for_schedule => ctx.errors().collect(),
+            Self::DeleteContext(schedule_id, ctx) if *schedule_id == for_schedule => {
+                ctx.errors().collect()
+            }
             _ => Vec::default(),
         }
     }
 
     fn toggle_errors(&self, for_schedule: Id<WeeklySchedules>) -> Vec<&form::Error<'v>> {
         match self {
-            Self::ToggleContext(schedule_id, ctx) if *schedule_id == for_schedule => ctx.errors().collect(),
+            Self::ToggleContext(schedule_id, ctx) if *schedule_id == for_schedule => {
+                ctx.errors().collect()
+            }
             _ => Vec::default(),
         }
     }
@@ -1669,8 +2427,17 @@ fn frequency_display(days: i16) -> &'static str {
     }
 }
 
-async fn weekly_schedules_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>, uri: Origin<'_>, csrf: Option<&CsrfToken>, event: Data<'_>, defaults: WeeklySchedulesFormDefaults<'_>) -> Result<RawHtml<String>, event::Error> {
-    let header = event.header(&mut transaction, me.as_ref(), Tab::Configure, true).await?;
+async fn weekly_schedules_form(
+    mut transaction: Transaction<'_, Postgres>,
+    me: Option<User>,
+    uri: Origin<'_>,
+    csrf: Option<&CsrfToken>,
+    event: Data<'_>,
+    defaults: WeeklySchedulesFormDefaults<'_>,
+) -> Result<RawHtml<String>, event::Error> {
+    let header = event
+        .header(&mut transaction, me.as_ref(), Tab::Configure, true)
+        .await?;
     let content = if event.is_ended() {
         html! {
             article {
@@ -1679,7 +2446,8 @@ async fn weekly_schedules_form(mut transaction: Transaction<'_, Postgres>, me: O
         }
     } else if let Some(ref me) = me {
         if event.organizers(&mut transaction).await?.contains(me) || me.is_global_admin() {
-            let schedules = WeeklySchedule::for_event(&mut transaction, event.series, &event.event).await?;
+            let schedules =
+                WeeklySchedule::for_event(&mut transaction, event.series, &event.event).await?;
             let now = Utc::now();
             let event_goals: Vec<String> = sqlx::query_scalar!(
                 r#"SELECT DISTINCT racetime_goal_slug AS "slug!" FROM events WHERE racetime_goal_slug IS NOT NULL ORDER BY racetime_goal_slug"#
@@ -1847,17 +2615,45 @@ async fn weekly_schedules_form(mut transaction: Transaction<'_, Postgres>, me: O
             }
         }
     };
-    Ok(page(transaction, &me, &uri, PageStyle { chests: event.chests().await?, ..PageStyle::default() }, &format!("Manage Weekly Schedules — {}", event.display_name), html! {
-        : header;
-        : content;
-    }).await?)
+    Ok(page(
+        transaction,
+        &me,
+        &uri,
+        PageStyle {
+            chests: event.chests().await?,
+            ..PageStyle::default()
+        },
+        &format!("Manage Weekly Schedules — {}", event.display_name),
+        html! {
+            : header;
+            : content;
+        },
+    )
+    .await?)
 }
 
 #[rocket::get("/event/<series>/<event>/configure/weekly-schedules")]
-pub(crate) async fn weekly_schedules_get(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: String) -> Result<RawHtml<String>, StatusOrError<event::Error>> {
+pub(crate) async fn weekly_schedules_get(
+    pool: &State<PgPool>,
+    me: Option<User>,
+    uri: Origin<'_>,
+    csrf: Option<CsrfToken>,
+    series: Series,
+    event: String,
+) -> Result<RawHtml<String>, StatusOrError<event::Error>> {
     let mut transaction = pool.begin().await?;
-    let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
-    Ok(weekly_schedules_form(transaction, me, uri, csrf.as_ref(), data, WeeklySchedulesFormDefaults::None).await?)
+    let data = Data::new(&mut transaction, series, event)
+        .await?
+        .ok_or(StatusOrError::Status(Status::NotFound))?;
+    Ok(weekly_schedules_form(
+        transaction,
+        me,
+        uri,
+        csrf.as_ref(),
+        data,
+        WeeklySchedulesFormDefaults::None,
+    )
+    .await?)
 }
 
 #[derive(FromForm, CsrfForm)]
@@ -1886,90 +2682,143 @@ pub(crate) struct AddWeeklyScheduleForm {
 }
 
 #[rocket::post("/event/<series>/<event>/configure/weekly-schedules", data = "<form>")]
-pub(crate) async fn weekly_schedule_add(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, form: Form<Contextual<'_, AddWeeklyScheduleForm>>) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
+pub(crate) async fn weekly_schedule_add(
+    pool: &State<PgPool>,
+    me: User,
+    uri: Origin<'_>,
+    csrf: Option<CsrfToken>,
+    series: Series,
+    event: &str,
+    form: Form<Contextual<'_, AddWeeklyScheduleForm>>,
+) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
     let mut transaction = pool.begin().await?;
-    let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+    let data = Data::new(&mut transaction, series, event)
+        .await?
+        .ok_or(StatusOrError::Status(Status::NotFound))?;
     let mut form = form.into_inner();
     form.verify(&csrf);
     Ok(if let Some(ref value) = form.value {
         if data.is_ended() {
-            form.context.push_error(form::Error::validation("This event has ended and can no longer be configured"));
+            form.context.push_error(form::Error::validation(
+                "This event has ended and can no longer be configured",
+            ));
         }
         if !data.organizers(&mut transaction).await?.contains(&me) && !me.is_global_admin() {
-            form.context.push_error(form::Error::validation("You must be an organizer to configure this event."));
+            form.context.push_error(form::Error::validation(
+                "You must be an organizer to configure this event.",
+            ));
         }
         if value.name.trim().is_empty() {
-            form.context.push_error(form::Error::validation("Schedule name is required.").with_name("name"));
+            form.context.push_error(
+                form::Error::validation("Schedule name is required.").with_name("name"),
+            );
         }
         // Check for duplicate name
-        let existing = WeeklySchedule::for_event(&mut transaction, data.series, &data.event).await?;
-        if existing.iter().any(|s| s.name.eq_ignore_ascii_case(value.name.trim())) {
-            form.context.push_error(form::Error::validation("A schedule with this name already exists.").with_name("name"));
+        let existing =
+            WeeklySchedule::for_event(&mut transaction, data.series, &data.event).await?;
+        if existing
+            .iter()
+            .any(|s| s.name.eq_ignore_ascii_case(value.name.trim()))
+        {
+            form.context.push_error(
+                form::Error::validation("A schedule with this name already exists.")
+                    .with_name("name"),
+            );
         }
         let time_of_day = match NaiveTime::parse_from_str(&value.time_of_day, "%H:%M") {
             Ok(t) => Some(t),
             Err(_) => {
-                form.context.push_error(form::Error::validation("Invalid time format. Use HH:MM.").with_name("time_of_day"));
+                form.context.push_error(
+                    form::Error::validation("Invalid time format. Use HH:MM.")
+                        .with_name("time_of_day"),
+                );
                 None
             }
         };
         let timezone: Option<Tz> = match value.timezone.parse() {
             Ok(tz) => Some(tz),
             Err(_) => {
-                form.context.push_error(form::Error::validation("Invalid timezone.").with_name("timezone"));
+                form.context
+                    .push_error(form::Error::validation("Invalid timezone.").with_name("timezone"));
                 None
             }
         };
         let anchor_date = match NaiveDate::parse_from_str(&value.anchor_date, "%Y-%m-%d") {
             Ok(d) => Some(d),
             Err(_) => {
-                form.context.push_error(form::Error::validation("Invalid date format. Use YYYY-MM-DD.").with_name("anchor_date"));
+                form.context.push_error(
+                    form::Error::validation("Invalid date format. Use YYYY-MM-DD.")
+                        .with_name("anchor_date"),
+                );
                 None
             }
         };
-        let notification_channel_id = value.notification_channel_id.as_ref()
-            .and_then(|s| {
-                let trimmed = s.trim();
-                if trimmed.is_empty() {
-                    None
-                } else {
-                    match trimmed.parse::<u64>() {
-                        Ok(id) => Some(PgSnowflake(ChannelId::new(id))),
-                        Err(_) => {
-                            form.context.push_error(form::Error::validation("Invalid Discord channel ID. Must be a number.").with_name("notification_channel_id"));
-                            None
-                        }
+        let notification_channel_id = value.notification_channel_id.as_ref().and_then(|s| {
+            let trimmed = s.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                match trimmed.parse::<u64>() {
+                    Ok(id) => Some(PgSnowflake(ChannelId::new(id))),
+                    Err(_) => {
+                        form.context.push_error(
+                            form::Error::validation(
+                                "Invalid Discord channel ID. Must be a number.",
+                            )
+                            .with_name("notification_channel_id"),
+                        );
+                        None
                     }
                 }
-            });
-        let notification_role_id = value.notification_role_id.as_ref()
-            .and_then(|s| {
-                let trimmed = s.trim();
-                if trimmed.is_empty() {
-                    None
-                } else {
-                    match trimmed.parse::<u64>() {
-                        Ok(id) => Some(PgSnowflake(RoleId::new(id))),
-                        Err(_) => {
-                            form.context.push_error(form::Error::validation("Invalid Discord role ID. Must be a number.").with_name("notification_role_id"));
-                            None
-                        }
+            }
+        });
+        let notification_role_id = value.notification_role_id.as_ref().and_then(|s| {
+            let trimmed = s.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                match trimmed.parse::<u64>() {
+                    Ok(id) => Some(PgSnowflake(RoleId::new(id))),
+                    Err(_) => {
+                        form.context.push_error(
+                            form::Error::validation("Invalid Discord role ID. Must be a number.")
+                                .with_name("notification_role_id"),
+                        );
+                        None
                     }
                 }
-            });
+            }
+        });
         let racetime_goal = match value.racetime_goal.as_str() {
             "" => None,
             "custom" => {
-                let custom = value.racetime_goal_custom.as_ref().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+                let custom = value
+                    .racetime_goal_custom
+                    .as_ref()
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty());
                 if custom.is_none() {
-                    form.context.push_error(form::Error::validation("Please enter a custom goal string.").with_name("racetime_goal_custom"));
+                    form.context.push_error(
+                        form::Error::validation("Please enter a custom goal string.")
+                            .with_name("racetime_goal_custom"),
+                    );
                 }
                 custom
             }
             other => Some(other.to_string()),
         };
         if form.context.errors().next().is_some() {
-            RedirectOrContent::Content(weekly_schedules_form(transaction, Some(me), uri, csrf.as_ref(), data, WeeklySchedulesFormDefaults::AddContext(form.context)).await?)
+            RedirectOrContent::Content(
+                weekly_schedules_form(
+                    transaction,
+                    Some(me),
+                    uri,
+                    csrf.as_ref(),
+                    data,
+                    WeeklySchedulesFormDefaults::AddContext(form.context),
+                )
+                .await?,
+            )
         } else {
             let schedule = WeeklySchedule {
                 id: Id::new(&mut transaction).await?,
@@ -1981,7 +2830,13 @@ pub(crate) async fn weekly_schedule_add(pool: &State<PgPool>, me: User, uri: Ori
                 timezone: timezone.unwrap(),
                 anchor_date: anchor_date.unwrap(),
                 active: value.active,
-                settings_description: value.settings_description.as_ref().and_then(|s| if s.trim().is_empty() { None } else { Some(s.trim().to_string()) }),
+                settings_description: value.settings_description.as_ref().and_then(|s| {
+                    if s.trim().is_empty() {
+                        None
+                    } else {
+                        Some(s.trim().to_string())
+                    }
+                }),
                 notification_channel_id,
                 notification_role_id,
                 room_open_minutes_before: value.room_open_minutes_before.unwrap_or(30),
@@ -1992,29 +2847,69 @@ pub(crate) async fn weekly_schedule_add(pool: &State<PgPool>, me: User, uri: Ori
             RedirectOrContent::Redirect(Redirect::to(uri!(weekly_schedules_get(series, event))))
         }
     } else {
-        RedirectOrContent::Content(weekly_schedules_form(transaction, Some(me), uri, csrf.as_ref(), data, WeeklySchedulesFormDefaults::AddContext(form.context)).await?)
+        RedirectOrContent::Content(
+            weekly_schedules_form(
+                transaction,
+                Some(me),
+                uri,
+                csrf.as_ref(),
+                data,
+                WeeklySchedulesFormDefaults::AddContext(form.context),
+            )
+            .await?,
+        )
     })
 }
 
-#[rocket::post("/event/<series>/<event>/configure/weekly-schedules/<schedule_id>/delete", data = "<form>")]
-pub(crate) async fn weekly_schedule_delete(discord_ctx: &State<RwFuture<DiscordCtx>>, pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, schedule_id: Id<WeeklySchedules>, form: Form<Contextual<'_, EmptyForm>>) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
+#[rocket::post(
+    "/event/<series>/<event>/configure/weekly-schedules/<schedule_id>/delete",
+    data = "<form>"
+)]
+pub(crate) async fn weekly_schedule_delete(
+    discord_ctx: &State<RwFuture<DiscordCtx>>,
+    pool: &State<PgPool>,
+    me: User,
+    uri: Origin<'_>,
+    csrf: Option<CsrfToken>,
+    series: Series,
+    event: &str,
+    schedule_id: Id<WeeklySchedules>,
+    form: Form<Contextual<'_, EmptyForm>>,
+) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
     let mut transaction = pool.begin().await?;
-    let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+    let data = Data::new(&mut transaction, series, event)
+        .await?
+        .ok_or(StatusOrError::Status(Status::NotFound))?;
     let mut form = form.into_inner();
     form.verify(&csrf);
     Ok(if form.value.is_some() {
         if data.is_ended() {
-            form.context.push_error(form::Error::validation("This event has ended and can no longer be configured"));
+            form.context.push_error(form::Error::validation(
+                "This event has ended and can no longer be configured",
+            ));
         }
         if !data.organizers(&mut transaction).await?.contains(&me) && !me.is_global_admin() {
-            form.context.push_error(form::Error::validation("You must be an organizer to configure this event."));
+            form.context.push_error(form::Error::validation(
+                "You must be an organizer to configure this event.",
+            ));
         }
         let schedule = WeeklySchedule::from_id(&mut transaction, schedule_id).await?;
         if schedule.is_none() {
-            form.context.push_error(form::Error::validation("Schedule not found."));
+            form.context
+                .push_error(form::Error::validation("Schedule not found."));
         }
         if form.context.errors().next().is_some() {
-            RedirectOrContent::Content(weekly_schedules_form(transaction, Some(me), uri, csrf.as_ref(), data, WeeklySchedulesFormDefaults::DeleteContext(schedule_id, form.context)).await?)
+            RedirectOrContent::Content(
+                weekly_schedules_form(
+                    transaction,
+                    Some(me),
+                    uri,
+                    csrf.as_ref(),
+                    data,
+                    WeeklySchedulesFormDefaults::DeleteContext(schedule_id, form.context),
+                )
+                .await?,
+            )
         } else {
             let schedule = schedule.unwrap();
             let affected_message_ids = schedule.delete_upcoming_races(&mut transaction).await?;
@@ -2023,35 +2918,80 @@ pub(crate) async fn weekly_schedule_delete(discord_ctx: &State<RwFuture<DiscordC
             let discord_ctx = discord_ctx.read().await;
             for message_id in affected_message_ids {
                 let _ = crate::volunteer_requests::update_volunteer_post_by_message_id(
-                    pool, &discord_ctx, series, event, message_id,
-                ).await;
+                    pool,
+                    &discord_ctx,
+                    series,
+                    event,
+                    message_id,
+                )
+                .await;
             }
             RedirectOrContent::Redirect(Redirect::to(uri!(weekly_schedules_get(series, event))))
         }
     } else {
-        RedirectOrContent::Content(weekly_schedules_form(transaction, Some(me), uri, csrf.as_ref(), data, WeeklySchedulesFormDefaults::DeleteContext(schedule_id, form.context)).await?)
+        RedirectOrContent::Content(
+            weekly_schedules_form(
+                transaction,
+                Some(me),
+                uri,
+                csrf.as_ref(),
+                data,
+                WeeklySchedulesFormDefaults::DeleteContext(schedule_id, form.context),
+            )
+            .await?,
+        )
     })
 }
 
-#[rocket::post("/event/<series>/<event>/configure/weekly-schedules/<schedule_id>/toggle", data = "<form>")]
-pub(crate) async fn weekly_schedule_toggle(discord_ctx: &State<RwFuture<DiscordCtx>>, pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, schedule_id: Id<WeeklySchedules>, form: Form<Contextual<'_, EmptyForm>>) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
+#[rocket::post(
+    "/event/<series>/<event>/configure/weekly-schedules/<schedule_id>/toggle",
+    data = "<form>"
+)]
+pub(crate) async fn weekly_schedule_toggle(
+    discord_ctx: &State<RwFuture<DiscordCtx>>,
+    pool: &State<PgPool>,
+    me: User,
+    uri: Origin<'_>,
+    csrf: Option<CsrfToken>,
+    series: Series,
+    event: &str,
+    schedule_id: Id<WeeklySchedules>,
+    form: Form<Contextual<'_, EmptyForm>>,
+) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
     let mut transaction = pool.begin().await?;
-    let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+    let data = Data::new(&mut transaction, series, event)
+        .await?
+        .ok_or(StatusOrError::Status(Status::NotFound))?;
     let mut form = form.into_inner();
     form.verify(&csrf);
     Ok(if form.value.is_some() {
         if data.is_ended() {
-            form.context.push_error(form::Error::validation("This event has ended and can no longer be configured"));
+            form.context.push_error(form::Error::validation(
+                "This event has ended and can no longer be configured",
+            ));
         }
         if !data.organizers(&mut transaction).await?.contains(&me) && !me.is_global_admin() {
-            form.context.push_error(form::Error::validation("You must be an organizer to configure this event."));
+            form.context.push_error(form::Error::validation(
+                "You must be an organizer to configure this event.",
+            ));
         }
         let schedule = WeeklySchedule::from_id(&mut transaction, schedule_id).await?;
         if schedule.is_none() {
-            form.context.push_error(form::Error::validation("Schedule not found."));
+            form.context
+                .push_error(form::Error::validation("Schedule not found."));
         }
         if form.context.errors().next().is_some() {
-            RedirectOrContent::Content(weekly_schedules_form(transaction, Some(me), uri, csrf.as_ref(), data, WeeklySchedulesFormDefaults::ToggleContext(schedule_id, form.context)).await?)
+            RedirectOrContent::Content(
+                weekly_schedules_form(
+                    transaction,
+                    Some(me),
+                    uri,
+                    csrf.as_ref(),
+                    data,
+                    WeeklySchedulesFormDefaults::ToggleContext(schedule_id, form.context),
+                )
+                .await?,
+            )
         } else {
             let mut schedule = schedule.unwrap();
             let was_active = schedule.active;
@@ -2067,17 +3007,40 @@ pub(crate) async fn weekly_schedule_toggle(discord_ctx: &State<RwFuture<DiscordC
             let discord_ctx = discord_ctx.read().await;
             for message_id in affected_message_ids {
                 let _ = crate::volunteer_requests::update_volunteer_post_by_message_id(
-                    pool, &discord_ctx, series, event, message_id,
-                ).await;
+                    pool,
+                    &discord_ctx,
+                    series,
+                    event,
+                    message_id,
+                )
+                .await;
             }
             RedirectOrContent::Redirect(Redirect::to(uri!(weekly_schedules_get(series, event))))
         }
     } else {
-        RedirectOrContent::Content(weekly_schedules_form(transaction, Some(me), uri, csrf.as_ref(), data, WeeklySchedulesFormDefaults::ToggleContext(schedule_id, form.context)).await?)
+        RedirectOrContent::Content(
+            weekly_schedules_form(
+                transaction,
+                Some(me),
+                uri,
+                csrf.as_ref(),
+                data,
+                WeeklySchedulesFormDefaults::ToggleContext(schedule_id, form.context),
+            )
+            .await?,
+        )
     })
 }
 
-async fn weekly_schedule_edit_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>, uri: Origin<'_>, csrf: Option<&CsrfToken>, event: Data<'_>, schedule: WeeklySchedule, ctx: Context<'_>) -> Result<RawHtml<String>, event::Error> {
+async fn weekly_schedule_edit_form(
+    mut transaction: Transaction<'_, Postgres>,
+    me: Option<User>,
+    uri: Origin<'_>,
+    csrf: Option<&CsrfToken>,
+    event: Data<'_>,
+    schedule: WeeklySchedule,
+    ctx: Context<'_>,
+) -> Result<RawHtml<String>, event::Error> {
     // Get the racetime category slug for this series
     let racetime_category = sqlx::query_scalar!(
         r#"
@@ -2096,7 +3059,9 @@ async fn weekly_schedule_edit_form(mut transaction: Transaction<'_, Postgres>, m
         r#"SELECT DISTINCT racetime_goal_slug AS "slug!" FROM events WHERE racetime_goal_slug IS NOT NULL ORDER BY racetime_goal_slug"#
     ).fetch_all(&mut *transaction).await?;
 
-    let header = event.header(&mut transaction, me.as_ref(), Tab::Configure, true).await?;
+    let header = event
+        .header(&mut transaction, me.as_ref(), Tab::Configure, true)
+        .await?;
     let content = if event.is_ended() {
         html! {
             article {
@@ -2230,18 +3195,50 @@ async fn weekly_schedule_edit_form(mut transaction: Transaction<'_, Postgres>, m
             }
         }
     };
-    Ok(page(transaction, &me, &uri, PageStyle { chests: event.chests().await?, ..PageStyle::default() }, &format!("Edit Schedule — {}", event.display_name), html! {
-        : header;
-        : content;
-    }).await?)
+    Ok(page(
+        transaction,
+        &me,
+        &uri,
+        PageStyle {
+            chests: event.chests().await?,
+            ..PageStyle::default()
+        },
+        &format!("Edit Schedule — {}", event.display_name),
+        html! {
+            : header;
+            : content;
+        },
+    )
+    .await?)
 }
 
 #[rocket::get("/event/<series>/<event>/configure/weekly-schedules/<schedule_id>/edit")]
-pub(crate) async fn weekly_schedule_edit_get(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: String, schedule_id: Id<WeeklySchedules>) -> Result<RawHtml<String>, StatusOrError<event::Error>> {
+pub(crate) async fn weekly_schedule_edit_get(
+    pool: &State<PgPool>,
+    me: Option<User>,
+    uri: Origin<'_>,
+    csrf: Option<CsrfToken>,
+    series: Series,
+    event: String,
+    schedule_id: Id<WeeklySchedules>,
+) -> Result<RawHtml<String>, StatusOrError<event::Error>> {
     let mut transaction = pool.begin().await?;
-    let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
-    let schedule = WeeklySchedule::from_id(&mut transaction, schedule_id).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
-    Ok(weekly_schedule_edit_form(transaction, me, uri, csrf.as_ref(), data, schedule, Context::default()).await?)
+    let data = Data::new(&mut transaction, series, event)
+        .await?
+        .ok_or(StatusOrError::Status(Status::NotFound))?;
+    let schedule = WeeklySchedule::from_id(&mut transaction, schedule_id)
+        .await?
+        .ok_or(StatusOrError::Status(Status::NotFound))?;
+    Ok(weekly_schedule_edit_form(
+        transaction,
+        me,
+        uri,
+        csrf.as_ref(),
+        data,
+        schedule,
+        Context::default(),
+    )
+    .await?)
 }
 
 #[derive(FromForm, CsrfForm)]
@@ -2269,92 +3266,152 @@ pub(crate) struct EditWeeklyScheduleForm {
     racetime_goal_custom: Option<String>,
 }
 
-#[rocket::post("/event/<series>/<event>/configure/weekly-schedules/<schedule_id>/edit", data = "<form>")]
-pub(crate) async fn weekly_schedule_edit_post(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, schedule_id: Id<WeeklySchedules>, form: Form<Contextual<'_, EditWeeklyScheduleForm>>) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
+#[rocket::post(
+    "/event/<series>/<event>/configure/weekly-schedules/<schedule_id>/edit",
+    data = "<form>"
+)]
+pub(crate) async fn weekly_schedule_edit_post(
+    pool: &State<PgPool>,
+    me: User,
+    uri: Origin<'_>,
+    csrf: Option<CsrfToken>,
+    series: Series,
+    event: &str,
+    schedule_id: Id<WeeklySchedules>,
+    form: Form<Contextual<'_, EditWeeklyScheduleForm>>,
+) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
     let mut transaction = pool.begin().await?;
-    let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
-    let mut schedule = WeeklySchedule::from_id(&mut transaction, schedule_id).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+    let data = Data::new(&mut transaction, series, event)
+        .await?
+        .ok_or(StatusOrError::Status(Status::NotFound))?;
+    let mut schedule = WeeklySchedule::from_id(&mut transaction, schedule_id)
+        .await?
+        .ok_or(StatusOrError::Status(Status::NotFound))?;
     let mut form = form.into_inner();
     form.verify(&csrf);
     Ok(if let Some(ref value) = form.value {
         if data.is_ended() {
-            form.context.push_error(form::Error::validation("This event has ended and can no longer be configured"));
+            form.context.push_error(form::Error::validation(
+                "This event has ended and can no longer be configured",
+            ));
         }
         if !data.organizers(&mut transaction).await?.contains(&me) && !me.is_global_admin() {
-            form.context.push_error(form::Error::validation("You must be an organizer to configure this event."));
+            form.context.push_error(form::Error::validation(
+                "You must be an organizer to configure this event.",
+            ));
         }
         if value.name.trim().is_empty() {
-            form.context.push_error(form::Error::validation("Schedule name is required.").with_name("name"));
+            form.context.push_error(
+                form::Error::validation("Schedule name is required.").with_name("name"),
+            );
         }
         // Check for duplicate name (excluding current schedule)
-        let existing = WeeklySchedule::for_event(&mut transaction, data.series, &data.event).await?;
-        if existing.iter().any(|s| s.id != schedule_id && s.name.eq_ignore_ascii_case(value.name.trim())) {
-            form.context.push_error(form::Error::validation("A schedule with this name already exists.").with_name("name"));
+        let existing =
+            WeeklySchedule::for_event(&mut transaction, data.series, &data.event).await?;
+        if existing
+            .iter()
+            .any(|s| s.id != schedule_id && s.name.eq_ignore_ascii_case(value.name.trim()))
+        {
+            form.context.push_error(
+                form::Error::validation("A schedule with this name already exists.")
+                    .with_name("name"),
+            );
         }
         let time_of_day = match NaiveTime::parse_from_str(&value.time_of_day, "%H:%M") {
             Ok(t) => Some(t),
             Err(_) => {
-                form.context.push_error(form::Error::validation("Invalid time format. Use HH:MM.").with_name("time_of_day"));
+                form.context.push_error(
+                    form::Error::validation("Invalid time format. Use HH:MM.")
+                        .with_name("time_of_day"),
+                );
                 None
             }
         };
         let timezone: Option<Tz> = match value.timezone.parse() {
             Ok(tz) => Some(tz),
             Err(_) => {
-                form.context.push_error(form::Error::validation("Invalid timezone.").with_name("timezone"));
+                form.context
+                    .push_error(form::Error::validation("Invalid timezone.").with_name("timezone"));
                 None
             }
         };
         let anchor_date = match NaiveDate::parse_from_str(&value.anchor_date, "%Y-%m-%d") {
             Ok(d) => Some(d),
             Err(_) => {
-                form.context.push_error(form::Error::validation("Invalid date format. Use YYYY-MM-DD.").with_name("anchor_date"));
+                form.context.push_error(
+                    form::Error::validation("Invalid date format. Use YYYY-MM-DD.")
+                        .with_name("anchor_date"),
+                );
                 None
             }
         };
-        let notification_channel_id = value.notification_channel_id.as_ref()
-            .and_then(|s| {
-                let trimmed = s.trim();
-                if trimmed.is_empty() {
-                    None
-                } else {
-                    match trimmed.parse::<u64>() {
-                        Ok(id) => Some(PgSnowflake(ChannelId::new(id))),
-                        Err(_) => {
-                            form.context.push_error(form::Error::validation("Invalid Discord channel ID. Must be a number.").with_name("notification_channel_id"));
-                            None
-                        }
+        let notification_channel_id = value.notification_channel_id.as_ref().and_then(|s| {
+            let trimmed = s.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                match trimmed.parse::<u64>() {
+                    Ok(id) => Some(PgSnowflake(ChannelId::new(id))),
+                    Err(_) => {
+                        form.context.push_error(
+                            form::Error::validation(
+                                "Invalid Discord channel ID. Must be a number.",
+                            )
+                            .with_name("notification_channel_id"),
+                        );
+                        None
                     }
                 }
-            });
-        let notification_role_id = value.notification_role_id.as_ref()
-            .and_then(|s| {
-                let trimmed = s.trim();
-                if trimmed.is_empty() {
-                    None
-                } else {
-                    match trimmed.parse::<u64>() {
-                        Ok(id) => Some(PgSnowflake(RoleId::new(id))),
-                        Err(_) => {
-                            form.context.push_error(form::Error::validation("Invalid Discord role ID. Must be a number.").with_name("notification_role_id"));
-                            None
-                        }
+            }
+        });
+        let notification_role_id = value.notification_role_id.as_ref().and_then(|s| {
+            let trimmed = s.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                match trimmed.parse::<u64>() {
+                    Ok(id) => Some(PgSnowflake(RoleId::new(id))),
+                    Err(_) => {
+                        form.context.push_error(
+                            form::Error::validation("Invalid Discord role ID. Must be a number.")
+                                .with_name("notification_role_id"),
+                        );
+                        None
                     }
                 }
-            });
+            }
+        });
         let racetime_goal = match value.racetime_goal.as_str() {
             "" => None,
             "custom" => {
-                let custom = value.racetime_goal_custom.as_ref().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+                let custom = value
+                    .racetime_goal_custom
+                    .as_ref()
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty());
                 if custom.is_none() {
-                    form.context.push_error(form::Error::validation("Please enter a custom goal string.").with_name("racetime_goal_custom"));
+                    form.context.push_error(
+                        form::Error::validation("Please enter a custom goal string.")
+                            .with_name("racetime_goal_custom"),
+                    );
                 }
                 custom
             }
             other => Some(other.to_string()),
         };
         if form.context.errors().next().is_some() {
-            RedirectOrContent::Content(weekly_schedule_edit_form(transaction, Some(me), uri, csrf.as_ref(), data, schedule, form.context).await?)
+            RedirectOrContent::Content(
+                weekly_schedule_edit_form(
+                    transaction,
+                    Some(me),
+                    uri,
+                    csrf.as_ref(),
+                    data,
+                    schedule,
+                    form.context,
+                )
+                .await?,
+            )
         } else {
             schedule.name = value.name.trim().to_string();
             schedule.frequency_days = value.frequency_days;
@@ -2362,7 +3419,13 @@ pub(crate) async fn weekly_schedule_edit_post(pool: &State<PgPool>, me: User, ur
             schedule.timezone = timezone.unwrap();
             schedule.anchor_date = anchor_date.unwrap();
             schedule.active = value.active;
-            schedule.settings_description = value.settings_description.as_ref().and_then(|s| if s.trim().is_empty() { None } else { Some(s.trim().to_string()) });
+            schedule.settings_description = value.settings_description.as_ref().and_then(|s| {
+                if s.trim().is_empty() {
+                    None
+                } else {
+                    Some(s.trim().to_string())
+                }
+            });
             schedule.notification_channel_id = notification_channel_id;
             schedule.notification_role_id = notification_role_id;
             schedule.room_open_minutes_before = value.room_open_minutes_before.unwrap_or(30);
@@ -2372,7 +3435,18 @@ pub(crate) async fn weekly_schedule_edit_post(pool: &State<PgPool>, me: User, ur
             RedirectOrContent::Redirect(Redirect::to(uri!(weekly_schedules_get(series, event))))
         }
     } else {
-        RedirectOrContent::Content(weekly_schedule_edit_form(transaction, Some(me), uri, csrf.as_ref(), data, schedule, form.context).await?)
+        RedirectOrContent::Content(
+            weekly_schedule_edit_form(
+                transaction,
+                Some(me),
+                uri,
+                csrf.as_ref(),
+                data,
+                schedule,
+                form.context,
+            )
+            .await?,
+        )
     })
 }
 
@@ -2395,7 +3469,8 @@ pub(crate) async fn info_page_get(
     event: String,
 ) -> Result<RawHtml<String>, StatusOrError<event::Error>> {
     let mut transaction = pool.begin().await?;
-    let data = Data::new(&mut transaction, series, event).await?
+    let data = Data::new(&mut transaction, series, event)
+        .await?
         .ok_or(StatusOrError::Status(Status::NotFound))?;
     let is_authorized = if let Some(ref me) = me {
         data.organizers(&mut transaction).await?.contains(me) || me.is_global_admin()
@@ -2403,17 +3478,26 @@ pub(crate) async fn info_page_get(
         false
     };
     if !is_authorized {
-        let header = data.header(&mut transaction, me.as_ref(), Tab::Configure, false).await?;
-        return Ok(page(transaction, &me, &uri,
-            PageStyle { chests: data.chests().await?, ..PageStyle::default() },
+        let header = data
+            .header(&mut transaction, me.as_ref(), Tab::Configure, false)
+            .await?;
+        return Ok(page(
+            transaction,
+            &me,
+            &uri,
+            PageStyle {
+                chests: data.chests().await?,
+                ..PageStyle::default()
+            },
             &format!("Edit Info Page — {}", data.display_name),
             html! {
                 : header;
                 article {
                     p : "This page is for organizers of this event only.";
                 }
-            }
-        ).await?);
+            },
+        )
+        .await?);
     }
     let existing: Option<String> = sqlx::query_scalar!(
         "SELECT content FROM event_descriptions WHERE series = $1 AND event = $2",
@@ -2424,14 +3508,20 @@ pub(crate) async fn info_page_get(
     .await?;
     let has_custom = existing.is_some();
     let initial_content = existing.unwrap_or_else(|| {
-        let dn_escaped = data.display_name
+        let dn_escaped = data
+            .display_name
             .replace('&', "&amp;")
             .replace('<', "&lt;")
             .replace('>', "&gt;");
-        format!("<p>Welcome to the <strong>{}</strong> event.</p>", dn_escaped)
+        format!(
+            "<p>Welcome to the <strong>{}</strong> event.</p>",
+            dn_escaped
+        )
     });
     let csrf = csrf.as_ref();
-    let header = data.header(&mut transaction, me.as_ref(), Tab::Configure, false).await?;
+    let header = data
+        .header(&mut transaction, me.as_ref(), Tab::Configure, false)
+        .await?;
     let content = html! {
         : header;
         article {
@@ -2465,11 +3555,18 @@ pub(crate) async fn info_page_get(
             script(src = static_url!("info-page-editor.js")) {}
         }
     };
-    Ok(page(transaction, &me, &uri,
-        PageStyle { chests: data.chests().await?, ..PageStyle::default() },
+    Ok(page(
+        transaction,
+        &me,
+        &uri,
+        PageStyle {
+            chests: data.chests().await?,
+            ..PageStyle::default()
+        },
         &format!("Edit Info Page — {}", data.display_name),
         content,
-    ).await?)
+    )
+    .await?)
 }
 
 #[rocket::post("/event/<series>/<event>/configure/info-page", data = "<form>")]
@@ -2483,12 +3580,15 @@ pub(crate) async fn info_page_post(
     form: Form<Contextual<'_, InfoPageForm>>,
 ) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
     let mut transaction = pool.begin().await?;
-    let data = Data::new(&mut transaction, series, event).await?
+    let data = Data::new(&mut transaction, series, event)
+        .await?
         .ok_or(StatusOrError::Status(Status::NotFound))?;
     let mut form = form.into_inner();
     form.verify(&csrf);
     if form.context.errors().next().is_some() {
-        return Ok(RedirectOrContent::Redirect(Redirect::to(uri!(info_page_get(data.series, &*data.event)))));
+        return Ok(RedirectOrContent::Redirect(Redirect::to(uri!(
+            info_page_get(data.series, &*data.event)
+        ))));
     }
     if let Some(ref value) = form.value {
         if !data.organizers(&mut transaction).await?.contains(&me) && !me.is_global_admin() {
@@ -2515,19 +3615,32 @@ pub(crate) async fn info_page_post(
         }
         transaction.commit().await?;
     }
-    Ok(RedirectOrContent::Redirect(Redirect::to(uri!(crate::event::info(data.series, &*data.event)))))
+    Ok(RedirectOrContent::Redirect(Redirect::to(uri!(
+        crate::event::info(data.series, &*data.event)
+    ))))
 }
 
-async fn round_labels_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>, uri: Origin<'_>, csrf: Option<&CsrfToken>, event: Data<'_>) -> Result<RawHtml<String>, event::Error> {
-    let header = event.header(&mut transaction, me.as_ref(), Tab::Configure, true).await?;
+async fn round_labels_form(
+    mut transaction: Transaction<'_, Postgres>,
+    me: Option<User>,
+    uri: Origin<'_>,
+    csrf: Option<&CsrfToken>,
+    event: Data<'_>,
+) -> Result<RawHtml<String>, event::Error> {
+    let header = event
+        .header(&mut transaction, me.as_ref(), Tab::Configure, true)
+        .await?;
     let content = if let Some(ref me) = me {
         if event.organizers(&mut transaction).await?.contains(me) || me.is_global_admin() {
             let pool_names = sqlx::query_scalar!(
                 "SELECT mapped_name FROM startgg_pool_name_mappings \
                  WHERE series = $1 AND event = $2 \
                  ORDER BY original_identifier::int",
-                event.series as _, &event.event
-            ).fetch_all(&mut *transaction).await?;
+                event.series as _,
+                &event.event
+            )
+            .fetch_all(&mut *transaction)
+            .await?;
             let pool_names_text = pool_names.join("\n");
 
             let mappings = sqlx::query!(
@@ -2535,20 +3648,35 @@ async fn round_labels_form(mut transaction: Transaction<'_, Postgres>, me: Optio
                  FROM startgg_phase_round_mappings \
                  WHERE series = $1 AND event = $2 \
                  ORDER BY id",
-                event.series as _, &event.event
-            ).fetch_all(&mut *transaction).await?;
+                event.series as _,
+                &event.event
+            )
+            .fetch_all(&mut *transaction)
+            .await?;
 
             let sample_race = sqlx::query!(
                 "SELECT phase, round FROM races \
                  WHERE series = $1 AND event = $2 AND ignored = false \
                  AND (phase IS NOT NULL OR round IS NOT NULL) \
                  ORDER BY start NULLS LAST LIMIT 1",
-                event.series as _, &event.event
-            ).fetch_optional(&mut *transaction).await?;
+                event.series as _,
+                &event.event
+            )
+            .fetch_optional(&mut *transaction)
+            .await?;
 
-            let sample_phase = sample_race.as_ref().and_then(|r| r.phase.clone()).unwrap_or_else(|| "Winners Bracket".to_owned());
-            let sample_round = sample_race.as_ref().and_then(|r| r.round.clone()).unwrap_or_else(|| "Round 1".to_owned());
-            let sample_pool = pool_names.first().cloned().unwrap_or_else(|| "Pool 1".to_owned());
+            let sample_phase = sample_race
+                .as_ref()
+                .and_then(|r| r.phase.clone())
+                .unwrap_or_else(|| "Winners Bracket".to_owned());
+            let sample_round = sample_race
+                .as_ref()
+                .and_then(|r| r.round.clone())
+                .unwrap_or_else(|| "Round 1".to_owned());
+            let sample_pool = pool_names
+                .first()
+                .cloned()
+                .unwrap_or_else(|| "Pool 1".to_owned());
 
             html! {
                 h2 : "Pool Names";
@@ -2649,16 +3777,36 @@ async fn round_labels_form(mut transaction: Transaction<'_, Postgres>, me: Optio
             }
         }
     };
-    Ok(page(transaction, &me, &uri, PageStyle { chests: event.chests().await?, ..PageStyle::default() }, &format!("Manage Round Labels — {}", event.display_name), html! {
-        : header;
-        : content;
-    }).await?)
+    Ok(page(
+        transaction,
+        &me,
+        &uri,
+        PageStyle {
+            chests: event.chests().await?,
+            ..PageStyle::default()
+        },
+        &format!("Manage Round Labels — {}", event.display_name),
+        html! {
+            : header;
+            : content;
+        },
+    )
+    .await?)
 }
 
 #[rocket::get("/event/<series>/<event>/configure/round-labels")]
-pub(crate) async fn round_labels_get(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: String) -> Result<RawHtml<String>, StatusOrError<event::Error>> {
+pub(crate) async fn round_labels_get(
+    pool: &State<PgPool>,
+    me: Option<User>,
+    uri: Origin<'_>,
+    csrf: Option<CsrfToken>,
+    series: Series,
+    event: String,
+) -> Result<RawHtml<String>, StatusOrError<event::Error>> {
     let mut transaction = pool.begin().await?;
-    let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+    let data = Data::new(&mut transaction, series, event)
+        .await?
+        .ok_or(StatusOrError::Status(Status::NotFound))?;
     Ok(round_labels_form(transaction, me, uri, csrf.as_ref(), data).await?)
 }
 
@@ -2670,14 +3818,29 @@ pub(crate) struct SavePoolNamesForm {
     pool_names: String,
 }
 
-#[rocket::post("/event/<series>/<event>/configure/round-labels/pool-names", data = "<form>")]
-pub(crate) async fn save_pool_names(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, form: Form<Contextual<'_, SavePoolNamesForm>>) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
+#[rocket::post(
+    "/event/<series>/<event>/configure/round-labels/pool-names",
+    data = "<form>"
+)]
+pub(crate) async fn save_pool_names(
+    pool: &State<PgPool>,
+    me: User,
+    uri: Origin<'_>,
+    csrf: Option<CsrfToken>,
+    series: Series,
+    event: &str,
+    form: Form<Contextual<'_, SavePoolNamesForm>>,
+) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
     let mut transaction = pool.begin().await?;
-    let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+    let data = Data::new(&mut transaction, series, event)
+        .await?
+        .ok_or(StatusOrError::Status(Status::NotFound))?;
     let mut form = form.into_inner();
     form.verify(&csrf);
     if form.context.errors().next().is_some() {
-        return Ok(RedirectOrContent::Content(round_labels_form(transaction, Some(me), uri, csrf.as_ref(), data).await?));
+        return Ok(RedirectOrContent::Content(
+            round_labels_form(transaction, Some(me), uri, csrf.as_ref(), data).await?,
+        ));
     }
     if !data.organizers(&mut transaction).await?.contains(&me) && !me.is_global_admin() {
         return Err(StatusOrError::Status(Status::Forbidden));
@@ -2685,9 +3848,17 @@ pub(crate) async fn save_pool_names(pool: &State<PgPool>, me: User, uri: Origin<
     if let Some(ref value) = form.value {
         sqlx::query!(
             "DELETE FROM startgg_pool_name_mappings WHERE series = $1 AND event = $2",
-            data.series as _, &data.event
-        ).execute(&mut *transaction).await?;
-        for (i, line) in value.pool_names.lines().enumerate().filter(|(_, l)| !l.trim().is_empty()) {
+            data.series as _,
+            &data.event
+        )
+        .execute(&mut *transaction)
+        .await?;
+        for (i, line) in value
+            .pool_names
+            .lines()
+            .enumerate()
+            .filter(|(_, l)| !l.trim().is_empty())
+        {
             let identifier = (i + 1).to_string();
             sqlx::query!(
                 "INSERT INTO startgg_pool_name_mappings (series, event, original_identifier, mapped_name) \
@@ -2697,7 +3868,9 @@ pub(crate) async fn save_pool_names(pool: &State<PgPool>, me: User, uri: Origin<
         }
         transaction.commit().await?;
     }
-    Ok(RedirectOrContent::Redirect(Redirect::to(uri!(round_labels_get(series, event)))))
+    Ok(RedirectOrContent::Redirect(Redirect::to(uri!(
+        round_labels_get(series, event)
+    ))))
 }
 
 #[derive(FromForm, CsrfForm)]
@@ -2710,44 +3883,102 @@ pub(crate) struct AddRoundMappingForm {
     mapped_round: Option<String>,
 }
 
-#[rocket::post("/event/<series>/<event>/configure/round-labels/mappings/add", data = "<form>")]
-pub(crate) async fn add_round_mapping(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, form: Form<Contextual<'_, AddRoundMappingForm>>) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
+#[rocket::post(
+    "/event/<series>/<event>/configure/round-labels/mappings/add",
+    data = "<form>"
+)]
+pub(crate) async fn add_round_mapping(
+    pool: &State<PgPool>,
+    me: User,
+    uri: Origin<'_>,
+    csrf: Option<CsrfToken>,
+    series: Series,
+    event: &str,
+    form: Form<Contextual<'_, AddRoundMappingForm>>,
+) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
     let mut transaction = pool.begin().await?;
-    let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+    let data = Data::new(&mut transaction, series, event)
+        .await?
+        .ok_or(StatusOrError::Status(Status::NotFound))?;
     let mut form = form.into_inner();
     form.verify(&csrf);
     if form.context.errors().next().is_some() {
-        return Ok(RedirectOrContent::Content(round_labels_form(transaction, Some(me), uri, csrf.as_ref(), data).await?));
+        return Ok(RedirectOrContent::Content(
+            round_labels_form(transaction, Some(me), uri, csrf.as_ref(), data).await?,
+        ));
     }
     if !data.organizers(&mut transaction).await?.contains(&me) && !me.is_global_admin() {
         return Err(StatusOrError::Status(Status::Forbidden));
     }
     if let Some(ref value) = form.value {
-        let original_phase = value.original_phase.as_deref().filter(|s| !s.trim().is_empty()).map(str::trim).map(str::to_owned);
-        let original_round = value.original_round.as_deref().filter(|s| !s.trim().is_empty()).map(str::trim).map(str::to_owned);
-        let mapped_phase = value.mapped_phase.as_deref().filter(|s| !s.trim().is_empty()).map(str::trim).map(str::to_owned);
-        let mapped_round = value.mapped_round.as_deref().filter(|s| !s.trim().is_empty()).map(str::trim).map(str::to_owned);
+        let original_phase = value
+            .original_phase
+            .as_deref()
+            .filter(|s| !s.trim().is_empty())
+            .map(str::trim)
+            .map(str::to_owned);
+        let original_round = value
+            .original_round
+            .as_deref()
+            .filter(|s| !s.trim().is_empty())
+            .map(str::trim)
+            .map(str::to_owned);
+        let mapped_phase = value
+            .mapped_phase
+            .as_deref()
+            .filter(|s| !s.trim().is_empty())
+            .map(str::trim)
+            .map(str::to_owned);
+        let mapped_round = value
+            .mapped_round
+            .as_deref()
+            .filter(|s| !s.trim().is_empty())
+            .map(str::trim)
+            .map(str::to_owned);
         sqlx::query!(
             "INSERT INTO startgg_phase_round_mappings \
              (series, event, original_phase, original_round, mapped_phase, mapped_round) \
              VALUES ($1, $2, $3, $4, $5, $6)",
-            data.series as _, &data.event,
-            original_phase as _, original_round as _,
-            mapped_phase as _, mapped_round as _
-        ).execute(&mut *transaction).await?;
+            data.series as _,
+            &data.event,
+            original_phase as _,
+            original_round as _,
+            mapped_phase as _,
+            mapped_round as _
+        )
+        .execute(&mut *transaction)
+        .await?;
         transaction.commit().await?;
     }
-    Ok(RedirectOrContent::Redirect(Redirect::to(uri!(round_labels_get(series, event)))))
+    Ok(RedirectOrContent::Redirect(Redirect::to(uri!(
+        round_labels_get(series, event)
+    ))))
 }
 
-#[rocket::post("/event/<series>/<event>/configure/round-labels/mappings/<mapping_id>/remove", data = "<form>")]
-pub(crate) async fn remove_round_mapping(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, mapping_id: i64, form: Form<Contextual<'_, EmptyForm>>) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
+#[rocket::post(
+    "/event/<series>/<event>/configure/round-labels/mappings/<mapping_id>/remove",
+    data = "<form>"
+)]
+pub(crate) async fn remove_round_mapping(
+    pool: &State<PgPool>,
+    me: User,
+    uri: Origin<'_>,
+    csrf: Option<CsrfToken>,
+    series: Series,
+    event: &str,
+    mapping_id: i64,
+    form: Form<Contextual<'_, EmptyForm>>,
+) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
     let mut transaction = pool.begin().await?;
-    let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+    let data = Data::new(&mut transaction, series, event)
+        .await?
+        .ok_or(StatusOrError::Status(Status::NotFound))?;
     let mut form = form.into_inner();
     form.verify(&csrf);
     if form.context.errors().next().is_some() {
-        return Ok(RedirectOrContent::Content(round_labels_form(transaction, Some(me), uri, csrf.as_ref(), data).await?));
+        return Ok(RedirectOrContent::Content(
+            round_labels_form(transaction, Some(me), uri, csrf.as_ref(), data).await?,
+        ));
     }
     if !data.organizers(&mut transaction).await?.contains(&me) && !me.is_global_admin() {
         return Err(StatusOrError::Status(Status::Forbidden));
@@ -2755,21 +3986,43 @@ pub(crate) async fn remove_round_mapping(pool: &State<PgPool>, me: User, uri: Or
     if form.value.is_some() {
         sqlx::query!(
             "DELETE FROM startgg_phase_round_mappings WHERE id = $1 AND series = $2 AND event = $3",
-            mapping_id, data.series as _, &data.event
-        ).execute(&mut *transaction).await?;
+            mapping_id,
+            data.series as _,
+            &data.event
+        )
+        .execute(&mut *transaction)
+        .await?;
         transaction.commit().await?;
     }
-    Ok(RedirectOrContent::Redirect(Redirect::to(uri!(round_labels_get(series, event)))))
+    Ok(RedirectOrContent::Redirect(Redirect::to(uri!(
+        round_labels_get(series, event)
+    ))))
 }
 
-#[rocket::post("/event/<series>/<event>/configure/round-labels/mappings/<mapping_id>/apply", data = "<form>")]
-pub(crate) async fn apply_round_mapping(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, mapping_id: i64, form: Form<Contextual<'_, EmptyForm>>) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
+#[rocket::post(
+    "/event/<series>/<event>/configure/round-labels/mappings/<mapping_id>/apply",
+    data = "<form>"
+)]
+pub(crate) async fn apply_round_mapping(
+    pool: &State<PgPool>,
+    me: User,
+    uri: Origin<'_>,
+    csrf: Option<CsrfToken>,
+    series: Series,
+    event: &str,
+    mapping_id: i64,
+    form: Form<Contextual<'_, EmptyForm>>,
+) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
     let mut transaction = pool.begin().await?;
-    let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+    let data = Data::new(&mut transaction, series, event)
+        .await?
+        .ok_or(StatusOrError::Status(Status::NotFound))?;
     let mut form = form.into_inner();
     form.verify(&csrf);
     if form.context.errors().next().is_some() {
-        return Ok(RedirectOrContent::Content(round_labels_form(transaction, Some(me), uri, csrf.as_ref(), data).await?));
+        return Ok(RedirectOrContent::Content(
+            round_labels_form(transaction, Some(me), uri, csrf.as_ref(), data).await?,
+        ));
     }
     if !data.organizers(&mut transaction).await?.contains(&me) && !me.is_global_admin() {
         return Err(StatusOrError::Status(Status::Forbidden));
@@ -2778,8 +4031,12 @@ pub(crate) async fn apply_round_mapping(pool: &State<PgPool>, me: User, uri: Ori
         let mapping = sqlx::query!(
             "SELECT original_phase, original_round, mapped_phase, mapped_round \
              FROM startgg_phase_round_mappings WHERE id = $1 AND series = $2 AND event = $3",
-            mapping_id, data.series as _, &data.event
-        ).fetch_optional(&mut *transaction).await?;
+            mapping_id,
+            data.series as _,
+            &data.event
+        )
+        .fetch_optional(&mut *transaction)
+        .await?;
         if let Some(mapping) = mapping {
             // Existing races have already been through the normalize step (Winners→WB, Losers→LB),
             // so normalize the original match values before comparing against stored phase/round.
@@ -2792,16 +4049,25 @@ pub(crate) async fn apply_round_mapping(pool: &State<PgPool>, me: User, uri: Ori
                    WHERE series = $1 AND event = $2
                      AND ($3::text IS NULL OR phase = $3)
                      AND ($4::text IS NULL OR round = $4)"#,
-                data.series as _, &data.event,
-                norm_orig_phase as _, norm_orig_round as _
-            ).fetch_all(&mut *transaction).await?;
+                data.series as _,
+                &data.event,
+                norm_orig_phase as _,
+                norm_orig_round as _
+            )
+            .fetch_all(&mut *transaction)
+            .await?;
 
             for race in races {
                 let orig_phase = race.phase.clone();
                 let orig_round = race.round.clone();
                 // Expand placeholders; skip races that need {% pool %} (pool info not stored).
                 let new_phase = if let Some(ref template) = mapping.mapped_phase {
-                    match crate::startgg::expand_placeholders(template.clone(), &orig_phase, &orig_round, None) {
+                    match crate::startgg::expand_placeholders(
+                        template.clone(),
+                        &orig_phase,
+                        &orig_round,
+                        None,
+                    ) {
                         Ok(s) => Some(normalize(&s)),
                         Err(_) => continue,
                     }
@@ -2809,7 +4075,12 @@ pub(crate) async fn apply_round_mapping(pool: &State<PgPool>, me: User, uri: Ori
                     orig_phase.clone()
                 };
                 let new_round = if let Some(ref template) = mapping.mapped_round {
-                    match crate::startgg::expand_placeholders(template.clone(), &orig_phase, &orig_round, None) {
+                    match crate::startgg::expand_placeholders(
+                        template.clone(),
+                        &orig_phase,
+                        &orig_round,
+                        None,
+                    ) {
                         Ok(s) => Some(normalize(&s)),
                         Err(_) => continue,
                     }
@@ -2818,22 +4089,36 @@ pub(crate) async fn apply_round_mapping(pool: &State<PgPool>, me: User, uri: Ori
                 };
                 sqlx::query!(
                     "UPDATE races SET phase = $2, round = $3 WHERE id = $1",
-                    race.id, new_phase as _, new_round as _
-                ).execute(&mut *transaction).await?;
+                    race.id,
+                    new_phase as _,
+                    new_round as _
+                )
+                .execute(&mut *transaction)
+                .await?;
             }
             transaction.commit().await?;
         }
     }
-    Ok(RedirectOrContent::Redirect(Redirect::to(uri!(round_labels_get(series, event)))))
+    Ok(RedirectOrContent::Redirect(Redirect::to(uri!(
+        round_labels_get(series, event)
+    ))))
 }
 
 // ── Round Management ─────────────────────────────────────────────────────────
 
-async fn rounds_form(mut transaction: Transaction<'_, Postgres>, http_client: &reqwest::Client, config: &Config, me: Option<User>, uri: Origin<'_>, csrf: Option<&CsrfToken>, event: Data<'_>) -> Result<RawHtml<String>, event::Error> {
+async fn rounds_form(
+    mut transaction: Transaction<'_, Postgres>,
+    http_client: &reqwest::Client,
+    config: &Config,
+    me: Option<User>,
+    uri: Origin<'_>,
+    csrf: Option<&CsrfToken>,
+    event: Data<'_>,
+) -> Result<RawHtml<String>, event::Error> {
     let query_string = uri.0.query().map(|q| q.to_string());
-    let saved = query_string.as_deref().map_or(false, |q| {
-        q.split('&').any(|param| param == "saved=1")
-    });
+    let saved = query_string
+        .as_deref()
+        .map_or(false, |q| q.split('&').any(|param| param == "saved=1"));
 
     let round_configs = event.round_configs(&mut transaction).await?;
 
@@ -2952,16 +4237,47 @@ async fn rounds_form(mut transaction: Transaction<'_, Postgres>, http_client: &r
         }
     };
 
-    Ok(page(transaction, &me, &uri, PageStyle { chests: event.chests().await?, ..PageStyle::default() }, &format!("Manage Rounds — {}", event.display_name), html! {
-        : content;
-    }).await?)
+    Ok(page(
+        transaction,
+        &me,
+        &uri,
+        PageStyle {
+            chests: event.chests().await?,
+            ..PageStyle::default()
+        },
+        &format!("Manage Rounds — {}", event.display_name),
+        html! {
+            : content;
+        },
+    )
+    .await?)
 }
 
 #[rocket::get("/event/<series>/<event>/configure/rounds")]
-pub(crate) async fn rounds_get(pool: &State<PgPool>, http_client: &State<reqwest::Client>, config: &State<Config>, me: Option<User>, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: String) -> Result<RawHtml<String>, StatusOrError<event::Error>> {
+pub(crate) async fn rounds_get(
+    pool: &State<PgPool>,
+    http_client: &State<reqwest::Client>,
+    config: &State<Config>,
+    me: Option<User>,
+    uri: Origin<'_>,
+    csrf: Option<CsrfToken>,
+    series: Series,
+    event: String,
+) -> Result<RawHtml<String>, StatusOrError<event::Error>> {
     let mut transaction = pool.begin().await?;
-    let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
-    Ok(rounds_form(transaction, http_client, config, me, uri, csrf.as_ref(), data).await?)
+    let data = Data::new(&mut transaction, series, event)
+        .await?
+        .ok_or(StatusOrError::Status(Status::NotFound))?;
+    Ok(rounds_form(
+        transaction,
+        http_client,
+        config,
+        me,
+        uri,
+        csrf.as_ref(),
+        data,
+    )
+    .await?)
 }
 
 #[derive(FromForm, CsrfForm)]
@@ -2974,9 +4290,19 @@ pub(crate) struct RoundsApplyAllForm {
 }
 
 #[rocket::post("/event/<series>/<event>/configure/rounds/apply-all", data = "<form>")]
-pub(crate) async fn rounds_apply_all(pool: &State<PgPool>, me: User, _uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, form: Form<Contextual<'_, RoundsApplyAllForm>>) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
+pub(crate) async fn rounds_apply_all(
+    pool: &State<PgPool>,
+    me: User,
+    _uri: Origin<'_>,
+    csrf: Option<CsrfToken>,
+    series: Series,
+    event: &str,
+    form: Form<Contextual<'_, RoundsApplyAllForm>>,
+) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
     let mut transaction = pool.begin().await?;
-    let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+    let data = Data::new(&mut transaction, series, event)
+        .await?
+        .ok_or(StatusOrError::Status(Status::NotFound))?;
     let mut form = form.into_inner();
     form.verify(&csrf);
     if !data.organizers(&mut transaction).await?.contains(&me) && !me.is_global_admin() {
@@ -2984,7 +4310,9 @@ pub(crate) async fn rounds_apply_all(pool: &State<PgPool>, me: User, _uri: Origi
     }
     if let Some(ref value) = form.value {
         let tz_offset = chrono::Duration::minutes(value.tz_offset.unwrap_or(0) as i64);
-        let deadline = value.scheduling_deadline.as_deref()
+        let deadline = value
+            .scheduling_deadline
+            .as_deref()
             .filter(|s| !s.is_empty())
             .and_then(|s| NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M").ok())
             .map(|ndt| (ndt + tz_offset).and_utc());
@@ -2995,10 +4323,15 @@ pub(crate) async fn rounds_apply_all(pool: &State<PgPool>, me: User, _uri: Origi
         ).fetch_all(&mut *transaction).await?.into_iter().flatten().collect();
         let config_rounds: Vec<String> = sqlx::query_scalar!(
             "SELECT round FROM event_round_configs WHERE series = $1 AND event = $2",
-            data.series as _, &data.event
-        ).fetch_all(&mut *transaction).await?;
+            data.series as _,
+            &data.event
+        )
+        .fetch_all(&mut *transaction)
+        .await?;
         for r in config_rounds {
-            if !rounds.contains(&r) { rounds.push(r); }
+            if !rounds.contains(&r) {
+                rounds.push(r);
+            }
         }
 
         for round in rounds {
@@ -3013,7 +4346,10 @@ pub(crate) async fn rounds_apply_all(pool: &State<PgPool>, me: User, _uri: Origi
         }
         transaction.commit().await?;
     }
-    Ok(RedirectOrContent::Redirect(Redirect::to(format!("{}?saved=1", uri!(rounds_get(series, event))))))
+    Ok(RedirectOrContent::Redirect(Redirect::to(format!(
+        "{}?saved=1",
+        uri!(rounds_get(series, event))
+    ))))
 }
 
 #[derive(FromForm, CsrfForm)]
@@ -3027,9 +4363,19 @@ pub(crate) struct RoundsSaveForm {
 }
 
 #[rocket::post("/event/<series>/<event>/configure/rounds", data = "<form>")]
-pub(crate) async fn rounds_save(pool: &State<PgPool>, me: User, _uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, form: Form<Contextual<'_, RoundsSaveForm>>) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
+pub(crate) async fn rounds_save(
+    pool: &State<PgPool>,
+    me: User,
+    _uri: Origin<'_>,
+    csrf: Option<CsrfToken>,
+    series: Series,
+    event: &str,
+    form: Form<Contextual<'_, RoundsSaveForm>>,
+) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
     let mut transaction = pool.begin().await?;
-    let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+    let data = Data::new(&mut transaction, series, event)
+        .await?
+        .ok_or(StatusOrError::Status(Status::NotFound))?;
     let mut form = form.into_inner();
     form.verify(&csrf);
     if !data.organizers(&mut transaction).await?.contains(&me) && !me.is_global_admin() {
@@ -3038,9 +4384,17 @@ pub(crate) async fn rounds_save(pool: &State<PgPool>, me: User, _uri: Origin<'_>
     if let Some(ref value) = form.value {
         let tz_offset = chrono::Duration::minutes(value.tz_offset.unwrap_or(0) as i64);
         for (i, round) in &value.round {
-            if round.is_empty() { continue; }
-            let consent = value.restream_consent_required.get(i).copied().unwrap_or(false);
-            let deadline = value.scheduling_deadline.get(i)
+            if round.is_empty() {
+                continue;
+            }
+            let consent = value
+                .restream_consent_required
+                .get(i)
+                .copied()
+                .unwrap_or(false);
+            let deadline = value
+                .scheduling_deadline
+                .get(i)
                 .filter(|s| !s.is_empty())
                 .and_then(|s| NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M").ok())
                 .map(|ndt| (ndt + tz_offset).and_utc());
@@ -3055,7 +4409,10 @@ pub(crate) async fn rounds_save(pool: &State<PgPool>, me: User, _uri: Origin<'_>
         }
         transaction.commit().await?;
     }
-    Ok(RedirectOrContent::Redirect(Redirect::to(format!("{}?saved=1", uri!(rounds_get(series, event))))))
+    Ok(RedirectOrContent::Redirect(Redirect::to(format!(
+        "{}?saved=1",
+        uri!(rounds_get(series, event))
+    ))))
 }
 
 #[derive(FromForm, CsrfForm)]
@@ -3064,17 +4421,31 @@ pub(crate) struct RoundsApplyDeadlinesForm {
     csrf: String,
 }
 
-#[rocket::post("/event/<series>/<event>/configure/rounds/apply-deadlines", data = "<form>")]
-pub(crate) async fn rounds_apply_deadlines(pool: &State<PgPool>, me: User, _uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, form: Form<Contextual<'_, RoundsApplyDeadlinesForm>>) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
+#[rocket::post(
+    "/event/<series>/<event>/configure/rounds/apply-deadlines",
+    data = "<form>"
+)]
+pub(crate) async fn rounds_apply_deadlines(
+    pool: &State<PgPool>,
+    me: User,
+    _uri: Origin<'_>,
+    csrf: Option<CsrfToken>,
+    series: Series,
+    event: &str,
+    form: Form<Contextual<'_, RoundsApplyDeadlinesForm>>,
+) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
     let mut transaction = pool.begin().await?;
-    let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+    let data = Data::new(&mut transaction, series, event)
+        .await?
+        .ok_or(StatusOrError::Status(Status::NotFound))?;
     let mut form = form.into_inner();
     form.verify(&csrf);
     if !data.organizers(&mut transaction).await?.contains(&me) && !me.is_global_admin() {
         return Err(StatusOrError::Status(Status::Forbidden));
     }
     if form.value.is_some() {
-        sqlx::query!(r#"
+        sqlx::query!(
+            r#"
             UPDATE races r
             SET scheduling_deadline         = erc.scheduling_deadline,
                 deadline_reminded_3d        = false,
@@ -3087,9 +4458,15 @@ pub(crate) async fn rounds_apply_deadlines(pool: &State<PgPool>, me: User, _uri:
               AND erc.scheduling_deadline IS NOT NULL
               AND r.end_time IS NULL
               AND NOT r.ignored
-        "#, data.series as _, &data.event).execute(&mut *transaction).await?;
+        "#,
+            data.series as _,
+            &data.event
+        )
+        .execute(&mut *transaction)
+        .await?;
 
-        sqlx::query!(r#"
+        sqlx::query!(
+            r#"
             UPDATE races r
             SET scheduling_deadline         = NULL,
                 deadline_reminded_3d        = false,
@@ -3104,11 +4481,19 @@ pub(crate) async fn rounds_apply_deadlines(pool: &State<PgPool>, me: User, _uri:
                     AND (erc.round = r.round OR r.round ILIKE '% ' || erc.round)
                     AND erc.scheduling_deadline IS NOT NULL
               )
-        "#, data.series as _, &data.event).execute(&mut *transaction).await?;
+        "#,
+            data.series as _,
+            &data.event
+        )
+        .execute(&mut *transaction)
+        .await?;
 
         transaction.commit().await?;
     }
-    Ok(RedirectOrContent::Redirect(Redirect::to(format!("{}?saved=1", uri!(rounds_get(series, event))))))
+    Ok(RedirectOrContent::Redirect(Redirect::to(format!(
+        "{}?saved=1",
+        uri!(rounds_get(series, event))
+    ))))
 }
 
 // ==================== Enter Flow Configuration ====================
@@ -3142,27 +4527,63 @@ fn req_type_label(type_str: &str) -> &'static str {
 
 fn req_type_tooltip(type_str: &str) -> &'static str {
     match type_str {
-        "raceTime" => "Requires a racetime.gg account linked to the participant's profile. This is a prerequisite for all race-based events.",
-        "raceTimeInvite" => "Restricts sign-ups to a specific allowlist of racetime.gg user IDs. Use for invitational or closed events where only pre-selected players may enter.",
-        "twitch" => "Requires a Twitch account linked via the participant's racetime.gg account. Typically used for events that require streaming.",
+        "raceTime" => {
+            "Requires a racetime.gg account linked to the participant's profile. This is a prerequisite for all race-based events."
+        }
+        "raceTimeInvite" => {
+            "Restricts sign-ups to a specific allowlist of racetime.gg user IDs. Use for invitational or closed events where only pre-selected players may enter."
+        }
+        "twitch" => {
+            "Requires a Twitch account linked via the participant's racetime.gg account. Typically used for events that require streaming."
+        }
         "discord" => "Requires a Discord account linked to the participant's profile.",
-        "discordGuild" => "Requires membership in a specific Discord server, optionally a particular role within it. Use to limit entry to community members.",
+        "discordGuild" => {
+            "Requires membership in a specific Discord server, optionally a particular role within it. Use to limit entry to community members."
+        }
         "challonge" => "Requires a Challonge account linked to the participant's profile.",
-        "startGG" => "Requires a start.gg account linked to the participant's profile. Can be set to optional so participants can skip linking.",
-        "startGGEventSignup" => "Requires the participant to be registered for a specific bracket on start.gg. The event slug is the URL path (e.g. tournament/my-event/event/open).",
-        "textField" => "Shows a custom text input validated against a regular expression. Use to collect info like pronouns, team names, or handles.",
-        "textField2" => "A second independent text field, identical to Text Field but stored separately. Use when two text inputs are needed.",
-        "yesNo" => "Presents a simple yes/no question. The answer is stored but does not feed into race settings automatically.",
-        "booleanChoice" => "A yes/no question stored under a custom key in the team's choices map. The key can be referenced by race settings to conditionally apply rules. Locked prevents changes after races begin.",
-        "radioChoice" => "A never/random/always question stored under a custom key in the team's choices map. Seed generators can use it to apply a setting always, randomly, or never. Locked prevents changes after races begin.",
-        "rules" => "Requires acknowledging the event rules. Links to the event info page or a custom document URL.",
+        "startGG" => {
+            "Requires a start.gg account linked to the participant's profile. Can be set to optional so participants can skip linking."
+        }
+        "startGGEventSignup" => {
+            "Requires the participant to be registered for a specific bracket on start.gg. The event slug is the URL path (e.g. tournament/my-event/event/open)."
+        }
+        "textField" => {
+            "Shows a custom text input validated against a regular expression. Use to collect info like pronouns, team names, or handles."
+        }
+        "textField2" => {
+            "A second independent text field, identical to Text Field but stored separately. Use when two text inputs are needed."
+        }
+        "yesNo" => {
+            "Presents a simple yes/no question. The answer is stored but does not feed into race settings automatically."
+        }
+        "booleanChoice" => {
+            "A yes/no question stored under a custom key in the team's choices map. The key can be referenced by race settings to conditionally apply rules. Locked prevents changes after races begin."
+        }
+        "radioChoice" => {
+            "A never/random/always question stored under a custom key in the team's choices map. Seed generators can use it to apply a setting always, randomly, or never. Locked prevents changes after races begin."
+        }
+        "rules" => {
+            "Requires acknowledging the event rules. Links to the event info page or a custom document URL."
+        }
         "poll" => "Requires completing a specific poll. Provide the poll document URL.",
-        "restreamConsent" => "Asks whether the participant consents to being restreamed. If optional, they can opt in or out. If required, they must agree to enter.",
-        "qualifier" => "Requires participation in a qualifier race — either an async seed within the async window, or attendance at the live qualifier session.",
-        "tripleQualifier" => "Like Qualifier but with three separate race windows. Participants must complete at least one to be eligible.",
-        "qualifierPlacement" => "Requires placing within the top N on the qualifier leaderboard after a minimum number of races. Can exclude top players, e.g. for a Challenge Cup bracket.",
-        "rslLeaderboard" => "Requires at least 3 completed races on the RSL leaderboard for the current season.",
-        "external" => "A manual verification step. If blocks submit is enabled, an organizer must manually clear this requirement before the participant can complete sign-up.",
+        "restreamConsent" => {
+            "Asks whether the participant consents to being restreamed. If optional, they can opt in or out. If required, they must agree to enter."
+        }
+        "qualifier" => {
+            "Requires participation in a qualifier race — either an async seed within the async window, or attendance at the live qualifier session."
+        }
+        "tripleQualifier" => {
+            "Like Qualifier but with three separate race windows. Participants must complete at least one to be eligible."
+        }
+        "qualifierPlacement" => {
+            "Requires placing within the top N on the qualifier leaderboard after a minimum number of races. Can exclude top players, e.g. for a Challenge Cup bracket."
+        }
+        "rslLeaderboard" => {
+            "Requires at least 3 completed races on the RSL leaderboard for the current season."
+        }
+        "external" => {
+            "A manual verification step. If blocks submit is enabled, an organizer must manually clear this requirement before the participant can complete sign-up."
+        }
         _ => "",
     }
 }
@@ -3177,22 +4598,36 @@ fn req_type_default_json(type_str: &str) -> serde_json::Value {
         "challonge" => json!({"type": "challonge"}),
         "startGG" => json!({"type": "startGG", "optional": false}),
         "startGGEventSignup" => json!({"type": "startGGEventSignup", "eventSlug": ""}),
-        "textField" => json!({"type": "textField", "label": "Enter information here.", "long": false, "regex": "^.+$", "regexErrorMessages": {}, "fallbackErrorMessage": "This field is required."}),
-        "textField2" => json!({"type": "textField2", "label": "Enter information here.", "long": false, "regex": "^.+$", "regexErrorMessages": {}, "fallbackErrorMessage": "This field is required."}),
+        "textField" => {
+            json!({"type": "textField", "label": "Enter information here.", "long": false, "regex": "^.+$", "regexErrorMessages": {}, "fallbackErrorMessage": "This field is required."})
+        }
+        "textField2" => {
+            json!({"type": "textField2", "label": "Enter information here.", "long": false, "regex": "^.+$", "regexErrorMessages": {}, "fallbackErrorMessage": "This field is required."})
+        }
         "yesNo" => json!({"type": "yesNo", "label": "Your question here"}),
-        "booleanChoice" => json!({"type": "booleanChoice", "key": "my_choice", "label": "Your question here", "locked": false}),
-        "radioChoice" => json!({"type": "radioChoice", "key": "my_choice", "label": "Your question here", "locked": false}),
+        "booleanChoice" => {
+            json!({"type": "booleanChoice", "key": "my_choice", "label": "Your question here", "locked": false})
+        }
+        "radioChoice" => {
+            json!({"type": "radioChoice", "key": "my_choice", "label": "Your question here", "locked": false})
+        }
         "rules" => json!({"type": "rules"}),
         "poll" => json!({"type": "poll"}),
         "restreamConsent" => json!({"type": "restreamConsent", "optional": false}),
-        "qualifier" => json!({"type": "qualifier", "asyncStart": "2024-01-01T00:00:00Z", "asyncEnd": "2024-01-08T00:00:00Z", "liveStart": "2024-01-06T18:00:00Z"}),
+        "qualifier" => {
+            json!({"type": "qualifier", "asyncStart": "2024-01-01T00:00:00Z", "asyncEnd": "2024-01-08T00:00:00Z", "liveStart": "2024-01-06T18:00:00Z"})
+        }
         "tripleQualifier" => json!({"type": "tripleQualifier",
             "asyncStarts": ["2024-01-01T00:00:00Z", "2024-01-08T00:00:00Z", "2024-01-15T00:00:00Z"],
             "asyncEnds": ["2024-01-07T23:59:59Z", "2024-01-14T23:59:59Z", "2024-01-21T23:59:59Z"],
             "liveStarts": ["2024-01-06T18:00:00Z", "2024-01-13T18:00:00Z", "2024-01-20T18:00:00Z"]}),
-        "qualifierPlacement" => json!({"type": "qualifierPlacement", "numPlayers": 8, "minRaces": 0, "needFinish": false, "excludePlayers": 0}),
+        "qualifierPlacement" => {
+            json!({"type": "qualifierPlacement", "numPlayers": 8, "minRaces": 0, "needFinish": false, "excludePlayers": 0})
+        }
         "rslLeaderboard" => json!({"type": "rslLeaderboard"}),
-        "external" => json!({"type": "external", "text": "Manual verification required.", "blocksSubmit": true}),
+        "external" => {
+            json!({"type": "external", "text": "Manual verification required.", "blocksSubmit": true})
+        }
         _ => serde_json::Value::Null,
     }
 }
@@ -3201,54 +4636,114 @@ fn req_summary(req: &serde_json::Value) -> String {
     let type_str = req.get("type").and_then(|v| v.as_str()).unwrap_or("");
     match type_str {
         "raceTimeInvite" => {
-            let count = req.get("invites").and_then(|v| v.as_array()).map_or(0, |a| a.len());
+            let count = req
+                .get("invites")
+                .and_then(|v| v.as_array())
+                .map_or(0, |a| a.len());
             format!("{count} invited user(s)")
         }
         "discordGuild" => {
-            let name = req.get("name").and_then(|v| v.as_str()).unwrap_or("(unnamed)");
+            let name = req
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("(unnamed)");
             match req.get("roleId").and_then(|v| v.as_i64()) {
                 Some(id) => format!("Server: {name}, role ID: {id}"),
                 None => format!("Server: {name}"),
             }
         }
         "startGG" => {
-            if req.get("optional").and_then(|v| v.as_bool()).unwrap_or(false) { "optional".to_owned() } else { "required".to_owned() }
+            if req
+                .get("optional")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+            {
+                "optional".to_owned()
+            } else {
+                "required".to_owned()
+            }
         }
         "startGGEventSignup" => {
-            let slug = req.get("eventSlug").and_then(|v| v.as_str()).unwrap_or("(not set)");
+            let slug = req
+                .get("eventSlug")
+                .and_then(|v| v.as_str())
+                .unwrap_or("(not set)");
             format!("slug: {slug}")
         }
         "textField" | "textField2" => {
-            let label = req.get("label").and_then(|v| v.as_str()).unwrap_or("(no label)");
-            if label.len() > 60 { format!("{}…", &label[..60]) } else { label.to_owned() }
+            let label = req
+                .get("label")
+                .and_then(|v| v.as_str())
+                .unwrap_or("(no label)");
+            if label.len() > 60 {
+                format!("{}…", &label[..60])
+            } else {
+                label.to_owned()
+            }
         }
         "yesNo" => {
-            let label = req.get("label").and_then(|v| v.as_str()).unwrap_or("(no label)");
-            if label.len() > 60 { format!("{}…", &label[..60]) } else { label.to_owned() }
+            let label = req
+                .get("label")
+                .and_then(|v| v.as_str())
+                .unwrap_or("(no label)");
+            if label.len() > 60 {
+                format!("{}…", &label[..60])
+            } else {
+                label.to_owned()
+            }
         }
         "booleanChoice" | "radioChoice" => {
-            let key = req.get("key").and_then(|v| v.as_str()).unwrap_or("(no key)");
-            let label = req.get("label").and_then(|v| v.as_str()).unwrap_or("(no label)");
-            let label_short = if label.len() > 40 { format!("{}…", &label[..40]) } else { label.to_owned() };
+            let key = req
+                .get("key")
+                .and_then(|v| v.as_str())
+                .unwrap_or("(no key)");
+            let label = req
+                .get("label")
+                .and_then(|v| v.as_str())
+                .unwrap_or("(no label)");
+            let label_short = if label.len() > 40 {
+                format!("{}…", &label[..40])
+            } else {
+                label.to_owned()
+            };
             if req.get("locked").and_then(|v| v.as_bool()).unwrap_or(false) {
                 format!("key={key}: {label_short} [locked]")
             } else {
                 format!("key={key}: {label_short}")
             }
         }
-        "rules" => req.get("document").and_then(|v| v.as_str())
+        "rules" => req
+            .get("document")
+            .and_then(|v| v.as_str())
             .map(|d| format!("Document: {d}"))
             .unwrap_or_else(|| "Links to event info page".to_owned()),
-        "poll" => req.get("document").and_then(|v| v.as_str())
+        "poll" => req
+            .get("document")
+            .and_then(|v| v.as_str())
             .map(|d| format!("Document: {d}"))
             .unwrap_or_else(|| "(no document set)".to_owned()),
         "restreamConsent" => {
-            if req.get("optional").and_then(|v| v.as_bool()).unwrap_or(false) { "optional (opt-in/out)".to_owned() } else { "required".to_owned() }
+            if req
+                .get("optional")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+            {
+                "optional (opt-in/out)".to_owned()
+            } else {
+                "required".to_owned()
+            }
         }
         "qualifier" => {
-            let start = req.get("asyncStart").and_then(|v| v.as_str()).unwrap_or("?");
+            let start = req
+                .get("asyncStart")
+                .and_then(|v| v.as_str())
+                .unwrap_or("?");
             let end = req.get("asyncEnd").and_then(|v| v.as_str()).unwrap_or("?");
-            format!("Async: {} – {}", to_datetime_input(start), to_datetime_input(end))
+            format!(
+                "Async: {} – {}",
+                to_datetime_input(start),
+                to_datetime_input(end)
+            )
         }
         "tripleQualifier" => "3 qualifier windows".to_owned(),
         "qualifierPlacement" => {
@@ -3256,14 +4751,26 @@ fn req_summary(req: &serde_json::Value) -> String {
             format!("Top {n} cutoff")
         }
         "external" => {
-            if req.get("blocksSubmit").and_then(|v| v.as_bool()).unwrap_or(true) { "blocks submit".to_owned() } else { "informational only".to_owned() }
+            if req
+                .get("blocksSubmit")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true)
+            {
+                "blocks submit".to_owned()
+            } else {
+                "informational only".to_owned()
+            }
         }
         _ => String::new(),
     }
 }
 
 fn to_datetime_input(dt_str: &str) -> &str {
-    if dt_str.len() >= 16 { &dt_str[..16] } else { dt_str }
+    if dt_str.len() >= 16 {
+        &dt_str[..16]
+    } else {
+        dt_str
+    }
 }
 
 fn parse_datetime_input(s: &str) -> Option<DateTime<Utc>> {
@@ -3272,23 +4779,37 @@ fn parse_datetime_input(s: &str) -> Option<DateTime<Utc>> {
         .map(|dt| dt.and_utc())
 }
 
-async fn load_flow_json(transaction: &mut Transaction<'_, Postgres>, series: Series, event: &str) -> Result<serde_json::Value, sqlx::Error> {
-    let flow: Option<serde_json::Value> = sqlx::query!(r#"
+async fn load_flow_json(
+    transaction: &mut Transaction<'_, Postgres>,
+    series: Series,
+    event: &str,
+) -> Result<serde_json::Value, sqlx::Error> {
+    let flow: Option<serde_json::Value> = sqlx::query!(
+        r#"
         SELECT enter_flow AS "enter_flow: serde_json::Value",
                rando_version AS "rando_version: serde_json::Value",
                seed_gen_type,
                seed_config AS "seed_config: serde_json::Value"
         FROM events WHERE series = $1 AND event = $2
-    "#, series as _, event)
+    "#,
+        series as _,
+        event
+    )
     .fetch_one(&mut **transaction)
     .await
     .map(|row| row.enter_flow)?;
     Ok(flow.unwrap_or_else(|| json!({"requirements": []})))
 }
 
-async fn save_flow_json(transaction: &mut Transaction<'_, Postgres>, flow: serde_json::Value, series: Series, event: &str) -> Result<(), sqlx::Error> {
+async fn save_flow_json(
+    transaction: &mut Transaction<'_, Postgres>,
+    flow: serde_json::Value,
+    series: Series,
+    event: &str,
+) -> Result<(), sqlx::Error> {
     let flow_json: Option<serde_json::Value> = Some(flow);
-    sqlx::query!(r#"
+    sqlx::query!(
+        r#"
                     UPDATE events
                     SET enter_flow = $1
                     WHERE series = $2 AND event = $3
@@ -3309,7 +4830,9 @@ async fn enter_flow_form(
     csrf: Option<&CsrfToken>,
     event: Data<'_>,
 ) -> Result<RawHtml<String>, event::Error> {
-    let header = event.header(&mut transaction, me.as_ref(), Tab::Configure, true).await?;
+    let header = event
+        .header(&mut transaction, me.as_ref(), Tab::Configure, true)
+        .await?;
     let content = if event.is_ended() {
         html! {
             article {
@@ -3319,23 +4842,46 @@ async fn enter_flow_form(
     } else if let Some(ref me) = me {
         if event.organizers(&mut transaction).await?.contains(me) || me.is_global_admin() {
             let flow = load_flow_json(&mut transaction, event.series, &event.event).await?;
-            let requirements: Vec<serde_json::Value> = flow.get("requirements")
+            let requirements: Vec<serde_json::Value> = flow
+                .get("requirements")
                 .and_then(|v| v.as_array())
                 .cloned()
                 .unwrap_or_default();
-            let closes_str = flow.get("closes").and_then(|v| v.as_str()).unwrap_or_default();
+            let closes_str = flow
+                .get("closes")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
             let closes_input = to_datetime_input(closes_str);
             let req_count = requirements.len();
             let all_req_types = [
-                "raceTime", "raceTimeInvite", "twitch", "discord", "discordGuild",
-                "challonge", "startGG", "startGGEventSignup", "textField", "textField2",
-                "yesNo", "booleanChoice", "radioChoice", "rules", "poll", "restreamConsent",
-                "qualifier", "tripleQualifier", "qualifierPlacement", "rslLeaderboard", "external",
+                "raceTime",
+                "raceTimeInvite",
+                "twitch",
+                "discord",
+                "discordGuild",
+                "challonge",
+                "startGG",
+                "startGGEventSignup",
+                "textField",
+                "textField2",
+                "yesNo",
+                "booleanChoice",
+                "radioChoice",
+                "rules",
+                "poll",
+                "restreamConsent",
+                "qualifier",
+                "tripleQualifier",
+                "qualifierPlacement",
+                "rslLeaderboard",
+                "external",
             ];
-            let add_type_guide: Vec<(&str, &str, &str)> = all_req_types.iter()
+            let add_type_guide: Vec<(&str, &str, &str)> = all_req_types
+                .iter()
                 .map(|&t| (t, req_type_label(t), req_type_tooltip(t)))
                 .collect();
-            let js_entries: String = all_req_types.iter()
+            let js_entries: String = all_req_types
+                .iter()
                 .map(|&t| format!("  d[{:?}] = {:?};\n", t, req_type_tooltip(t)))
                 .collect();
             let add_type_script = format!(
@@ -3487,16 +5033,36 @@ async fn enter_flow_form(
             }
         }
     };
-    Ok(page(transaction, &me, &uri, PageStyle { chests: event.chests().await?, ..PageStyle::default() }, &format!("Enter Flow — {}", event.display_name), html! {
-        : header;
-        : content;
-    }).await?)
+    Ok(page(
+        transaction,
+        &me,
+        &uri,
+        PageStyle {
+            chests: event.chests().await?,
+            ..PageStyle::default()
+        },
+        &format!("Enter Flow — {}", event.display_name),
+        html! {
+            : header;
+            : content;
+        },
+    )
+    .await?)
 }
 
 #[rocket::get("/event/<series>/<event>/configure/enter-flow")]
-pub(crate) async fn enter_flow_get(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: String) -> Result<RawHtml<String>, StatusOrError<event::Error>> {
+pub(crate) async fn enter_flow_get(
+    pool: &State<PgPool>,
+    me: Option<User>,
+    uri: Origin<'_>,
+    csrf: Option<CsrfToken>,
+    series: Series,
+    event: String,
+) -> Result<RawHtml<String>, StatusOrError<event::Error>> {
     let mut transaction = pool.begin().await?;
-    let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+    let data = Data::new(&mut transaction, series, event)
+        .await?
+        .ok_or(StatusOrError::Status(Status::NotFound))?;
     Ok(enter_flow_form(transaction, me, uri, csrf.as_ref(), data).await?)
 }
 
@@ -3509,26 +5075,42 @@ pub(crate) struct EnterFlowClosesForm {
 }
 
 #[rocket::post("/event/<series>/<event>/configure/enter-flow/closes", data = "<form>")]
-pub(crate) async fn enter_flow_set_closes(pool: &State<PgPool>, me: User, _uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, form: Form<Contextual<'_, EnterFlowClosesForm>>) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
+pub(crate) async fn enter_flow_set_closes(
+    pool: &State<PgPool>,
+    me: User,
+    _uri: Origin<'_>,
+    csrf: Option<CsrfToken>,
+    series: Series,
+    event: &str,
+    form: Form<Contextual<'_, EnterFlowClosesForm>>,
+) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
     let mut transaction = pool.begin().await?;
-    let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+    let data = Data::new(&mut transaction, series, event)
+        .await?
+        .ok_or(StatusOrError::Status(Status::NotFound))?;
     let mut form = form.into_inner();
     form.verify(&csrf);
     if let Some(ref value) = form.value {
         if !data.organizers(&mut transaction).await?.contains(&me) && !me.is_global_admin() {
-            return Ok(RedirectOrContent::Redirect(Redirect::to(uri!(enter_flow_get(series, event)))));
+            return Ok(RedirectOrContent::Redirect(Redirect::to(uri!(
+                enter_flow_get(series, event)
+            ))));
         }
         let mut flow = load_flow_json(&mut transaction, series, event).await?;
         let closes_trimmed = value.closes.trim();
         if closes_trimmed.is_empty() {
-            if let Some(obj) = flow.as_object_mut() { obj.remove("closes"); }
+            if let Some(obj) = flow.as_object_mut() {
+                obj.remove("closes");
+            }
         } else if let Some(dt) = parse_datetime_input(closes_trimmed) {
             flow["closes"] = json!(dt.format("%Y-%m-%dT%H:%M:%SZ").to_string());
         }
         save_flow_json(&mut transaction, flow, series, event).await?;
         transaction.commit().await?;
     }
-    Ok(RedirectOrContent::Redirect(Redirect::to(uri!(enter_flow_get(series, event)))))
+    Ok(RedirectOrContent::Redirect(Redirect::to(uri!(
+        enter_flow_get(series, event)
+    ))))
 }
 
 #[derive(FromForm, CsrfForm)]
@@ -3540,18 +5122,32 @@ pub(crate) struct EnterFlowAddForm {
 }
 
 #[rocket::post("/event/<series>/<event>/configure/enter-flow/add", data = "<form>")]
-pub(crate) async fn enter_flow_add(pool: &State<PgPool>, me: User, _uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, form: Form<Contextual<'_, EnterFlowAddForm>>) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
+pub(crate) async fn enter_flow_add(
+    pool: &State<PgPool>,
+    me: User,
+    _uri: Origin<'_>,
+    csrf: Option<CsrfToken>,
+    series: Series,
+    event: &str,
+    form: Form<Contextual<'_, EnterFlowAddForm>>,
+) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
     let mut transaction = pool.begin().await?;
-    let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+    let data = Data::new(&mut transaction, series, event)
+        .await?
+        .ok_or(StatusOrError::Status(Status::NotFound))?;
     let mut form = form.into_inner();
     form.verify(&csrf);
     if let Some(ref value) = form.value {
         if !data.organizers(&mut transaction).await?.contains(&me) && !me.is_global_admin() {
-            return Ok(RedirectOrContent::Redirect(Redirect::to(uri!(enter_flow_get(series, event)))));
+            return Ok(RedirectOrContent::Redirect(Redirect::to(uri!(
+                enter_flow_get(series, event)
+            ))));
         }
         let new_req = req_type_default_json(&value.req_type);
         if new_req.is_null() {
-            return Ok(RedirectOrContent::Redirect(Redirect::to(uri!(enter_flow_get(series, event)))));
+            return Ok(RedirectOrContent::Redirect(Redirect::to(uri!(
+                enter_flow_get(series, event)
+            ))));
         }
         let mut flow = load_flow_json(&mut transaction, series, event).await?;
         if let Some(reqs) = flow.get_mut("requirements").and_then(|v| v.as_array_mut()) {
@@ -3562,7 +5158,9 @@ pub(crate) async fn enter_flow_add(pool: &State<PgPool>, me: User, _uri: Origin<
             transaction.commit().await?;
         }
     }
-    Ok(RedirectOrContent::Redirect(Redirect::to(uri!(enter_flow_get(series, event)))))
+    Ok(RedirectOrContent::Redirect(Redirect::to(uri!(
+        enter_flow_get(series, event)
+    ))))
 }
 
 #[derive(FromForm, CsrfForm)]
@@ -3575,20 +5173,36 @@ pub(crate) struct EnterFlowAddRadioChoiceForm {
     label: String,
 }
 
-#[rocket::post("/event/<series>/<event>/configure/enter-flow/add-radio-choice", data = "<form>")]
-pub(crate) async fn enter_flow_add_radio_choice(pool: &State<PgPool>, me: User, _uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, form: Form<Contextual<'_, EnterFlowAddRadioChoiceForm>>) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
+#[rocket::post(
+    "/event/<series>/<event>/configure/enter-flow/add-radio-choice",
+    data = "<form>"
+)]
+pub(crate) async fn enter_flow_add_radio_choice(
+    pool: &State<PgPool>,
+    me: User,
+    _uri: Origin<'_>,
+    csrf: Option<CsrfToken>,
+    series: Series,
+    event: &str,
+    form: Form<Contextual<'_, EnterFlowAddRadioChoiceForm>>,
+) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
     let mut transaction = pool.begin().await?;
-    let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+    let data = Data::new(&mut transaction, series, event)
+        .await?
+        .ok_or(StatusOrError::Status(Status::NotFound))?;
     let mut form = form.into_inner();
     form.verify(&csrf);
     if let Some(ref value) = form.value {
         if !data.organizers(&mut transaction).await?.contains(&me) && !me.is_global_admin() {
-            return Ok(RedirectOrContent::Redirect(Redirect::to(uri!(enter_flow_get(series, event)))));
+            return Ok(RedirectOrContent::Redirect(Redirect::to(uri!(
+                enter_flow_get(series, event)
+            ))));
         }
         let key = value.key.trim();
         let label = value.label.trim();
         if !key.is_empty() && !label.is_empty() {
-            let new_req = json!({"type": "radioChoice", "key": key, "label": label, "locked": false});
+            let new_req =
+                json!({"type": "radioChoice", "key": key, "label": label, "locked": false});
             let mut flow = load_flow_json(&mut transaction, series, event).await?;
             if let Some(reqs) = flow.get_mut("requirements").and_then(|v| v.as_array_mut()) {
                 reqs.push(new_req);
@@ -3599,64 +5213,120 @@ pub(crate) async fn enter_flow_add_radio_choice(pool: &State<PgPool>, me: User, 
             }
         }
     }
-    Ok(RedirectOrContent::Redirect(Redirect::to(uri!(enter_flow_get(series, event)))))
+    Ok(RedirectOrContent::Redirect(Redirect::to(uri!(
+        enter_flow_get(series, event)
+    ))))
 }
 
-#[rocket::post("/event/<series>/<event>/configure/enter-flow/<idx>/remove", data = "<form>")]
-pub(crate) async fn enter_flow_remove(pool: &State<PgPool>, me: User, _uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, idx: usize, form: Form<Contextual<'_, EmptyForm>>) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
+#[rocket::post(
+    "/event/<series>/<event>/configure/enter-flow/<idx>/remove",
+    data = "<form>"
+)]
+pub(crate) async fn enter_flow_remove(
+    pool: &State<PgPool>,
+    me: User,
+    _uri: Origin<'_>,
+    csrf: Option<CsrfToken>,
+    series: Series,
+    event: &str,
+    idx: usize,
+    form: Form<Contextual<'_, EmptyForm>>,
+) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
     let mut transaction = pool.begin().await?;
-    let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+    let data = Data::new(&mut transaction, series, event)
+        .await?
+        .ok_or(StatusOrError::Status(Status::NotFound))?;
     let mut form = form.into_inner();
     form.verify(&csrf);
     if form.value.is_some() {
         if data.organizers(&mut transaction).await?.contains(&me) || me.is_global_admin() {
             let mut flow = load_flow_json(&mut transaction, series, event).await?;
             if let Some(reqs) = flow.get_mut("requirements").and_then(|v| v.as_array_mut()) {
-                if idx < reqs.len() { reqs.remove(idx); }
+                if idx < reqs.len() {
+                    reqs.remove(idx);
+                }
             }
             save_flow_json(&mut transaction, flow, series, event).await?;
             transaction.commit().await?;
         }
     }
-    Ok(RedirectOrContent::Redirect(Redirect::to(uri!(enter_flow_get(series, event)))))
+    Ok(RedirectOrContent::Redirect(Redirect::to(uri!(
+        enter_flow_get(series, event)
+    ))))
 }
 
-#[rocket::post("/event/<series>/<event>/configure/enter-flow/<idx>/move-up", data = "<form>")]
-pub(crate) async fn enter_flow_move_up(pool: &State<PgPool>, me: User, _uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, idx: usize, form: Form<Contextual<'_, EmptyForm>>) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
+#[rocket::post(
+    "/event/<series>/<event>/configure/enter-flow/<idx>/move-up",
+    data = "<form>"
+)]
+pub(crate) async fn enter_flow_move_up(
+    pool: &State<PgPool>,
+    me: User,
+    _uri: Origin<'_>,
+    csrf: Option<CsrfToken>,
+    series: Series,
+    event: &str,
+    idx: usize,
+    form: Form<Contextual<'_, EmptyForm>>,
+) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
     let mut transaction = pool.begin().await?;
-    let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+    let data = Data::new(&mut transaction, series, event)
+        .await?
+        .ok_or(StatusOrError::Status(Status::NotFound))?;
     let mut form = form.into_inner();
     form.verify(&csrf);
     if form.value.is_some() {
         if data.organizers(&mut transaction).await?.contains(&me) || me.is_global_admin() {
             let mut flow = load_flow_json(&mut transaction, series, event).await?;
             if let Some(reqs) = flow.get_mut("requirements").and_then(|v| v.as_array_mut()) {
-                if idx > 0 && idx < reqs.len() { reqs.swap(idx - 1, idx); }
+                if idx > 0 && idx < reqs.len() {
+                    reqs.swap(idx - 1, idx);
+                }
             }
             save_flow_json(&mut transaction, flow, series, event).await?;
             transaction.commit().await?;
         }
     }
-    Ok(RedirectOrContent::Redirect(Redirect::to(uri!(enter_flow_get(series, event)))))
+    Ok(RedirectOrContent::Redirect(Redirect::to(uri!(
+        enter_flow_get(series, event)
+    ))))
 }
 
-#[rocket::post("/event/<series>/<event>/configure/enter-flow/<idx>/move-down", data = "<form>")]
-pub(crate) async fn enter_flow_move_down(pool: &State<PgPool>, me: User, _uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, idx: usize, form: Form<Contextual<'_, EmptyForm>>) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
+#[rocket::post(
+    "/event/<series>/<event>/configure/enter-flow/<idx>/move-down",
+    data = "<form>"
+)]
+pub(crate) async fn enter_flow_move_down(
+    pool: &State<PgPool>,
+    me: User,
+    _uri: Origin<'_>,
+    csrf: Option<CsrfToken>,
+    series: Series,
+    event: &str,
+    idx: usize,
+    form: Form<Contextual<'_, EmptyForm>>,
+) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
     let mut transaction = pool.begin().await?;
-    let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+    let data = Data::new(&mut transaction, series, event)
+        .await?
+        .ok_or(StatusOrError::Status(Status::NotFound))?;
     let mut form = form.into_inner();
     form.verify(&csrf);
     if form.value.is_some() {
         if data.organizers(&mut transaction).await?.contains(&me) || me.is_global_admin() {
             let mut flow = load_flow_json(&mut transaction, series, event).await?;
             if let Some(reqs) = flow.get_mut("requirements").and_then(|v| v.as_array_mut()) {
-                if idx + 1 < reqs.len() { reqs.swap(idx, idx + 1); }
+                if idx + 1 < reqs.len() {
+                    reqs.swap(idx, idx + 1);
+                }
             }
             save_flow_json(&mut transaction, flow, series, event).await?;
             transaction.commit().await?;
         }
     }
-    Ok(RedirectOrContent::Redirect(Redirect::to(uri!(enter_flow_get(series, event)))))
+    Ok(RedirectOrContent::Redirect(Redirect::to(uri!(
+        enter_flow_get(series, event)
+    ))))
 }
 
 #[derive(FromForm, CsrfForm)]
@@ -3737,7 +5407,11 @@ pub(crate) struct EnterFlowEditForm {
     blocks_submit: bool,
 }
 
-fn build_requirement_json(type_str: &str, v: &EnterFlowEditForm, errors: &mut Vec<(String, String)>) -> serde_json::Value {
+fn build_requirement_json(
+    type_str: &str,
+    v: &EnterFlowEditForm,
+    errors: &mut Vec<(String, String)>,
+) -> serde_json::Value {
     match type_str {
         "raceTime" => json!({"type": "raceTime"}),
         "twitch" => json!({"type": "twitch"}),
@@ -3745,21 +5419,36 @@ fn build_requirement_json(type_str: &str, v: &EnterFlowEditForm, errors: &mut Ve
         "challonge" => json!({"type": "challonge"}),
         "rslLeaderboard" => json!({"type": "rslLeaderboard"}),
         "raceTimeInvite" => {
-            let invites: Vec<&str> = v.invites.lines().map(str::trim).filter(|s| !s.is_empty()).collect();
+            let invites: Vec<&str> = v
+                .invites
+                .lines()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .collect();
             let mut obj = json!({"type": "raceTimeInvite", "invites": invites});
-            if !v.text.trim().is_empty() { obj["text"] = json!(v.text.trim()); }
-            if !v.error_text.trim().is_empty() { obj["errorText"] = json!(v.error_text.trim()); }
+            if !v.text.trim().is_empty() {
+                obj["text"] = json!(v.text.trim());
+            }
+            if !v.error_text.trim().is_empty() {
+                obj["errorText"] = json!(v.error_text.trim());
+            }
             obj
         }
         "discordGuild" => {
             let name = v.name.trim();
-            if name.is_empty() { errors.push(("name".into(), "Server name is required.".into())); }
+            if name.is_empty() {
+                errors.push(("name".into(), "Server name is required.".into()));
+            }
             let mut obj = json!({"type": "discordGuild", "name": name});
             let role_str = v.role_id.trim();
             if !role_str.is_empty() {
                 match role_str.parse::<i64>() {
-                    Ok(id) => { obj["roleId"] = json!(id); }
-                    Err(_) => { errors.push(("role_id".into(), "Role ID must be a valid number.".into())); }
+                    Ok(id) => {
+                        obj["roleId"] = json!(id);
+                    }
+                    Err(_) => {
+                        errors.push(("role_id".into(), "Role ID must be a valid number.".into()));
+                    }
                 }
             }
             obj
@@ -3767,87 +5456,143 @@ fn build_requirement_json(type_str: &str, v: &EnterFlowEditForm, errors: &mut Ve
         "startGG" => json!({"type": "startGG", "optional": v.optional}),
         "startGGEventSignup" => {
             let slug = v.event_slug.trim();
-            if slug.is_empty() { errors.push(("event_slug".into(), "Event slug is required.".into())); }
+            if slug.is_empty() {
+                errors.push(("event_slug".into(), "Event slug is required.".into()));
+            }
             let mut obj = json!({"type": "startGGEventSignup", "eventSlug": slug});
-            if !v.text.trim().is_empty() { obj["text"] = json!(v.text.trim()); }
-            if !v.error_text.trim().is_empty() { obj["errorText"] = json!(v.error_text.trim()); }
+            if !v.text.trim().is_empty() {
+                obj["text"] = json!(v.text.trim());
+            }
+            if !v.error_text.trim().is_empty() {
+                obj["errorText"] = json!(v.error_text.trim());
+            }
             obj
         }
         "textField" | "textField2" => {
             let label = v.label.trim();
-            if label.is_empty() { errors.push(("label".into(), "Label is required.".into())); }
+            if label.is_empty() {
+                errors.push(("label".into(), "Label is required.".into()));
+            }
             let regex_str = v.regex.trim();
-            if regex_str.is_empty() { errors.push(("regex".into(), "Regex is required.".into())); }
+            if regex_str.is_empty() {
+                errors.push(("regex".into(), "Regex is required.".into()));
+            }
             let mut rem_obj = serde_json::Map::new();
             for line in v.regex_error_messages.lines() {
                 let line = line.trim();
-                if line.is_empty() { continue; }
+                if line.is_empty() {
+                    continue;
+                }
                 if let Some((pat, msg)) = line.split_once('|') {
                     rem_obj.insert(pat.trim().to_owned(), json!(msg.trim()));
                 } else {
-                    errors.push(("regex_error_messages".into(), format!("Each line must be in \"pattern|message\" format. Got: {line}")));
+                    errors.push((
+                        "regex_error_messages".into(),
+                        format!("Each line must be in \"pattern|message\" format. Got: {line}"),
+                    ));
                 }
             }
             json!({"type": type_str, "label": label, "long": v.long, "regex": regex_str, "regexErrorMessages": rem_obj, "fallbackErrorMessage": v.fallback_error_message.trim()})
         }
         "yesNo" => {
             let label = v.label.trim();
-            if label.is_empty() { errors.push(("label".into(), "Label is required.".into())); }
+            if label.is_empty() {
+                errors.push(("label".into(), "Label is required.".into()));
+            }
             json!({"type": "yesNo", "label": label})
         }
         "booleanChoice" | "radioChoice" => {
             let key = v.key.trim();
-            if key.is_empty() { errors.push(("key".into(), "Key is required.".into())); }
+            if key.is_empty() {
+                errors.push(("key".into(), "Key is required.".into()));
+            }
             let label = v.label.trim();
-            if label.is_empty() { errors.push(("label".into(), "Label is required.".into())); }
+            if label.is_empty() {
+                errors.push(("label".into(), "Label is required.".into()));
+            }
             let mut obj = json!({"type": type_str, "key": key, "label": label, "locked": v.locked});
             let prompt = v.prompt.trim();
-            if !prompt.is_empty() { obj["prompt"] = json!(prompt); }
+            if !prompt.is_empty() {
+                obj["prompt"] = json!(prompt);
+            }
             obj
         }
         "rules" => {
             let mut obj = json!({"type": "rules"});
             let doc = v.document.trim();
-            if !doc.is_empty() { obj["document"] = json!(doc); }
+            if !doc.is_empty() {
+                obj["document"] = json!(doc);
+            }
             obj
         }
         "poll" => {
             let mut obj = json!({"type": "poll"});
             let doc = v.document.trim();
-            if !doc.is_empty() { obj["document"] = json!(doc); }
+            if !doc.is_empty() {
+                obj["document"] = json!(doc);
+            }
             obj
         }
         "restreamConsent" => {
             let mut obj = json!({"type": "restreamConsent", "optional": v.optional});
-            if !v.note.trim().is_empty() { obj["note"] = json!(v.note.trim()); }
+            if !v.note.trim().is_empty() {
+                obj["note"] = json!(v.note.trim());
+            }
             obj
         }
         "qualifier" => {
             let async_start = match parse_datetime_input(&v.async_start) {
                 Some(dt) => json!(dt.format("%Y-%m-%dT%H:%M:%SZ").to_string()),
-                None => { errors.push(("async_start".into(), "Invalid datetime.".into())); serde_json::Value::Null }
+                None => {
+                    errors.push(("async_start".into(), "Invalid datetime.".into()));
+                    serde_json::Value::Null
+                }
             };
             let async_end = match parse_datetime_input(&v.async_end) {
                 Some(dt) => json!(dt.format("%Y-%m-%dT%H:%M:%SZ").to_string()),
-                None => { errors.push(("async_end".into(), "Invalid datetime.".into())); serde_json::Value::Null }
+                None => {
+                    errors.push(("async_end".into(), "Invalid datetime.".into()));
+                    serde_json::Value::Null
+                }
             };
             let live_start = match parse_datetime_input(&v.live_start) {
                 Some(dt) => json!(dt.format("%Y-%m-%dT%H:%M:%SZ").to_string()),
-                None => { errors.push(("live_start".into(), "Invalid datetime.".into())); serde_json::Value::Null }
+                None => {
+                    errors.push(("live_start".into(), "Invalid datetime.".into()));
+                    serde_json::Value::Null
+                }
             };
             json!({"type": "qualifier", "asyncStart": async_start, "asyncEnd": async_end, "liveStart": live_start})
         }
         "tripleQualifier" => {
-            let starts = [(&v.async_start_0, "async_start_0"), (&v.async_start_1, "async_start_1"), (&v.async_start_2, "async_start_2")];
-            let ends = [(&v.async_end_0, "async_end_0"), (&v.async_end_1, "async_end_1"), (&v.async_end_2, "async_end_2")];
-            let lives = [(&v.live_start_0, "live_start_0"), (&v.live_start_1, "live_start_1"), (&v.live_start_2, "live_start_2")];
-            let parse_dt_arr = |arr: [(&String, &str); 3], errors: &mut Vec<(String, String)>| -> serde_json::Value {
-                let vals: Vec<serde_json::Value> = arr.iter().map(|(s, field)| {
-                    match parse_datetime_input(s) {
+            let starts = [
+                (&v.async_start_0, "async_start_0"),
+                (&v.async_start_1, "async_start_1"),
+                (&v.async_start_2, "async_start_2"),
+            ];
+            let ends = [
+                (&v.async_end_0, "async_end_0"),
+                (&v.async_end_1, "async_end_1"),
+                (&v.async_end_2, "async_end_2"),
+            ];
+            let lives = [
+                (&v.live_start_0, "live_start_0"),
+                (&v.live_start_1, "live_start_1"),
+                (&v.live_start_2, "live_start_2"),
+            ];
+            let parse_dt_arr = |arr: [(&String, &str); 3],
+                                errors: &mut Vec<(String, String)>|
+             -> serde_json::Value {
+                let vals: Vec<serde_json::Value> = arr
+                    .iter()
+                    .map(|(s, field)| match parse_datetime_input(s) {
                         Some(dt) => json!(dt.format("%Y-%m-%dT%H:%M:%SZ").to_string()),
-                        None => { errors.push((field.to_string(), "Invalid datetime.".into())); serde_json::Value::Null }
-                    }
-                }).collect();
+                        None => {
+                            errors.push((field.to_string(), "Invalid datetime.".into()));
+                            serde_json::Value::Null
+                        }
+                    })
+                    .collect();
                 json!(vals)
             };
             let async_starts = parse_dt_arr(starts, errors);
@@ -3858,37 +5603,67 @@ fn build_requirement_json(type_str: &str, v: &EnterFlowEditForm, errors: &mut Ve
         "qualifierPlacement" => {
             let num_players = match v.num_players.trim().parse::<usize>() {
                 Ok(n) => n,
-                Err(_) => { errors.push(("num_players".into(), "Must be a positive integer.".into())); 0 }
+                Err(_) => {
+                    errors.push(("num_players".into(), "Must be a positive integer.".into()));
+                    0
+                }
             };
             let min_races = match v.min_races.trim().parse::<usize>() {
                 Ok(n) => n,
-                Err(_) => { errors.push(("min_races".into(), "Must be a non-negative integer.".into())); 0 }
+                Err(_) => {
+                    errors.push(("min_races".into(), "Must be a non-negative integer.".into()));
+                    0
+                }
             };
             let exclude_players = match v.exclude_players.trim().parse::<usize>() {
                 Ok(n) => n,
-                Err(_) => { errors.push(("exclude_players".into(), "Must be a non-negative integer.".into())); 0 }
+                Err(_) => {
+                    errors.push((
+                        "exclude_players".into(),
+                        "Must be a non-negative integer.".into(),
+                    ));
+                    0
+                }
             };
             let mut obj = json!({"type": "qualifierPlacement", "numPlayers": num_players, "minRaces": min_races, "needFinish": v.need_finish, "excludePlayers": exclude_players});
             let qe = v.qual_event.trim();
-            if !qe.is_empty() { obj["event"] = json!(qe); }
+            if !qe.is_empty() {
+                obj["event"] = json!(qe);
+            }
             obj
         }
         "external" => {
             let mut obj = json!({"type": "external", "blocksSubmit": v.blocks_submit});
-            if !v.html_content.trim().is_empty() { obj["html"] = json!(v.html_content.trim()); }
-            if !v.text.trim().is_empty() { obj["text"] = json!(v.text.trim()); }
+            if !v.html_content.trim().is_empty() {
+                obj["html"] = json!(v.html_content.trim());
+            }
+            if !v.text.trim().is_empty() {
+                obj["text"] = json!(v.text.trim());
+            }
             obj
         }
         _ => serde_json::Value::Null,
     }
 }
 
-fn dt_field(field_name: &str, label_text: &str, ctx: &Context<'_>, current: &str, errors: &mut Vec<&form::Error<'_>>) -> RawHtml<String> {
-    let val = ctx.field_value(field_name).unwrap_or(to_datetime_input(current));
-    form_field(field_name, errors, html! {
-        label(for = field_name) : label_text;
-        input(type = "datetime-local", id = field_name, name = field_name, value = val);
-    })
+fn dt_field(
+    field_name: &str,
+    label_text: &str,
+    ctx: &Context<'_>,
+    current: &str,
+    errors: &mut Vec<&form::Error<'_>>,
+) -> RawHtml<String> {
+    let val = ctx
+        .field_value(field_name)
+        .unwrap_or(to_datetime_input(current));
+    form_field(
+        field_name,
+        errors,
+        html! {
+            label(for = field_name) : label_text;
+            input(type = "datetime-local", id = field_name, name = field_name, value = val);
+        },
+    )
 }
 
 async fn enter_flow_edit_form(
@@ -3901,8 +5676,13 @@ async fn enter_flow_edit_form(
     req: serde_json::Value,
     ctx: Context<'_>,
 ) -> Result<RawHtml<String>, event::Error> {
-    let header = event.header(&mut transaction, me.as_ref(), Tab::Configure, true).await?;
-    let type_str = req.get("type").and_then(|v| v.as_str()).unwrap_or("unknown");
+    let header = event
+        .header(&mut transaction, me.as_ref(), Tab::Configure, true)
+        .await?;
+    let type_str = req
+        .get("type")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
     let label = req_type_label(type_str);
     let tooltip = req_type_tooltip(type_str);
     let mut errors = ctx.errors().collect_vec();
@@ -3912,11 +5692,21 @@ async fn enter_flow_edit_form(
             p : "This requirement type has no configurable fields.";
         },
         "raceTimeInvite" => {
-            let cur_invites = req.get("invites").and_then(|v| v.as_array())
-                .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>().join("\n"))
+            let cur_invites = req
+                .get("invites")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str())
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                })
                 .unwrap_or_default();
             let cur_text = req.get("text").and_then(|v| v.as_str()).unwrap_or_default();
-            let cur_error_text = req.get("errorText").and_then(|v| v.as_str()).unwrap_or_default();
+            let cur_error_text = req
+                .get("errorText")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
             html! {
                 : form_field("invites", &mut errors, html! {
                     label(for = "invites") : "Invited racetime.gg user IDs (one per line):";
@@ -3950,8 +5740,13 @@ async fn enter_flow_edit_form(
             }
         }
         "startGG" => {
-            let cur_optional = req.get("optional").and_then(|v| v.as_bool()).unwrap_or(false);
-            let checked = ctx.field_value("optional").map_or(cur_optional, |v| v == "on");
+            let cur_optional = req
+                .get("optional")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let checked = ctx
+                .field_value("optional")
+                .map_or(cur_optional, |v| v == "on");
             html! {
                 : form_field("optional", &mut errors, html! {
                     input(type = "checkbox", id = "optional", name = "optional", checked? = checked.then_some(""));
@@ -3960,9 +5755,15 @@ async fn enter_flow_edit_form(
             }
         }
         "startGGEventSignup" => {
-            let cur_slug = req.get("eventSlug").and_then(|v| v.as_str()).unwrap_or_default();
+            let cur_slug = req
+                .get("eventSlug")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
             let cur_text = req.get("text").and_then(|v| v.as_str()).unwrap_or_default();
-            let cur_error_text = req.get("errorText").and_then(|v| v.as_str()).unwrap_or_default();
+            let cur_error_text = req
+                .get("errorText")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
             html! {
                 : form_field("event_slug", &mut errors, html! {
                     label(for = "event_slug") : "start.gg event slug:";
@@ -3980,13 +5781,29 @@ async fn enter_flow_edit_form(
             }
         }
         "textField" | "textField2" => {
-            let cur_label = req.get("label").and_then(|v| v.as_str()).unwrap_or_default();
-            let cur_long = req.get("long").and_then(|v| v.as_bool()).unwrap_or(false);
-            let cur_regex = req.get("regex").and_then(|v| v.as_str()).unwrap_or_default();
-            let cur_rem = req.get("regexErrorMessages").and_then(|v| v.as_object())
-                .map(|obj| obj.iter().map(|(k, v)| format!("{}|{}", k, v.as_str().unwrap_or(""))).collect::<Vec<_>>().join("\n"))
+            let cur_label = req
+                .get("label")
+                .and_then(|v| v.as_str())
                 .unwrap_or_default();
-            let cur_fem = req.get("fallbackErrorMessage").and_then(|v| v.as_str()).unwrap_or_default();
+            let cur_long = req.get("long").and_then(|v| v.as_bool()).unwrap_or(false);
+            let cur_regex = req
+                .get("regex")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            let cur_rem = req
+                .get("regexErrorMessages")
+                .and_then(|v| v.as_object())
+                .map(|obj| {
+                    obj.iter()
+                        .map(|(k, v)| format!("{}|{}", k, v.as_str().unwrap_or("")))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                })
+                .unwrap_or_default();
+            let cur_fem = req
+                .get("fallbackErrorMessage")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
             let long_checked = ctx.field_value("long").map_or(cur_long, |v| v == "on");
             html! {
                 : form_field("label", &mut errors, html! {
@@ -4014,7 +5831,10 @@ async fn enter_flow_edit_form(
             }
         }
         "yesNo" => {
-            let cur_label = req.get("label").and_then(|v| v.as_str()).unwrap_or_default();
+            let cur_label = req
+                .get("label")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
             html! {
                 : form_field("label", &mut errors, html! {
                     label(for = "label") : "Question (HTML allowed):";
@@ -4024,8 +5844,14 @@ async fn enter_flow_edit_form(
         }
         "booleanChoice" | "radioChoice" => {
             let cur_key = req.get("key").and_then(|v| v.as_str()).unwrap_or_default();
-            let cur_label = req.get("label").and_then(|v| v.as_str()).unwrap_or_default();
-            let cur_prompt = req.get("prompt").and_then(|v| v.as_str()).unwrap_or_default();
+            let cur_label = req
+                .get("label")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            let cur_prompt = req
+                .get("prompt")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
             let cur_locked = req.get("locked").and_then(|v| v.as_bool()).unwrap_or(false);
             let locked_checked = ctx.field_value("locked").map_or(cur_locked, |v| v == "on");
             let help = if type_str == "radioChoice" {
@@ -4055,7 +5881,10 @@ async fn enter_flow_edit_form(
             }
         }
         "rules" => {
-            let cur_doc = req.get("document").and_then(|v| v.as_str()).unwrap_or_default();
+            let cur_doc = req
+                .get("document")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
             html! {
                 : form_field("document", &mut errors, html! {
                     label(for = "document") : "Custom rules document URL (optional):";
@@ -4065,7 +5894,10 @@ async fn enter_flow_edit_form(
             }
         }
         "poll" => {
-            let cur_doc = req.get("document").and_then(|v| v.as_str()).unwrap_or_default();
+            let cur_doc = req
+                .get("document")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
             html! {
                 : form_field("document", &mut errors, html! {
                     label(for = "document") : "Poll document URL:";
@@ -4074,9 +5906,14 @@ async fn enter_flow_edit_form(
             }
         }
         "restreamConsent" => {
-            let cur_optional = req.get("optional").and_then(|v| v.as_bool()).unwrap_or(false);
+            let cur_optional = req
+                .get("optional")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
             let cur_note = req.get("note").and_then(|v| v.as_str()).unwrap_or_default();
-            let opt_checked = ctx.field_value("optional").map_or(cur_optional, |v| v == "on");
+            let opt_checked = ctx
+                .field_value("optional")
+                .map_or(cur_optional, |v| v == "on");
             html! {
                 : form_field("optional", &mut errors, html! {
                     input(type = "checkbox", id = "optional", name = "optional", checked? = opt_checked.then_some(""));
@@ -4090,9 +5927,18 @@ async fn enter_flow_edit_form(
             }
         }
         "qualifier" => {
-            let cur_as = req.get("asyncStart").and_then(|v| v.as_str()).unwrap_or_default();
-            let cur_ae = req.get("asyncEnd").and_then(|v| v.as_str()).unwrap_or_default();
-            let cur_ls = req.get("liveStart").and_then(|v| v.as_str()).unwrap_or_default();
+            let cur_as = req
+                .get("asyncStart")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            let cur_ae = req
+                .get("asyncEnd")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            let cur_ls = req
+                .get("liveStart")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
             html! {
                 : dt_field("async_start", "Async window opens (UTC):", &ctx, cur_as, &mut errors);
                 : dt_field("async_end", "Async window closes (UTC):", &ctx, cur_ae, &mut errors);
@@ -4100,9 +5946,24 @@ async fn enter_flow_edit_form(
             }
         }
         "tripleQualifier" => {
-            let get_start = |i: usize| req.get("asyncStarts").and_then(|v| v.get(i)).and_then(|v| v.as_str()).unwrap_or_default();
-            let get_end = |i: usize| req.get("asyncEnds").and_then(|v| v.get(i)).and_then(|v| v.as_str()).unwrap_or_default();
-            let get_live = |i: usize| req.get("liveStarts").and_then(|v| v.get(i)).and_then(|v| v.as_str()).unwrap_or_default();
+            let get_start = |i: usize| {
+                req.get("asyncStarts")
+                    .and_then(|v| v.get(i))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+            };
+            let get_end = |i: usize| {
+                req.get("asyncEnds")
+                    .and_then(|v| v.get(i))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+            };
+            let get_live = |i: usize| {
+                req.get("liveStarts")
+                    .and_then(|v| v.get(i))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+            };
             html! {
                 h4 : "Round 1";
                 : dt_field("async_start_0", "Async opens (UTC):", &ctx, get_start(0), &mut errors);
@@ -4119,11 +5980,29 @@ async fn enter_flow_edit_form(
             }
         }
         "qualifierPlacement" => {
-            let cur_np = req.get("numPlayers").and_then(|v| v.as_u64()).unwrap_or(8).to_string();
-            let cur_mr = req.get("minRaces").and_then(|v| v.as_u64()).unwrap_or(0).to_string();
-            let cur_nf = req.get("needFinish").and_then(|v| v.as_bool()).unwrap_or(false);
-            let cur_ev = req.get("event").and_then(|v| v.as_str()).unwrap_or_default();
-            let cur_ep = req.get("excludePlayers").and_then(|v| v.as_u64()).unwrap_or(0).to_string();
+            let cur_np = req
+                .get("numPlayers")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(8)
+                .to_string();
+            let cur_mr = req
+                .get("minRaces")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0)
+                .to_string();
+            let cur_nf = req
+                .get("needFinish")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let cur_ev = req
+                .get("event")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            let cur_ep = req
+                .get("excludePlayers")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0)
+                .to_string();
             let nf_checked = ctx.field_value("need_finish").map_or(cur_nf, |v| v == "on");
             html! {
                 : form_field("num_players", &mut errors, html! {
@@ -4151,8 +6030,13 @@ async fn enter_flow_edit_form(
         "external" => {
             let cur_html = req.get("html").and_then(|v| v.as_str()).unwrap_or_default();
             let cur_text = req.get("text").and_then(|v| v.as_str()).unwrap_or_default();
-            let cur_bs = req.get("blocksSubmit").and_then(|v| v.as_bool()).unwrap_or(true);
-            let bs_checked = ctx.field_value("blocks_submit").map_or(cur_bs, |v| v == "on");
+            let cur_bs = req
+                .get("blocksSubmit")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true);
+            let bs_checked = ctx
+                .field_value("blocks_submit")
+                .map_or(cur_bs, |v| v == "on");
             html! {
                 : form_field("html_content", &mut errors, html! {
                     label(for = "html_content") : "HTML displayed to participant (optional, takes precedence over plain text):";
@@ -4184,60 +6068,145 @@ async fn enter_flow_edit_form(
         p { a(href = &back_link.to_string()) : "← Back to enter flow"; }
         : full_form(uri!(enter_flow_edit_post(event.series, &*event.event, idx)), csrf, fields, errors, "Save");
     };
-    Ok(page(transaction, &me, &uri, PageStyle { chests: event.chests().await?, ..PageStyle::default() }, &format!("Edit {} — {}", label, event.display_name), html! {
-        : header;
-        : content;
-    }).await?)
+    Ok(page(
+        transaction,
+        &me,
+        &uri,
+        PageStyle {
+            chests: event.chests().await?,
+            ..PageStyle::default()
+        },
+        &format!("Edit {} — {}", label, event.display_name),
+        html! {
+            : header;
+            : content;
+        },
+    )
+    .await?)
 }
 
 #[rocket::get("/event/<series>/<event>/configure/enter-flow/<idx>/edit")]
-pub(crate) async fn enter_flow_edit_get(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: String, idx: usize) -> Result<RawHtml<String>, StatusOrError<event::Error>> {
+pub(crate) async fn enter_flow_edit_get(
+    pool: &State<PgPool>,
+    me: Option<User>,
+    uri: Origin<'_>,
+    csrf: Option<CsrfToken>,
+    series: Series,
+    event: String,
+    idx: usize,
+) -> Result<RawHtml<String>, StatusOrError<event::Error>> {
     let mut transaction = pool.begin().await?;
-    let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+    let data = Data::new(&mut transaction, series, event)
+        .await?
+        .ok_or(StatusOrError::Status(Status::NotFound))?;
     let flow = load_flow_json(&mut transaction, data.series, &data.event).await?;
-    let requirements: Vec<serde_json::Value> = flow.get("requirements").and_then(|v| v.as_array()).cloned().unwrap_or_default();
-    let req = requirements.into_iter().nth(idx).ok_or(StatusOrError::Status(Status::NotFound))?;
-    Ok(enter_flow_edit_form(transaction, me, uri, csrf.as_ref(), data, idx, req, Context::default()).await?)
+    let requirements: Vec<serde_json::Value> = flow
+        .get("requirements")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let req = requirements
+        .into_iter()
+        .nth(idx)
+        .ok_or(StatusOrError::Status(Status::NotFound))?;
+    Ok(enter_flow_edit_form(
+        transaction,
+        me,
+        uri,
+        csrf.as_ref(),
+        data,
+        idx,
+        req,
+        Context::default(),
+    )
+    .await?)
 }
 
-#[rocket::post("/event/<series>/<event>/configure/enter-flow/<idx>/edit", data = "<form>")]
-pub(crate) async fn enter_flow_edit_post(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, idx: usize, form: Form<Contextual<'_, EnterFlowEditForm>>) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
+#[rocket::post(
+    "/event/<series>/<event>/configure/enter-flow/<idx>/edit",
+    data = "<form>"
+)]
+pub(crate) async fn enter_flow_edit_post(
+    pool: &State<PgPool>,
+    me: User,
+    uri: Origin<'_>,
+    csrf: Option<CsrfToken>,
+    series: Series,
+    event: &str,
+    idx: usize,
+    form: Form<Contextual<'_, EnterFlowEditForm>>,
+) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
     let mut transaction = pool.begin().await?;
-    let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+    let data = Data::new(&mut transaction, series, event)
+        .await?
+        .ok_or(StatusOrError::Status(Status::NotFound))?;
     let mut form = form.into_inner();
     form.verify(&csrf);
     if !data.organizers(&mut transaction).await?.contains(&me) && !me.is_global_admin() {
-        return Ok(RedirectOrContent::Redirect(Redirect::to(uri!(enter_flow_get(series, event)))));
+        return Ok(RedirectOrContent::Redirect(Redirect::to(uri!(
+            enter_flow_get(series, event)
+        ))));
     }
     let mut flow = load_flow_json(&mut transaction, series, event).await?;
-    let requirements = flow.get("requirements").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    let requirements = flow
+        .get("requirements")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
     let req = match requirements.into_iter().nth(idx) {
         Some(r) => r,
-        None => return Ok(RedirectOrContent::Redirect(Redirect::to(uri!(enter_flow_get(series, event))))),
+        None => {
+            return Ok(RedirectOrContent::Redirect(Redirect::to(uri!(
+                enter_flow_get(series, event)
+            ))));
+        }
     };
-    let type_str = req.get("type").and_then(|v| v.as_str()).unwrap_or("").to_owned();
+    let type_str = req
+        .get("type")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_owned();
     if let Some(ref value) = form.value {
         let mut build_errors: Vec<(String, String)> = vec![];
         let new_req = build_requirement_json(&type_str, value, &mut build_errors);
         for (field, msg) in build_errors {
-            form.context.push_error(form::Error::validation(msg).with_name(field));
+            form.context
+                .push_error(form::Error::validation(msg).with_name(field));
         }
         if form.context.errors().next().is_none() && !new_req.is_null() {
             let new_req_validated = new_req.clone();
             if let Some(reqs) = flow.get_mut("requirements").and_then(|v| v.as_array_mut()) {
-                if idx < reqs.len() { reqs[idx] = new_req_validated; }
+                if idx < reqs.len() {
+                    reqs[idx] = new_req_validated;
+                }
             }
             match serde_json::from_value::<enter::Flow>(flow.clone()) {
                 Ok(_) => {
                     save_flow_json(&mut transaction, flow, series, event).await?;
                     transaction.commit().await?;
-                    return Ok(RedirectOrContent::Redirect(Redirect::to(uri!(enter_flow_get(series, event)))));
+                    return Ok(RedirectOrContent::Redirect(Redirect::to(uri!(
+                        enter_flow_get(series, event)
+                    ))));
                 }
                 Err(e) => {
-                    form.context.push_error(form::Error::validation(format!("Invalid configuration: {e}")));
+                    form.context.push_error(form::Error::validation(format!(
+                        "Invalid configuration: {e}"
+                    )));
                 }
             }
         }
     }
-    Ok(RedirectOrContent::Content(enter_flow_edit_form(transaction, Some(me), uri, csrf.as_ref(), data, idx, req, form.context).await?))
+    Ok(RedirectOrContent::Content(
+        enter_flow_edit_form(
+            transaction,
+            Some(me),
+            uri,
+            csrf.as_ref(),
+            data,
+            idx,
+            req,
+            form.context,
+        )
+        .await?,
+    ))
 }

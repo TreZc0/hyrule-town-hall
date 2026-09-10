@@ -1,31 +1,30 @@
 //! SpeedGaming export configuration tab for events.
 
 use {
-    rocket::{
-        form::Form,
-        http::Status,
-        response::Redirect,
-        State,
-    },
-    rocket_csrf::CsrfToken,
-    rocket_util::Origin,
     crate::{
         event::{self, Data, Tab},
-        form::{full_form, form_field},
-        http::{page, PageError, PageKind, PageStyle, StatusOrError},
+        form::{form_field, full_form},
+        http::{PageError, PageKind, PageStyle, StatusOrError, page},
         prelude::*,
         series::Series,
         speedgaming_export::{self, ExportConfig, ExportTrigger},
         user::User,
     },
+    rocket::{State, form::Form, http::Status, response::Redirect},
+    rocket_csrf::CsrfToken,
+    rocket_util::Origin,
 };
 
 #[derive(Debug, thiserror::Error, rocket_util::Error)]
 pub(crate) enum Error {
-    #[error(transparent)] Event(#[from] event::Error),
-    #[error(transparent)] Page(#[from] PageError),
-    #[error(transparent)] SpeedGaming(#[from] speedgaming_export::Error),
-    #[error(transparent)] Sql(#[from] sqlx::Error),
+    #[error(transparent)]
+    Event(#[from] event::Error),
+    #[error(transparent)]
+    Page(#[from] PageError),
+    #[error(transparent)]
+    SpeedGaming(#[from] speedgaming_export::Error),
+    #[error(transparent)]
+    Sql(#[from] sqlx::Error),
 }
 
 impl From<Error> for StatusOrError<Error> {
@@ -92,26 +91,47 @@ pub(crate) async fn get(
 ) -> Result<RawHtml<String>, StatusOrError<Error>> {
     let me = me.ok_or(StatusOrError::Status(Status::Forbidden))?;
     if !me.is_global_admin() {
-        return Err(StatusOrError::Status(Status::Forbidden))
+        return Err(StatusOrError::Status(Status::Forbidden));
     }
     let mut transaction = pool.begin().await?;
-    let event_data = Data::new(&mut transaction, series, &event).await?
+    let event_data = Data::new(&mut transaction, series, &event)
+        .await?
         .ok_or(StatusOrError::Status(Status::NotFound))?;
-    let header = event_data.header(&mut transaction, Some(&me), Tab::SpeedGamingExport, false).await?;
+    let header = event_data
+        .header(&mut transaction, Some(&me), Tab::SpeedGamingExport, false)
+        .await?;
     let exports = ExportConfig::for_event(&mut transaction, series, &event).await?;
     let mut stats: HashMap<i32, (i64, i64, i64, i64)> = HashMap::default();
     for export in &exports {
-        let race_stats = sqlx::query!(r#"
+        let race_stats = sqlx::query!(
+            r#"
             SELECT COUNT(*) FILTER (WHERE state = 'succeeded') AS "succeeded!",
                    COUNT(*) FILTER (WHERE state IN ('failed', 'ambiguous')) AS "attention!"
             FROM speedgaming_race_exports WHERE export_id = $1
-        "#, export.id).fetch_one(&mut *transaction).await?;
-        let volunteer_stats = sqlx::query!(r#"
+        "#,
+            export.id
+        )
+        .fetch_one(&mut *transaction)
+        .await?;
+        let volunteer_stats = sqlx::query!(
+            r#"
             SELECT COUNT(*) FILTER (WHERE state = 'succeeded') AS "succeeded!",
                    COUNT(*) FILTER (WHERE state IN ('failed', 'ambiguous')) AS "attention!"
             FROM speedgaming_volunteer_exports WHERE export_id = $1
-        "#, export.id).fetch_one(&mut *transaction).await?;
-        stats.insert(export.id, (race_stats.succeeded, race_stats.attention, volunteer_stats.succeeded, volunteer_stats.attention));
+        "#,
+            export.id
+        )
+        .fetch_one(&mut *transaction)
+        .await?;
+        stats.insert(
+            export.id,
+            (
+                race_stats.succeeded,
+                race_stats.attention,
+                volunteer_stats.succeeded,
+                volunteer_stats.attention,
+            ),
+        );
     }
 
     let content = html! {
@@ -222,10 +242,14 @@ pub(crate) async fn get(
         pool.begin().await?,
         &Some(me),
         &uri,
-        PageStyle { kind: PageKind::Other, ..PageStyle::default() },
+        PageStyle {
+            kind: PageKind::Other,
+            ..PageStyle::default()
+        },
         &format!("SpeedGaming Export — {}", event_data.display_name),
         content,
-    ).await?)
+    )
+    .await?)
 }
 
 #[derive(Debug, FromForm, CsrfForm)]
@@ -251,17 +275,32 @@ pub(crate) async fn add_export(
     event: &str,
     form: Form<Contextual<'_, ExportForm>>,
 ) -> Result<Redirect, StatusOrError<Error>> {
-    if !me.is_global_admin() { return Err(StatusOrError::Status(Status::Forbidden)) }
+    if !me.is_global_admin() {
+        return Err(StatusOrError::Status(Status::Forbidden));
+    }
     let mut form = form.into_inner();
     form.verify(&csrf);
     if let Some(value) = &form.value {
         if value.delay_minutes < 0 || !valid_slug(&value.slug) {
-            return Err(StatusOrError::Status(Status::BadRequest))
+            return Err(StatusOrError::Status(Status::BadRequest));
         }
-        let trigger = trigger(&value.trigger_condition).ok_or(StatusOrError::Status(Status::BadRequest))?;
+        let trigger =
+            trigger(&value.trigger_condition).ok_or(StatusOrError::Status(Status::BadRequest))?;
         let mut transaction = pool.begin().await?;
-        Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
-        ExportConfig::create(&mut transaction, series, event, &value.slug, trigger, value.delay_minutes, value.export_volunteers, &value.volunteer_languages).await?;
+        Data::new(&mut transaction, series, event)
+            .await?
+            .ok_or(StatusOrError::Status(Status::NotFound))?;
+        ExportConfig::create(
+            &mut transaction,
+            series,
+            event,
+            &value.slug,
+            trigger,
+            value.delay_minutes,
+            value.export_volunteers,
+            &value.volunteer_languages,
+        )
+        .await?;
         transaction.commit().await?;
         speedgaming_export::schedule_sync(pool.inner().clone(), http_client.inner().clone());
     }
@@ -279,25 +318,40 @@ pub(crate) async fn update_export(
     export_id: i32,
     form: Form<Contextual<'_, ExportForm>>,
 ) -> Result<Redirect, StatusOrError<Error>> {
-    if !me.is_global_admin() { return Err(StatusOrError::Status(Status::Forbidden)) }
+    if !me.is_global_admin() {
+        return Err(StatusOrError::Status(Status::Forbidden));
+    }
     let mut form = form.into_inner();
     form.verify(&csrf);
     if let Some(value) = &form.value {
         if value.delay_minutes < 0 || !valid_slug(&value.slug) {
-            return Err(StatusOrError::Status(Status::BadRequest))
+            return Err(StatusOrError::Status(Status::BadRequest));
         }
-        let trigger = trigger(&value.trigger_condition).ok_or(StatusOrError::Status(Status::BadRequest))?;
+        let trigger =
+            trigger(&value.trigger_condition).ok_or(StatusOrError::Status(Status::BadRequest))?;
         let mut transaction = pool.begin().await?;
-        let export = ExportConfig::from_id(&mut transaction, export_id).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+        let export = ExportConfig::from_id(&mut transaction, export_id)
+            .await?
+            .ok_or(StatusOrError::Status(Status::NotFound))?;
         if export.series != series || export.event != event {
-            return Err(StatusOrError::Status(Status::NotFound))
+            return Err(StatusOrError::Status(Status::NotFound));
         }
         let has_attempts = sqlx::query_scalar!("SELECT EXISTS (SELECT 1 FROM speedgaming_race_exports WHERE export_id = $1) AS \"exists!\"", export_id)
             .fetch_one(&mut *transaction).await?;
         if has_attempts && export.slug != value.slug {
-            return Err(StatusOrError::Status(Status::BadRequest))
+            return Err(StatusOrError::Status(Status::BadRequest));
         }
-        ExportConfig::update(&mut transaction, export_id, &value.slug, trigger, value.delay_minutes, value.export_volunteers, value.enabled, &value.volunteer_languages).await?;
+        ExportConfig::update(
+            &mut transaction,
+            export_id,
+            &value.slug,
+            trigger,
+            value.delay_minutes,
+            value.export_volunteers,
+            value.enabled,
+            &value.volunteer_languages,
+        )
+        .await?;
         transaction.commit().await?;
         if value.enabled {
             speedgaming_export::schedule_sync(pool.inner().clone(), http_client.inner().clone());
@@ -312,7 +366,10 @@ pub(crate) struct ActionForm {
     csrf: String,
 }
 
-#[rocket::post("/event/<series>/<event>/sg-export/<export_id>/delete", data = "<form>")]
+#[rocket::post(
+    "/event/<series>/<event>/sg-export/<export_id>/delete",
+    data = "<form>"
+)]
 pub(crate) async fn delete_export(
     pool: &State<PgPool>,
     me: User,
@@ -322,18 +379,25 @@ pub(crate) async fn delete_export(
     export_id: i32,
     form: Form<Contextual<'_, ActionForm>>,
 ) -> Result<Redirect, StatusOrError<Error>> {
-    if !me.is_global_admin() { return Err(StatusOrError::Status(Status::Forbidden)) }
+    if !me.is_global_admin() {
+        return Err(StatusOrError::Status(Status::Forbidden));
+    }
     let mut form = form.into_inner();
     form.verify(&csrf);
     if form.value.is_some() {
         let mut transaction = pool.begin().await?;
-        let export = ExportConfig::from_id_for_update(&mut transaction, export_id).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+        let export = ExportConfig::from_id_for_update(&mut transaction, export_id)
+            .await?
+            .ok_or(StatusOrError::Status(Status::NotFound))?;
         if export.series != series || export.event != event {
-            return Err(StatusOrError::Status(Status::NotFound))
+            return Err(StatusOrError::Status(Status::NotFound));
         }
-        sqlx::query!("UPDATE speedgaming_exports SET enabled = false, updated_at = NOW() WHERE id = $1", export_id)
-            .execute(&mut *transaction)
-            .await?;
+        sqlx::query!(
+            "UPDATE speedgaming_exports SET enabled = false, updated_at = NOW() WHERE id = $1",
+            export_id
+        )
+        .execute(&mut *transaction)
+        .await?;
         transaction.commit().await?;
 
         // Let an already-running request finish, while the disabled flag prevents it from
@@ -356,7 +420,9 @@ pub(crate) async fn sync_all(
     event: &str,
     form: Form<Contextual<'_, ActionForm>>,
 ) -> Result<Redirect, StatusOrError<Error>> {
-    if !me.is_global_admin() { return Err(StatusOrError::Status(Status::Forbidden)) }
+    if !me.is_global_admin() {
+        return Err(StatusOrError::Status(Status::Forbidden));
+    }
     let mut form = form.into_inner();
     form.verify(&csrf);
     if form.value.is_some() {

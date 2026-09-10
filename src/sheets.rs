@@ -5,11 +5,8 @@
 #![allow(unused)]
 
 use {
-    yup_oauth2::{
-        ServiceAccountAuthenticator,
-        read_service_account_key,
-    },
     crate::prelude::*,
+    yup_oauth2::{ServiceAccountAuthenticator, read_service_account_key},
 };
 
 /// from <https://developers.google.com/sheets/api/limits#quota>:
@@ -17,13 +14,21 @@ use {
 /// > Read requests […] Per minute per user per project […] 60
 const RATE_LIMIT: Duration = Duration::from_secs(1);
 
-static CACHE: LazyLock<Mutex<(Instant, HashMap<(String, String), (Instant, Vec<Vec<String>>)>)>> = LazyLock::new(|| Mutex::new((Instant::now() + RATE_LIMIT, HashMap::default())));
+static CACHE: LazyLock<
+    Mutex<(
+        Instant,
+        HashMap<(String, String), (Instant, Vec<Vec<String>>)>,
+    )>,
+> = LazyLock::new(|| Mutex::new((Instant::now() + RATE_LIMIT, HashMap::default())));
 
 #[derive(Debug, thiserror::Error)]
 enum UncachedError {
-    #[error(transparent)] OAuth(#[from] yup_oauth2::Error),
-    #[error(transparent)] Reqwest(#[from] reqwest::Error),
-    #[error(transparent)] Wheel(#[from] wheel::Error),
+    #[error(transparent)]
+    OAuth(#[from] yup_oauth2::Error),
+    #[error(transparent)]
+    Reqwest(#[from] reqwest::Error),
+    #[error(transparent)]
+    Wheel(#[from] wheel::Error),
     #[error("empty token is not valid")]
     EmptyToken,
     #[error("OAuth token is expired")]
@@ -61,31 +66,58 @@ enum CacheMissReason {
     Vacant,
 }
 
-pub(crate) async fn values(http_client: reqwest::Client, sheet_id: &str, range: &str) -> Result<Vec<Vec<String>>, Error> {
+pub(crate) async fn values(
+    http_client: reqwest::Client,
+    sheet_id: &str,
+    range: &str,
+) -> Result<Vec<Vec<String>>, Error> {
     #[derive(Deserialize)]
     struct ValueRange {
         values: Vec<Vec<String>>,
     }
 
-    async fn values_uncached(http_client: &reqwest::Client, sheet_id: &str, range: &str, next_request: &mut Instant) -> Result<Vec<Vec<String>>, UncachedError> {
+    async fn values_uncached(
+        http_client: &reqwest::Client,
+        sheet_id: &str,
+        range: &str,
+        next_request: &mut Instant,
+    ) -> Result<Vec<Vec<String>>, UncachedError> {
         sleep_until(*next_request).await;
-        let gsuite_secret = read_service_account_key("assets/google-client-secret.json").await.at("assets/google-client-secret.json")?;
+        let gsuite_secret = read_service_account_key("assets/google-client-secret.json")
+            .await
+            .at("assets/google-client-secret.json")?;
         let auth = ServiceAccountAuthenticator::builder(gsuite_secret)
-            .build().await.at_unknown()?;
-        let token = auth.token(&["https://www.googleapis.com/auth/spreadsheets"]).await?;
-        if token.is_expired() { return Err(UncachedError::TokenExpired) }
-        let Some(token) = token.token() else { return Err(UncachedError::EmptyToken) };
-        if token.is_empty() { return Err(UncachedError::EmptyToken) }
-        let ValueRange { values } = http_client.get(&format!("https://sheets.googleapis.com/v4/spreadsheets/{sheet_id}/values/{range}"))
+            .build()
+            .await
+            .at_unknown()?;
+        let token = auth
+            .token(&["https://www.googleapis.com/auth/spreadsheets"])
+            .await?;
+        if token.is_expired() {
+            return Err(UncachedError::TokenExpired);
+        }
+        let Some(token) = token.token() else {
+            return Err(UncachedError::EmptyToken);
+        };
+        if token.is_empty() {
+            return Err(UncachedError::EmptyToken);
+        }
+        let ValueRange { values } = http_client
+            .get(&format!(
+                "https://sheets.googleapis.com/v4/spreadsheets/{sheet_id}/values/{range}"
+            ))
             .bearer_auth(token)
             .query(&[
                 ("valueRenderOption", "FORMATTED_VALUE"),
                 ("dateTimeRenderOption", "FORMATTED_STRING"),
                 ("majorDimension", "ROWS"),
             ])
-            .send().await?
-            .detailed_error_for_status().await?
-            .json_with_text_in_error::<ValueRange>().await?;
+            .send()
+            .await?
+            .detailed_error_for_status()
+            .await?
+            .json_with_text_in_error::<ValueRange>()
+            .await?;
         *next_request = Instant::now() + RATE_LIMIT;
         Ok(values)
     }
@@ -128,9 +160,12 @@ static WRITE_RATE_LIMIT: LazyLock<Mutex<Instant>> = LazyLock::new(|| Mutex::new(
 /// Error type for write operations (no caching involved)
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum WriteError {
-    #[error(transparent)] OAuth(#[from] yup_oauth2::Error),
-    #[error(transparent)] Reqwest(#[from] reqwest::Error),
-    #[error(transparent)] Wheel(#[from] wheel::Error),
+    #[error(transparent)]
+    OAuth(#[from] yup_oauth2::Error),
+    #[error(transparent)]
+    Reqwest(#[from] reqwest::Error),
+    #[error(transparent)]
+    Wheel(#[from] wheel::Error),
     #[error("empty token is not valid")]
     EmptyToken,
     #[error("OAuth token is expired")]
@@ -138,7 +173,11 @@ pub(crate) enum WriteError {
     #[error("sheet not found: {0}")]
     SheetNotFound(String),
     #[error("sheets write to range {range} failed: {source}")]
-    Range { range: String, #[source] source: Box<WriteError> },
+    Range {
+        range: String,
+        #[source]
+        source: Box<WriteError>,
+    },
 }
 
 impl IsNetworkError for WriteError {
@@ -157,13 +196,25 @@ impl IsNetworkError for WriteError {
 
 /// Get OAuth token for Google Sheets API
 async fn get_auth_token() -> Result<String, WriteError> {
-    let gsuite_secret = read_service_account_key("assets/google-client-secret.json").await.at("assets/google-client-secret.json")?;
+    let gsuite_secret = read_service_account_key("assets/google-client-secret.json")
+        .await
+        .at("assets/google-client-secret.json")?;
     let auth = ServiceAccountAuthenticator::builder(gsuite_secret)
-        .build().await.at_unknown()?;
-    let token = auth.token(&["https://www.googleapis.com/auth/spreadsheets"]).await?;
-    if token.is_expired() { return Err(WriteError::TokenExpired) }
-    let Some(token_str) = token.token() else { return Err(WriteError::EmptyToken) };
-    if token_str.is_empty() { return Err(WriteError::EmptyToken) }
+        .build()
+        .await
+        .at_unknown()?;
+    let token = auth
+        .token(&["https://www.googleapis.com/auth/spreadsheets"])
+        .await?;
+    if token.is_expired() {
+        return Err(WriteError::TokenExpired);
+    }
+    let Some(token_str) = token.token() else {
+        return Err(WriteError::EmptyToken);
+    };
+    if token_str.is_empty() {
+        return Err(WriteError::EmptyToken);
+    }
     Ok(token_str.to_owned())
 }
 
@@ -311,8 +362,14 @@ fn extract_data_index(text: &str) -> Option<usize> {
 }
 
 fn with_range_context(err: WriteError, data: &[(String, Vec<Vec<String>>)]) -> WriteError {
-    match response_text(&err).and_then(extract_data_index).and_then(|idx| data.get(idx)) {
-        Some((range, _)) => WriteError::Range { range: range.clone(), source: Box::new(err) },
+    match response_text(&err)
+        .and_then(extract_data_index)
+        .and_then(|idx| data.get(idx))
+    {
+        Some((range, _)) => WriteError::Range {
+            range: range.clone(),
+            source: Box::new(err),
+        },
         None => err,
     }
 }
@@ -334,12 +391,19 @@ pub(crate) async fn batch_update_values(
         // just skip whichever individual range is protected.
         Err(err) if is_protected_cell_error(&err) => {
             for (range, values) in data {
-                match batch_update_values_raw(http_client, sheet_id, vec![(range.clone(), values)]).await {
+                match batch_update_values_raw(http_client, sheet_id, vec![(range.clone(), values)])
+                    .await
+                {
                     Ok(()) => {}
                     Err(err) if is_protected_cell_error(&err) => {
                         eprintln!("Sheets: skipping write to protected range {sheet_id} {range}");
                     }
-                    Err(err) => return Err(WriteError::Range { range, source: Box::new(err) }),
+                    Err(err) => {
+                        return Err(WriteError::Range {
+                            range,
+                            source: Box::new(err),
+                        });
+                    }
                 }
             }
             Ok(())
@@ -396,9 +460,13 @@ pub(crate) async fn get_sheet_id(
     sheet_name: &str,
 ) -> Result<i32, WriteError> {
     #[derive(Deserialize)]
-    struct SpreadsheetMeta { sheets: Vec<SheetItem> }
+    struct SpreadsheetMeta {
+        sheets: Vec<SheetItem>,
+    }
     #[derive(Deserialize)]
-    struct SheetItem { properties: SheetItemProperties }
+    struct SheetItem {
+        properties: SheetItemProperties,
+    }
     #[derive(Deserialize)]
     struct SheetItemProperties {
         #[serde(rename = "sheetId")]
@@ -438,15 +506,28 @@ pub(crate) async fn insert_row_at(
     let start_index = (row - 1) as i32;
 
     #[derive(Serialize)]
-    struct Request { requests: Vec<InsertDimReq> }
+    struct Request {
+        requests: Vec<InsertDimReq>,
+    }
     #[derive(Serialize)]
-    struct InsertDimReq { #[serde(rename = "insertDimension")] insert_dimension: InsertDimContent }
+    struct InsertDimReq {
+        #[serde(rename = "insertDimension")]
+        insert_dimension: InsertDimContent,
+    }
     #[derive(Serialize)]
     #[serde(rename_all = "camelCase")]
-    struct InsertDimContent { range: DimRange, inherit_from_before: bool }
+    struct InsertDimContent {
+        range: DimRange,
+        inherit_from_before: bool,
+    }
     #[derive(Serialize)]
     #[serde(rename_all = "camelCase")]
-    struct DimRange { sheet_id: i32, dimension: String, start_index: i32, end_index: i32 }
+    struct DimRange {
+        sheet_id: i32,
+        dimension: String,
+        start_index: i32,
+        end_index: i32,
+    }
 
     lock!(next_write = WRITE_RATE_LIMIT; {
         sleep_until(*next_write).await;
@@ -487,15 +568,27 @@ pub(crate) async fn delete_row_at(
     let start_index = (row - 1) as i32;
 
     #[derive(Serialize)]
-    struct Request { requests: Vec<DeleteDimReq> }
+    struct Request {
+        requests: Vec<DeleteDimReq>,
+    }
     #[derive(Serialize)]
-    struct DeleteDimReq { #[serde(rename = "deleteDimension")] delete_dimension: DeleteDimContent }
+    struct DeleteDimReq {
+        #[serde(rename = "deleteDimension")]
+        delete_dimension: DeleteDimContent,
+    }
     #[derive(Serialize)]
     #[serde(rename_all = "camelCase")]
-    struct DeleteDimContent { range: DimRange }
+    struct DeleteDimContent {
+        range: DimRange,
+    }
     #[derive(Serialize)]
     #[serde(rename_all = "camelCase")]
-    struct DimRange { sheet_id: i32, dimension: String, start_index: i32, end_index: i32 }
+    struct DimRange {
+        sheet_id: i32,
+        dimension: String,
+        start_index: i32,
+        end_index: i32,
+    }
 
     lock!(next_write = WRITE_RATE_LIMIT; {
         sleep_until(*next_write).await;
@@ -535,18 +628,32 @@ pub(crate) async fn sort_rows_by_column_a(
     let start_row_index = (start_row - 1) as i32;
 
     #[derive(Serialize)]
-    struct Request { requests: Vec<SortRangeReq> }
+    struct Request {
+        requests: Vec<SortRangeReq>,
+    }
     #[derive(Serialize)]
-    struct SortRangeReq { #[serde(rename = "sortRange")] sort_range: SortRangeContent }
+    struct SortRangeReq {
+        #[serde(rename = "sortRange")]
+        sort_range: SortRangeContent,
+    }
     #[derive(Serialize)]
     #[serde(rename_all = "camelCase")]
-    struct SortRangeContent { range: GridRange, sort_specs: Vec<SortSpec> }
+    struct SortRangeContent {
+        range: GridRange,
+        sort_specs: Vec<SortSpec>,
+    }
     #[derive(Serialize)]
     #[serde(rename_all = "camelCase")]
-    struct GridRange { sheet_id: i32, start_row_index: i32 }
+    struct GridRange {
+        sheet_id: i32,
+        start_row_index: i32,
+    }
     #[derive(Serialize)]
     #[serde(rename_all = "camelCase")]
-    struct SortSpec { dimension_index: i32, sort_order: String }
+    struct SortSpec {
+        dimension_index: i32,
+        sort_order: String,
+    }
 
     lock!(next_write = WRITE_RATE_LIMIT; {
         sleep_until(*next_write).await;

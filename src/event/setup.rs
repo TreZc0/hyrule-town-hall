@@ -1,31 +1,53 @@
+use rocket::response::content::RawText;
 use {
-    serenity::model::id::RoleId,
     crate::{
         discord_bot::ADMIN_USER,
         event::{Data, Tab, enter},
         prelude::*,
+        racetime_bot::VersionedBranch,
         user::DisplaySource,
     },
+    serenity::model::id::RoleId,
 };
-use rocket::response::content::RawText;
 
-async fn setup_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>, uri: Origin<'_>, csrf: Option<&CsrfToken>, event: Data<'_>, ctx: Context<'_>) -> Result<RawHtml<String>, event::Error> {
+async fn setup_form(
+    mut transaction: Transaction<'_, Postgres>,
+    me: Option<User>,
+    uri: Origin<'_>,
+    csrf: Option<&CsrfToken>,
+    event: Data<'_>,
+    ctx: Context<'_>,
+) -> Result<RawHtml<String>, event::Error> {
     let participant_role_id: Option<i64> = sqlx::query_scalar!(
         "SELECT id FROM discord_roles WHERE series = $1 AND event = $2 AND role IS NULL AND racetime_team IS NULL",
         event.series as _, &*event.event
     ).fetch_optional(&mut *transaction).await?;
-    let header = event.header(&mut transaction, me.as_ref(), Tab::Setup, false).await?;
+    let header = event
+        .header(&mut transaction, me.as_ref(), Tab::Setup, false)
+        .await?;
 
     // Load enter_flow, rando_version, seed_gen_type and seed_config as raw values for display in form
-    let (enter_flow_json, rando_version_json, seed_gen_type_str, seed_config_json) = sqlx::query!(r#"
+    let (enter_flow_json, rando_version_json, seed_gen_type_str, seed_config_json) = sqlx::query!(
+        r#"
         SELECT enter_flow AS "enter_flow: serde_json::Value",
                rando_version AS "rando_version: serde_json::Value",
                seed_gen_type,
                seed_config AS "seed_config: serde_json::Value"
         FROM events WHERE series = $1 AND event = $2
-    "#, event.series as _, &*event.event)
-    .fetch_one(&mut *transaction).await
-    .map(|row| (row.enter_flow, row.rando_version, row.seed_gen_type, row.seed_config))?;
+    "#,
+        event.series as _,
+        &*event.event
+    )
+    .fetch_one(&mut *transaction)
+    .await
+    .map(|row| {
+        (
+            row.enter_flow,
+            row.rando_version,
+            row.seed_gen_type,
+            row.seed_config,
+        )
+    })?;
 
     // Format enter_flow JSON for display
     let enter_flow_string = match &enter_flow_json {
@@ -64,71 +86,71 @@ async fn setup_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>
             html! {
                 article {
                     h2 : "Event Setup";
-                    
+
                     : full_form(uri!(post(event.series, &*event.event)), csrf, html! {
                         h3 : "Basic Event Information";
-                        
+
                         : form_field("display_name", &mut errors, html! {
                             label(for = "display_name") : "Display Name";
                             input(type = "text", id = "display_name", name = "display_name", value = ctx.field_value("display_name").unwrap_or(&event.display_name), style = "width: 100%; max-width: 600px;");
                         });
-                        
+
                         : form_field("start", &mut errors, html! {
                             label(for = "start") : "Start Time";
                             input(type = "datetime-local", id = "start", name = "start", value = ctx.field_value("start").unwrap_or(
                                 &event.start(&mut transaction).await?.map(|dt| dt.format("%Y-%m-%dT%H:%M").to_string()).unwrap_or_default()
                             ), style = "width: 100%; max-width: 600px;");
                         });
-                        
+
                         : form_field("end", &mut errors, html! {
                             label(for = "end") : "End Time";
                             input(type = "datetime-local", id = "end", name = "end", value = ctx.field_value("end").unwrap_or(
                                 &event.end.map(|dt| dt.format("%Y-%m-%dT%H:%M").to_string()).unwrap_or_default()
                             ), style = "width: 100%; max-width: 600px;");
                         });
-                        
+
                         : form_field("url", &mut errors, html! {
                             label(for = "url") : "Event URL (start.gg/Challonge)";
                             input(type = "url", id = "url", name = "url", value = ctx.field_value("url").unwrap_or(
                                 &event.url.as_ref().map(|u| u.to_string()).unwrap_or_default()
                             ), style = "width: 100%; max-width: 600px;");
                         });
-                        
+
                         : form_field("video_url", &mut errors, html! {
                             label(for = "video_url") : "Video URL";
                             input(type = "url", id = "video_url", name = "video_url", value = ctx.field_value("video_url").unwrap_or(
                                 &event.video_url.as_ref().map(|u| u.to_string()).unwrap_or_default()
                             ), style = "width: 100%; max-width: 600px;");
                         });
-                        
+
                         : form_field("discord_invite_url", &mut errors, html! {
                             label(for = "discord_invite_url") : "Discord Invite URL";
                             input(type = "url", id = "discord_invite_url", name = "discord_invite_url", value = ctx.field_value("discord_invite_url").unwrap_or(
                                 &event.discord_invite_url.as_ref().map(|u| u.to_string()).unwrap_or_default()
                             ), style = "width: 100%; max-width: 600px;");
                         });
-                        
+
                         : form_field("discord_guild", &mut errors, html! {
                             label(for = "discord_guild") : "Discord Guild ID";
                             input(type = "text", id = "discord_guild", name = "discord_guild", value = ctx.field_value("discord_guild").unwrap_or(
                                 &event.discord_guild.map(|g| g.get().to_string()).unwrap_or_default()
                             ), style = "width: 100%; max-width: 600px;");
                         });
-                        
+
                         : form_field("discord_race_room_channel", &mut errors, html! {
                             label(for = "discord_race_room_channel") : "Discord Race Room Channel ID";
                             input(type = "text", id = "discord_race_room_channel", name = "discord_race_room_channel", value = ctx.field_value("discord_race_room_channel").unwrap_or(
                                 &event.discord_race_room_channel.map(|c| c.get().to_string()).unwrap_or_default()
                             ), style = "width: 100%; max-width: 600px;");
                         });
-                        
+
                         : form_field("discord_race_results_channel", &mut errors, html! {
                             label(for = "discord_race_results_channel") : "Discord Race Results Channel ID";
                             input(type = "text", id = "discord_race_results_channel", name = "discord_race_results_channel", value = ctx.field_value("discord_race_results_channel").unwrap_or(
                                 &event.discord_race_results_channel.map(|c| c.get().to_string()).unwrap_or_default()
                             ), style = "width: 100%; max-width: 600px;");
                         });
-                        
+
                         : form_field("discord_volunteer_info_channel", &mut errors, html! {
                             label(for = "discord_volunteer_info_channel") : "Discord Volunteer Info Channel ID";
                             input(type = "text", id = "discord_volunteer_info_channel", name = "discord_volunteer_info_channel", value = ctx.field_value("discord_volunteer_info_channel").unwrap_or(
@@ -361,11 +383,22 @@ async fn setup_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>
                             label(class = "help") : " (JSON configuration for generic draft modes. Leave empty if not applicable.)";
                         });
 
+                        : form_field("qualifier_mode", &mut errors, html! {
+                            label(for = "qualifier_mode") : "Qualification method";
+                            select(id = "qualifier_mode", name = "qualifier_mode") {
+                                @for (slug, label) in [("none", "No qualification"), ("rank", "Stored qualifier ranks"), ("single", "Single async qualifier"), ("score", "Configured scoring"), ("pooled_by_mode", "Pooled by mode")] {
+                                    option(value = slug, selected? = ctx.field_value("qualifier_mode").unwrap_or(&event.qualifier_mode) == slug) : label;
+                                }
+                            }
+                            label(class = "help") : "Choose how entrants qualify. Stored ranks and async submissions only affect qualification when their method is selected. Configured scoring combines live qualifier races and qualifier async results.";
+                        });
+
                         : form_field("qualifier_score_kind", &mut errors, html! {
                             label(for = "qualifier_score_kind") : "Qualifier Score Kind";
                             select(id = "qualifier_score_kind", name = "qualifier_score_kind", style = "width: 100%; max-width: 600px;") {
                                 option(value = "", selected? = ctx.field_value("qualifier_score_kind").map_or(event.qualifier_score_kind_str.is_none(), |v| v.is_empty())) : "None";
                                 @for (slug, label) in &[
+                                    ("time_relative", "Time relative to par (configurable)"),
                                     ("standard", "Standard"),
                                     ("sgl_2023_online", "SGL 2023 Online"),
                                     ("sgl_2024_online", "SGL 2024 Online"),
@@ -376,6 +409,14 @@ async fn setup_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>
                                     option(value = slug, selected? = ctx.field_value("qualifier_score_kind").map_or(event.qualifier_score_kind_str.as_deref() == Some(slug), |v| v == *slug)) : *label;
                                 }
                             }
+                        });
+
+                        : form_field("qualifier_score_config", &mut errors, html! {
+                            label(for = "qualifier_score_config") : "Qualifier scoring parameters (JSON)";
+                            textarea(id = "qualifier_score_config", name = "qualifier_score_config", rows = "6", style = "font-family: monospace; width: 100%; max-width: 800px;") {
+                                : ctx.field_value("qualifier_score_config").map(str::to_owned).unwrap_or_else(|| event.qualifier_score_config.as_ref().map(|v| serde_json::to_string_pretty(v).unwrap_or_default()).unwrap_or_default());
+                            }
+                            label(class = "help") : "Leave empty to preserve the selected scoring strategy's defaults. Example: {\"par_finishers\":4,\"required_finishes\":3,\"counted_attempts\":6,\"best_results\":3}. Optional formula fields: scale, offset, minimum, maximum, rounding (none/floor/nearest), aggregation (sum/average). Average divides by best_results, counting missing results as zero.";
                         });
 
                         : form_field("is_single_race", &mut errors, html! {
@@ -439,7 +480,7 @@ async fn setup_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>
                         : form_field("is_live_event", &mut errors, html! {
                             input(type = "checkbox", id = "is_live_event", name = "is_live_event", checked? = ctx.field_value("is_live_event").map_or(event.is_live_event, |value| value == "on"));
                             label(for = "is_live_event") : "Is Live Event";
-                            label(class = "help") : " (When enabled, rooms are created for scheduled races. Used for SpeedGaming live broadcasts.)";
+                            label(class = "help") : " (In-person event: scheduled races after the event starts send notifications instead of creating racetime.gg rooms.)";
                         });
 
                         h3 : "Seed Generation";
@@ -478,9 +519,9 @@ async fn setup_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>
                             }
                         });
                     }, errors.clone(), "Save Basic Info");
-                    
+
                     h3 : "Enter Flow Configuration";
-                    
+
                     : full_form(uri!(update_enter_flow(event.series, &*event.event)), csrf, html! {
                         : form_field("enter_flow_json", &mut errors, html! {
                             label(for = "enter_flow_json") : "Enter Flow JSON";
@@ -488,7 +529,7 @@ async fn setup_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>
                                 : ctx.field_value("enter_flow_json").unwrap_or(&enter_flow_string);
                             }
                             p(class = "help") : "Configure the signup requirements as JSON. Leave empty for no requirements.";
-                            
+
                             details {
                                 summary : "Reference — all requirement types";
                                 div(style = "margin-top: 10px; padding: 15px; background: #f5f5f5; border-radius: 6px; border: 1px solid #ddd;") {
@@ -578,7 +619,7 @@ async fn setup_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>
                                     h4(style = "margin-top: 20px; color: #333;") : "rules — must agree to event rules:";
                                     pre(style = "font-size: 13px; line-height: 1.4; background: #2d2d2d; color: #f8f8f2; padding: 12px; border-radius: 4px; overflow-x: auto;") {
                                         : r#"{ "type": "rules" }
-{ "type": "rules", "document": "https://example.com/rules.pdf" }"#;
+            { "type": "rules", "document": "https://example.com/rules.pdf" }"#;
                                     }
 
                                     h4(style = "margin-top: 20px; color: #333;") : "poll — must complete a specific poll:";
@@ -589,7 +630,7 @@ async fn setup_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>
                                     h4(style = "margin-top: 20px; color: #333;") : "restreamConsent — restream opt-in/out:";
                                     pre(style = "font-size: 13px; line-height: 1.4; background: #2d2d2d; color: #f8f8f2; padding: 12px; border-radius: 4px; overflow-x: auto;") {
                                         : r#"{ "type": "restreamConsent", "optional": false }
-{ "type": "restreamConsent", "optional": true, "note": "Declining means no restream for your races." }"#;
+            { "type": "restreamConsent", "optional": true, "note": "Declining means no restream for your races." }"#;
                                     }
 
                                     h4(style = "margin-top: 20px; color: #333;") : "qualifier — async or live qualifier window:";
@@ -754,9 +795,9 @@ async fn setup_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>
                             }
                         });
                     }, errors.clone(), "Save Enter Flow");
-                    
+
                     h3 : "Organizer Management";
-                    
+
                     : full_form(uri!(add_organizer(event.series, &*event.event)), csrf, html! {
                         : form_field("organizer", &mut errors, html! {
                             label(for = "organizer") : "Add Organizer";
@@ -766,7 +807,7 @@ async fn setup_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>
                             }
                         });
                     }, errors.clone(), "Add Organizer");
-                    
+
                     h3 : "Current Organizers";
                     @if let Ok(organizers) = event.organizers(&mut transaction).await {
                         @if organizers.is_empty() {
@@ -823,19 +864,47 @@ async fn setup_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>
             }
         }
     };
-    
-    Ok(page(transaction, &me, &uri, PageStyle { chests: event.chests().await?, ..PageStyle::default() }, &format!("Setup — {}", event.display_name), html! {
-        : header;
-        : content;
-        script(src = static_url!("user-search.js")) {}
-    }).await?)
+
+    Ok(page(
+        transaction,
+        &me,
+        &uri,
+        PageStyle {
+            chests: event.chests().await?,
+            ..PageStyle::default()
+        },
+        &format!("Setup — {}", event.display_name),
+        html! {
+            : header;
+            : content;
+            script(src = static_url!("user-search.js")) {}
+        },
+    )
+    .await?)
 }
 
 #[rocket::get("/event/<series>/<event>/setup")]
-pub(crate) async fn get(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: String) -> Result<RawHtml<String>, StatusOrError<event::Error>> {
+pub(crate) async fn get(
+    pool: &State<PgPool>,
+    me: Option<User>,
+    uri: Origin<'_>,
+    csrf: Option<CsrfToken>,
+    series: Series,
+    event: String,
+) -> Result<RawHtml<String>, StatusOrError<event::Error>> {
     let mut transaction = pool.begin().await?;
-    let event_data = Data::new(&mut transaction, series, &event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
-    Ok(setup_form(transaction, me, uri, csrf.as_ref(), event_data, Context::default()).await?)
+    let event_data = Data::new(&mut transaction, series, &event)
+        .await?
+        .ok_or(StatusOrError::Status(Status::NotFound))?;
+    Ok(setup_form(
+        transaction,
+        me,
+        uri,
+        csrf.as_ref(),
+        event_data,
+        Context::default(),
+    )
+    .await?)
 }
 
 #[derive(FromForm, CsrfForm)]
@@ -882,7 +951,9 @@ pub(crate) struct SetupForm {
     racetime_goal_slug: Option<String>,
     draft_kind: Option<String>,
     draft_config: Option<String>,
+    qualifier_mode: String,
     qualifier_score_kind: Option<String>,
+    qualifier_score_config: Option<String>,
     is_single_race: bool,
     hide_entrants: bool,
     #[field(default = 15)]
@@ -901,30 +972,58 @@ pub(crate) struct SetupForm {
 }
 
 #[rocket::post("/event/<series>/<event>/setup", data = "<form>")]
-pub(crate) async fn post(pool: &State<PgPool>, discord_ctx: &State<RwFuture<DiscordCtx>>, me: User, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, form: Form<Contextual<'_, SetupForm>>) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
+pub(crate) async fn post(
+    pool: &State<PgPool>,
+    discord_ctx: &State<RwFuture<DiscordCtx>>,
+    me: User,
+    uri: Origin<'_>,
+    csrf: Option<CsrfToken>,
+    series: Series,
+    event: &str,
+    form: Form<Contextual<'_, SetupForm>>,
+) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
     let mut transaction = pool.begin().await?;
-    let event_data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+    let event_data = Data::new(&mut transaction, series, event)
+        .await?
+        .ok_or(StatusOrError::Status(Status::NotFound))?;
     let mut form = form.into_inner();
     form.verify(&csrf);
-    
+
     Ok(if let Some(ref value) = form.value {
         if event_data.is_ended() {
-            form.context.push_error(form::Error::validation("This event has ended and can no longer be configured"));
+            form.context.push_error(form::Error::validation(
+                "This event has ended and can no longer be configured",
+            ));
         }
         if !me.is_global_admin() {
-            form.context.push_error(form::Error::validation("You must be a global admin to configure this event."));
+            form.context.push_error(form::Error::validation(
+                "You must be a global admin to configure this event.",
+            ));
         }
-        
+
         if form.context.errors().next().is_some() {
-            RedirectOrContent::Content(setup_form(transaction, Some(me), uri, csrf.as_ref(), event_data, form.context).await?)
+            RedirectOrContent::Content(
+                setup_form(
+                    transaction,
+                    Some(me),
+                    uri,
+                    csrf.as_ref(),
+                    event_data,
+                    form.context,
+                )
+                .await?,
+            )
         } else {
             // Parse start time (datetime-local sends YYYY-MM-DDTHH:MM format)
             let start = if let Some(start_str) = &value.start {
                 if !start_str.is_empty() {
                     match NaiveDateTime::parse_from_str(start_str, "%Y-%m-%dT%H:%M") {
-                        Ok(naive_dt) => Some(DateTime::<Utc>::from_naive_utc_and_offset(naive_dt, Utc)),
+                        Ok(naive_dt) => {
+                            Some(DateTime::<Utc>::from_naive_utc_and_offset(naive_dt, Utc))
+                        }
                         Err(_) => {
-                            form.context.push_error(form::Error::validation("Invalid start time format"));
+                            form.context
+                                .push_error(form::Error::validation("Invalid start time format"));
                             None
                         }
                     }
@@ -939,9 +1038,12 @@ pub(crate) async fn post(pool: &State<PgPool>, discord_ctx: &State<RwFuture<Disc
             let end = if let Some(end_str) = &value.end {
                 if !end_str.is_empty() {
                     match NaiveDateTime::parse_from_str(end_str, "%Y-%m-%dT%H:%M") {
-                        Ok(naive_dt) => Some(DateTime::<Utc>::from_naive_utc_and_offset(naive_dt, Utc)),
+                        Ok(naive_dt) => {
+                            Some(DateTime::<Utc>::from_naive_utc_and_offset(naive_dt, Utc))
+                        }
                         Err(_) => {
-                            form.context.push_error(form::Error::validation("Invalid end time format"));
+                            form.context
+                                .push_error(form::Error::validation("Invalid end time format"));
                             None
                         }
                     }
@@ -951,14 +1053,15 @@ pub(crate) async fn post(pool: &State<PgPool>, discord_ctx: &State<RwFuture<Disc
             } else {
                 None
             };
-            
+
             // Parse URLs
             let url = if let Some(url_str) = &value.url {
                 if !url_str.is_empty() {
                     match url_str.parse::<Url>() {
                         Ok(u) => Some(u),
                         Err(_) => {
-                            form.context.push_error(form::Error::validation("Invalid URL format"));
+                            form.context
+                                .push_error(form::Error::validation("Invalid URL format"));
                             None
                         }
                     }
@@ -968,13 +1071,14 @@ pub(crate) async fn post(pool: &State<PgPool>, discord_ctx: &State<RwFuture<Disc
             } else {
                 None
             };
-            
+
             let video_url = if let Some(video_url_str) = &value.video_url {
                 if !video_url_str.is_empty() {
                     match video_url_str.parse::<Url>() {
                         Ok(u) => Some(u),
                         Err(_) => {
-                            form.context.push_error(form::Error::validation("Invalid video URL format"));
+                            form.context
+                                .push_error(form::Error::validation("Invalid video URL format"));
                             None
                         }
                     }
@@ -984,13 +1088,16 @@ pub(crate) async fn post(pool: &State<PgPool>, discord_ctx: &State<RwFuture<Disc
             } else {
                 None
             };
-            
-            let discord_invite_url = if let Some(discord_invite_url_str) = &value.discord_invite_url {
+
+            let discord_invite_url = if let Some(discord_invite_url_str) = &value.discord_invite_url
+            {
                 if !discord_invite_url_str.is_empty() {
                     match discord_invite_url_str.parse::<Url>() {
                         Ok(u) => Some(u),
                         Err(_) => {
-                            form.context.push_error(form::Error::validation("Invalid Discord invite URL format"));
+                            form.context.push_error(form::Error::validation(
+                                "Invalid Discord invite URL format",
+                            ));
                             None
                         }
                     }
@@ -1000,62 +1107,15 @@ pub(crate) async fn post(pool: &State<PgPool>, discord_ctx: &State<RwFuture<Disc
             } else {
                 None
             };
-            
+
             // Parse Discord IDs
             let discord_guild = if let Some(guild_str) = &value.discord_guild {
                 if !guild_str.is_empty() {
                     match guild_str.parse::<u64>() {
                         Ok(id) => Some(GuildId::new(id)),
                         Err(_) => {
-                            form.context.push_error(form::Error::validation("Invalid Discord guild ID"));
-                            None
-                        }
-                    }
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
-            
-            let discord_race_room_channel = if let Some(channel_str) = &value.discord_race_room_channel {
-                if !channel_str.is_empty() {
-                    match channel_str.parse::<u64>() {
-                        Ok(id) => Some(ChannelId::new(id)),
-                        Err(_) => {
-                            form.context.push_error(form::Error::validation("Invalid Discord channel ID"));
-                            None
-                        }
-                    }
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
-            
-            let discord_race_results_channel = if let Some(channel_str) = &value.discord_race_results_channel {
-                if !channel_str.is_empty() {
-                    match channel_str.parse::<u64>() {
-                        Ok(id) => Some(ChannelId::new(id)),
-                        Err(_) => {
-                            form.context.push_error(form::Error::validation("Invalid Discord channel ID"));
-                            None
-                        }
-                    }
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
-            
-            let discord_volunteer_info_channel = if let Some(channel_str) = &value.discord_volunteer_info_channel {
-                if !channel_str.is_empty() {
-                    match channel_str.parse::<u64>() {
-                        Ok(id) => Some(ChannelId::new(id)),
-                        Err(_) => {
-                            form.context.push_error(form::Error::validation("Invalid Discord channel ID"));
+                            form.context
+                                .push_error(form::Error::validation("Invalid Discord guild ID"));
                             None
                         }
                     }
@@ -1066,12 +1126,15 @@ pub(crate) async fn post(pool: &State<PgPool>, discord_ctx: &State<RwFuture<Disc
                 None
             };
 
-            let discord_organizer_channel = if let Some(channel_str) = &value.discord_organizer_channel {
+            let discord_race_room_channel = if let Some(channel_str) =
+                &value.discord_race_room_channel
+            {
                 if !channel_str.is_empty() {
                     match channel_str.parse::<u64>() {
                         Ok(id) => Some(ChannelId::new(id)),
                         Err(_) => {
-                            form.context.push_error(form::Error::validation("Invalid Discord organizer channel ID"));
+                            form.context
+                                .push_error(form::Error::validation("Invalid Discord channel ID"));
                             None
                         }
                     }
@@ -1082,12 +1145,15 @@ pub(crate) async fn post(pool: &State<PgPool>, discord_ctx: &State<RwFuture<Disc
                 None
             };
 
-            let discord_scheduling_channel = if let Some(channel_str) = &value.discord_scheduling_channel {
+            let discord_race_results_channel = if let Some(channel_str) =
+                &value.discord_race_results_channel
+            {
                 if !channel_str.is_empty() {
                     match channel_str.parse::<u64>() {
                         Ok(id) => Some(ChannelId::new(id)),
                         Err(_) => {
-                            form.context.push_error(form::Error::validation("Invalid Discord scheduling channel ID"));
+                            form.context
+                                .push_error(form::Error::validation("Invalid Discord channel ID"));
                             None
                         }
                     }
@@ -1097,13 +1163,72 @@ pub(crate) async fn post(pool: &State<PgPool>, discord_ctx: &State<RwFuture<Disc
             } else {
                 None
             };
+
+            let discord_volunteer_info_channel = if let Some(channel_str) =
+                &value.discord_volunteer_info_channel
+            {
+                if !channel_str.is_empty() {
+                    match channel_str.parse::<u64>() {
+                        Ok(id) => Some(ChannelId::new(id)),
+                        Err(_) => {
+                            form.context
+                                .push_error(form::Error::validation("Invalid Discord channel ID"));
+                            None
+                        }
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            let discord_organizer_channel =
+                if let Some(channel_str) = &value.discord_organizer_channel {
+                    if !channel_str.is_empty() {
+                        match channel_str.parse::<u64>() {
+                            Ok(id) => Some(ChannelId::new(id)),
+                            Err(_) => {
+                                form.context.push_error(form::Error::validation(
+                                    "Invalid Discord organizer channel ID",
+                                ));
+                                None
+                            }
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
+            let discord_scheduling_channel =
+                if let Some(channel_str) = &value.discord_scheduling_channel {
+                    if !channel_str.is_empty() {
+                        match channel_str.parse::<u64>() {
+                            Ok(id) => Some(ChannelId::new(id)),
+                            Err(_) => {
+                                form.context.push_error(form::Error::validation(
+                                    "Invalid Discord scheduling channel ID",
+                                ));
+                                None
+                            }
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
 
             let discord_async_channel = if let Some(channel_str) = &value.discord_async_channel {
                 if !channel_str.is_empty() {
                     match channel_str.parse::<u64>() {
                         Ok(id) => Some(ChannelId::new(id)),
                         Err(_) => {
-                            form.context.push_error(form::Error::validation("Invalid Discord async channel ID"));
+                            form.context.push_error(form::Error::validation(
+                                "Invalid Discord async channel ID",
+                            ));
                             None
                         }
                     }
@@ -1119,7 +1244,9 @@ pub(crate) async fn post(pool: &State<PgPool>, discord_ctx: &State<RwFuture<Disc
                     match role_str.parse::<u64>() {
                         Ok(id) => Some(RoleId::new(id)),
                         Err(_) => {
-                            form.context.push_error(form::Error::validation("Invalid Discord participant role ID"));
+                            form.context.push_error(form::Error::validation(
+                                "Invalid Discord participant role ID",
+                            ));
                             None
                         }
                     }
@@ -1131,23 +1258,46 @@ pub(crate) async fn post(pool: &State<PgPool>, discord_ctx: &State<RwFuture<Disc
             };
 
             // Handle optional string fields (empty string -> None)
-            let short_name = value.short_name.as_ref().and_then(|s| if s.is_empty() { None } else { Some(s.clone()) });
-            let challonge_community = value.challonge_community.as_ref().and_then(|s| if s.is_empty() { None } else { Some(s.clone()) });
+            let short_name = value
+                .short_name
+                .as_ref()
+                .and_then(|s| if s.is_empty() { None } else { Some(s.clone()) });
+            let challonge_community = value
+                .challonge_community
+                .as_ref()
+                .and_then(|s| if s.is_empty() { None } else { Some(s.clone()) });
 
             // Parse new racetime bot config fields
-            let racetime_goal_slug = value.racetime_goal_slug.as_ref().and_then(|s| if s.is_empty() { None } else { Some(s.clone()) });
-            let draft_kind = value.draft_kind.as_ref().and_then(|s| if s.is_empty() { None } else { Some(s.clone()) });
-            let qualifier_score_kind = value.qualifier_score_kind.as_ref().and_then(|s| if s.is_empty() { None } else { Some(s.clone()) });
-            let seed_gen_type = value.seed_gen_type.as_ref().and_then(|s| if s.is_empty() { None } else { Some(s.clone()) });
+            let racetime_goal_slug = value
+                .racetime_goal_slug
+                .as_ref()
+                .and_then(|s| if s.is_empty() { None } else { Some(s.clone()) });
+            let draft_kind = value
+                .draft_kind
+                .as_ref()
+                .and_then(|s| if s.is_empty() { None } else { Some(s.clone()) });
+            let qualifier_score_kind = value
+                .qualifier_score_kind
+                .as_ref()
+                .and_then(|s| if s.is_empty() { None } else { Some(s.clone()) });
+            let seed_gen_type = value
+                .seed_gen_type
+                .as_ref()
+                .and_then(|s| if s.is_empty() { None } else { Some(s.clone()) });
 
-            let draft_config_json: Option<serde_json::Value> = if let Some(ref dc_str) = value.draft_config {
+            let draft_config_json: Option<serde_json::Value> = if let Some(ref dc_str) =
+                value.draft_config
+            {
                 if dc_str.trim().is_empty() {
                     None
                 } else {
                     match serde_json::from_str(dc_str) {
                         Ok(v) => Some(v),
                         Err(e) => {
-                            form.context.push_error(form::Error::validation(format!("Invalid draft config JSON: {e}")).with_name("draft_config"));
+                            form.context.push_error(
+                                form::Error::validation(format!("Invalid draft config JSON: {e}"))
+                                    .with_name("draft_config"),
+                            );
                             None
                         }
                     }
@@ -1156,14 +1306,19 @@ pub(crate) async fn post(pool: &State<PgPool>, discord_ctx: &State<RwFuture<Disc
                 None
             };
 
-            let seed_config_json: Option<serde_json::Value> = if let Some(ref sc_str) = value.seed_config {
+            let seed_config_json: Option<serde_json::Value> = if let Some(ref sc_str) =
+                value.seed_config
+            {
                 if sc_str.trim().is_empty() {
                     None
                 } else {
                     match serde_json::from_str(sc_str) {
                         Ok(v) => Some(v),
                         Err(e) => {
-                            form.context.push_error(form::Error::validation(format!("Invalid seed config JSON: {e}")).with_name("seed_config"));
+                            form.context.push_error(
+                                form::Error::validation(format!("Invalid seed config JSON: {e}"))
+                                    .with_name("seed_config"),
+                            );
                             None
                         }
                     }
@@ -1179,7 +1334,10 @@ pub(crate) async fn post(pool: &State<PgPool>, discord_ctx: &State<RwFuture<Disc
                     match sdo_str.trim().parse::<i32>() {
                         Ok(v) => Some(v),
                         Err(_) => {
-                            form.context.push_error(form::Error::validation("Invalid start delay open value").with_name("start_delay_open"));
+                            form.context.push_error(
+                                form::Error::validation("Invalid start delay open value")
+                                    .with_name("start_delay_open"),
+                            );
                             None
                         }
                     }
@@ -1194,7 +1352,8 @@ pub(crate) async fn post(pool: &State<PgPool>, discord_ctx: &State<RwFuture<Disc
                     match enter_url_str.parse::<Url>() {
                         Ok(u) => Some(u),
                         Err(_) => {
-                            form.context.push_error(form::Error::validation("Invalid enter URL format"));
+                            form.context
+                                .push_error(form::Error::validation("Invalid enter URL format"));
                             None
                         }
                     }
@@ -1210,7 +1369,8 @@ pub(crate) async fn post(pool: &State<PgPool>, discord_ctx: &State<RwFuture<Disc
                     match teams_url_str.parse::<Url>() {
                         Ok(u) => Some(u),
                         Err(_) => {
-                            form.context.push_error(form::Error::validation("Invalid teams URL format"));
+                            form.context
+                                .push_error(form::Error::validation("Invalid teams URL format"));
                             None
                         }
                     }
@@ -1229,7 +1389,8 @@ pub(crate) async fn post(pool: &State<PgPool>, discord_ctx: &State<RwFuture<Disc
                 "pictionary" => TeamConfig::Pictionary,
                 "multiworld" => TeamConfig::Multiworld,
                 _ => {
-                    form.context.push_error(form::Error::validation("Invalid team configuration"));
+                    form.context
+                        .push_error(form::Error::validation("Invalid team configuration"));
                     TeamConfig::Solo // default fallback
                 }
             };
@@ -1241,39 +1402,123 @@ pub(crate) async fn post(pool: &State<PgPool>, discord_ctx: &State<RwFuture<Disc
                 "de" => German,
                 "pt" => Portuguese,
                 _ => {
-                    form.context.push_error(form::Error::validation("Invalid language"));
+                    form.context
+                        .push_error(form::Error::validation("Invalid language"));
                     English // default fallback
                 }
             };
 
             // Parse durations
-            let open_stream_delay = if let Some(time) = parse_duration(&value.open_stream_delay, None) {
-                Some(time)
-            } else {
-                form.context.push_error(form::Error::validation("Duration must be formatted like '1:23:45' or '1h 23m 45s'.").with_name("open_stream_delay"));
-                None
-            };
+            let open_stream_delay =
+                if let Some(time) = parse_duration(&value.open_stream_delay, None) {
+                    Some(time)
+                } else {
+                    form.context.push_error(
+                        form::Error::validation(
+                            "Duration must be formatted like '1:23:45' or '1h 23m 45s'.",
+                        )
+                        .with_name("open_stream_delay"),
+                    );
+                    None
+                };
 
-            let invitational_stream_delay = if let Some(time) = parse_duration(&value.invitational_stream_delay, None) {
-                Some(time)
-            } else {
-                form.context.push_error(form::Error::validation("Duration must be formatted like '1:23:45' or '1h 23m 45s'.").with_name("invitational_stream_delay"));
-                None
-            };
+            let invitational_stream_delay =
+                if let Some(time) = parse_duration(&value.invitational_stream_delay, None) {
+                    Some(time)
+                } else {
+                    form.context.push_error(
+                        form::Error::validation(
+                            "Duration must be formatted like '1:23:45' or '1h 23m 45s'.",
+                        )
+                        .with_name("invitational_stream_delay"),
+                    );
+                    None
+                };
 
             let rando_version = match value.rando_version_json.as_deref() {
                 None | Some("") => Ok(None),
-                Some(s) => match serde_json::from_str::<serde_json::Value>(s) {
-                    Ok(json) => Ok(Some(json)),
-                    Err(_) => {
-                        form.context.push_error(form::Error::validation("Invalid JSON format for Randomizer Version").with_name("rando_version_json"));
+                Some(s) => match serde_json::from_str::<VersionedBranch>(s) {
+                    Ok(_) => Ok(Some(
+                        serde_json::from_str::<serde_json::Value>(s)
+                            .expect("validated randomizer version is valid JSON"),
+                    )),
+                    Err(error) => {
+                        form.context.push_error(
+                            form::Error::validation(format!("Invalid randomizer version: {error}"))
+                                .with_name("rando_version_json"),
+                        );
                         Err(())
                     }
                 },
             };
 
+            if let Err(error) = event::configuration::validate_qualification(
+                &value.qualifier_mode,
+                qualifier_score_kind.as_deref(),
+            ) {
+                form.context
+                    .push_error(form::Error::validation(error).with_name("qualifier_mode"));
+            }
+            let qualifier_score_config = parse_score_config(
+                value.qualifier_score_config.as_deref(),
+                qualifier_score_kind.as_deref(),
+                &mut form.context,
+            );
+            for (field, result) in [
+                (
+                    "seed_config",
+                    event::configuration::validate_seed(
+                        seed_gen_type.as_deref(),
+                        seed_config_json.as_ref(),
+                    ),
+                ),
+                (
+                    "preroll_mode",
+                    event::configuration::validate_seed_policies(
+                        &value.preroll_mode,
+                        &value.spoiler_unlock,
+                        seed_gen_type.as_deref(),
+                    ),
+                ),
+                (
+                    "draft_config",
+                    event::configuration::validate_draft(
+                        draft_kind.as_deref(),
+                        draft_config_json.as_ref(),
+                        seed_gen_type.as_deref(),
+                        seed_config_json.as_ref(),
+                        Some(value.default_game_count),
+                    ),
+                ),
+                (
+                    "start_delay",
+                    event::configuration::validate_start_delay(value.start_delay),
+                ),
+                (
+                    "start_delay_open",
+                    start_delay_open
+                        .map(event::configuration::validate_start_delay)
+                        .unwrap_or(Ok(())),
+                ),
+            ] {
+                if let Err(error) = result {
+                    form.context
+                        .push_error(form::Error::validation(error).with_name(field));
+                }
+            }
+
             if form.context.errors().next().is_some() {
-                return Ok(RedirectOrContent::Content(setup_form(transaction, Some(me), uri, csrf.as_ref(), event_data, form.context).await?));
+                return Ok(RedirectOrContent::Content(
+                    setup_form(
+                        transaction,
+                        Some(me),
+                        uri,
+                        csrf.as_ref(),
+                        event_data,
+                        form.context,
+                    )
+                    .await?,
+                ));
             }
 
             // Update database
@@ -1354,12 +1599,30 @@ pub(crate) async fn post(pool: &State<PgPool>, discord_ctx: &State<RwFuture<Disc
                 seed_config_json as _,
             ).execute(&mut *transaction).await?;
 
+            mirror_twwr_permalink(&mut transaction, event_data.series, &event_data.event).await?;
+            save_score_config(
+                &mut transaction,
+                event_data.series,
+                &event_data.event,
+                qualifier_score_config,
+            )
+            .await?;
+            save_qualifier_mode(
+                &mut transaction,
+                event_data.series,
+                &event_data.event,
+                &value.qualifier_mode,
+            )
+            .await?;
+
             sqlx::query!(
                 "UPDATE events SET auto_start_with_restream = $1 WHERE series = $2 AND event = $3",
                 value.auto_start_with_restream,
                 event_data.series as _,
                 &event_data.event,
-            ).execute(&mut *transaction).await?;
+            )
+            .execute(&mut *transaction)
+            .await?;
 
             let old_participant_role_id: Option<i64> = sqlx::query_scalar!(
                 "SELECT id FROM discord_roles WHERE series = $1 AND event = $2 AND role IS NULL AND racetime_team IS NULL",
@@ -1379,7 +1642,9 @@ pub(crate) async fn post(pool: &State<PgPool>, discord_ctx: &State<RwFuture<Disc
                     guild.get() as i64,
                     event_data.series as _,
                     &event_data.event
-                ).execute(&mut *transaction).await?;
+                )
+                .execute(&mut *transaction)
+                .await?;
                 if participant_role_changed {
                     let entrant_discord_ids = sqlx::query_scalar!(
                         r#"SELECT DISTINCT u.discord_id AS "discord_id!: PgSnowflake<UserId>"
@@ -1389,8 +1654,11 @@ pub(crate) async fn post(pool: &State<PgPool>, discord_ctx: &State<RwFuture<Disc
                     WHERE t.series = $1 AND t.event = $2
                     AND tm.status IN ('created', 'confirmed')
                     AND u.discord_id IS NOT NULL"#,
-                        event_data.series as _, &event_data.event
-                    ).fetch_all(&mut *transaction).await?;
+                        event_data.series as _,
+                        &event_data.event
+                    )
+                    .fetch_all(&mut *transaction)
+                    .await?;
                     let discord_ctx_for_spawn = discord_ctx.inner().clone();
                     let display_name = event_data.display_name.clone();
                     transaction.commit().await?;
@@ -1423,7 +1691,9 @@ pub(crate) async fn post(pool: &State<PgPool>, discord_ctx: &State<RwFuture<Disc
                             }
                         }
                     });
-                    return Ok(RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event)))));
+                    return Ok(RedirectOrContent::Redirect(Redirect::to(uri!(get(
+                        series, event
+                    )))));
                 }
             }
 
@@ -1431,7 +1701,17 @@ pub(crate) async fn post(pool: &State<PgPool>, discord_ctx: &State<RwFuture<Disc
             RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event))))
         }
     } else {
-        RedirectOrContent::Content(setup_form(transaction, Some(me), uri, csrf.as_ref(), event_data, form.context).await?)
+        RedirectOrContent::Content(
+            setup_form(
+                transaction,
+                Some(me),
+                uri,
+                csrf.as_ref(),
+                event_data,
+                form.context,
+            )
+            .await?,
+        )
     })
 }
 
@@ -1443,46 +1723,93 @@ pub(crate) struct AddOrganizerForm {
 }
 
 #[rocket::post("/event/<series>/<event>/setup/add-organizer", data = "<form>")]
-pub(crate) async fn add_organizer(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, form: Form<Contextual<'_, AddOrganizerForm>>) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
+pub(crate) async fn add_organizer(
+    pool: &State<PgPool>,
+    me: User,
+    uri: Origin<'_>,
+    csrf: Option<CsrfToken>,
+    series: Series,
+    event: &str,
+    form: Form<Contextual<'_, AddOrganizerForm>>,
+) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
     let mut transaction = pool.begin().await?;
-    let event_data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+    let event_data = Data::new(&mut transaction, series, event)
+        .await?
+        .ok_or(StatusOrError::Status(Status::NotFound))?;
     let mut form = form.into_inner();
     form.verify(&csrf);
-    
+
     Ok(if let Some(ref value) = form.value {
         if event_data.is_ended() {
-            form.context.push_error(form::Error::validation("This event has ended and can no longer be configured"));
+            form.context.push_error(form::Error::validation(
+                "This event has ended and can no longer be configured",
+            ));
         }
         if !me.is_global_admin() {
-            form.context.push_error(form::Error::validation("You must be a global admin to configure this event."));
+            form.context.push_error(form::Error::validation(
+                "You must be a global admin to configure this event.",
+            ));
         }
-        
+
         if form.context.errors().next().is_some() {
-            RedirectOrContent::Content(setup_form(transaction, Some(me), uri, csrf.as_ref(), event_data, form.context).await?)
+            RedirectOrContent::Content(
+                setup_form(
+                    transaction,
+                    Some(me),
+                    uri,
+                    csrf.as_ref(),
+                    event_data,
+                    form.context,
+                )
+                .await?,
+            )
         } else {
             // Find user by ID
-            let organizer_id: Id<Users> = value.organizer.parse().map_err(|_| StatusOrError::Status(Status::NotFound))?;
-            let user = sqlx::query!(r#"
+            let organizer_id: Id<Users> = value
+                .organizer
+                .parse()
+                .map_err(|_| StatusOrError::Status(Status::NotFound))?;
+            let user = sqlx::query!(
+                r#"
                 SELECT id
                 FROM users
                 WHERE id = $1
-            "#, organizer_id as _)
-            .fetch_optional(&mut *transaction).await?
+            "#,
+                organizer_id as _
+            )
+            .fetch_optional(&mut *transaction)
+            .await?
             .ok_or(StatusOrError::Status(Status::NotFound))?;
-            
+
             // Add organizer
-            sqlx::query!(r#"
+            sqlx::query!(
+                r#"
                 INSERT INTO organizers (series, event, organizer) 
                 VALUES ($1, $2, $3) 
                 ON CONFLICT DO NOTHING
-            "#, event_data.series as _, &event_data.event, user.id)
-            .execute(&mut *transaction).await?;
-            
+            "#,
+                event_data.series as _,
+                &event_data.event,
+                user.id
+            )
+            .execute(&mut *transaction)
+            .await?;
+
             transaction.commit().await?;
             RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event))))
         }
     } else {
-        RedirectOrContent::Content(setup_form(transaction, Some(me), uri, csrf.as_ref(), event_data, form.context).await?)
+        RedirectOrContent::Content(
+            setup_form(
+                transaction,
+                Some(me),
+                uri,
+                csrf.as_ref(),
+                event_data,
+                form.context,
+            )
+            .await?,
+        )
     })
 }
 
@@ -1492,36 +1819,80 @@ pub(crate) struct RemoveOrganizerForm {
     csrf: String,
 }
 
-#[rocket::post("/event/<series>/<event>/setup/remove-organizer/<organizer>", data = "<form>")]
-pub(crate) async fn remove_organizer(pool: &State<PgPool>, me: User, _uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, organizer: Id<Users>, form: Form<Contextual<'_, RemoveOrganizerForm>>) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
+#[rocket::post(
+    "/event/<series>/<event>/setup/remove-organizer/<organizer>",
+    data = "<form>"
+)]
+pub(crate) async fn remove_organizer(
+    pool: &State<PgPool>,
+    me: User,
+    _uri: Origin<'_>,
+    csrf: Option<CsrfToken>,
+    series: Series,
+    event: &str,
+    organizer: Id<Users>,
+    form: Form<Contextual<'_, RemoveOrganizerForm>>,
+) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
     let mut transaction = pool.begin().await?;
-    let event_data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+    let event_data = Data::new(&mut transaction, series, event)
+        .await?
+        .ok_or(StatusOrError::Status(Status::NotFound))?;
     let mut form = form.into_inner();
     form.verify(&csrf);
-    
+
     Ok(if form.value.is_some() {
         if event_data.is_ended() {
-            form.context.push_error(form::Error::validation("This event has ended and can no longer be configured"));
+            form.context.push_error(form::Error::validation(
+                "This event has ended and can no longer be configured",
+            ));
         }
         if !me.is_global_admin() {
-            form.context.push_error(form::Error::validation("You must be a global admin to configure this event."));
+            form.context.push_error(form::Error::validation(
+                "You must be a global admin to configure this event.",
+            ));
         }
-        
+
         if form.context.errors().next().is_some() {
-            RedirectOrContent::Content(setup_form(transaction, Some(me), _uri, csrf.as_ref(), event_data, form.context).await?)
+            RedirectOrContent::Content(
+                setup_form(
+                    transaction,
+                    Some(me),
+                    _uri,
+                    csrf.as_ref(),
+                    event_data,
+                    form.context,
+                )
+                .await?,
+            )
         } else {
             // Remove organizer
-            sqlx::query!(r#"
+            sqlx::query!(
+                r#"
                 DELETE FROM organizers 
                 WHERE series = $1 AND event = $2 AND organizer = $3
-            "#, event_data.series as _, &event_data.event, i64::from(organizer))
-            .execute(&mut *transaction).await?;
-            
+            "#,
+                event_data.series as _,
+                &event_data.event,
+                i64::from(organizer)
+            )
+            .execute(&mut *transaction)
+            .await?;
+
             transaction.commit().await?;
             RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event))))
         }
     } else {
-        RedirectOrContent::Content(setup_form(transaction, Some(me), _uri, csrf.as_ref(), event_data, form.context).await?)
+        RedirectOrContent::Content(
+            setup_form(
+                transaction,
+                Some(me),
+                _uri,
+                csrf.as_ref(),
+                event_data,
+                form.context,
+            )
+            .await?,
+        )
     })
 }
 
@@ -1533,30 +1904,70 @@ pub(crate) struct CopyOrganizersForm {
 }
 
 #[rocket::post("/event/<series>/<event>/setup/copy-organizers", data = "<form>")]
-pub(crate) async fn copy_organizers(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, form: Form<Contextual<'_, CopyOrganizersForm>>) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
+pub(crate) async fn copy_organizers(
+    pool: &State<PgPool>,
+    me: User,
+    uri: Origin<'_>,
+    csrf: Option<CsrfToken>,
+    series: Series,
+    event: &str,
+    form: Form<Contextual<'_, CopyOrganizersForm>>,
+) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
     let mut transaction = pool.begin().await?;
-    let event_data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+    let event_data = Data::new(&mut transaction, series, event)
+        .await?
+        .ok_or(StatusOrError::Status(Status::NotFound))?;
     let mut form = form.into_inner();
     form.verify(&csrf);
     Ok(if let Some(ref value) = form.value {
         if event_data.is_ended() {
-            form.context.push_error(form::Error::validation("This event has ended and can no longer be configured."));
+            form.context.push_error(form::Error::validation(
+                "This event has ended and can no longer be configured.",
+            ));
         }
         if !me.is_global_admin() {
-            form.context.push_error(form::Error::validation("You must be a global admin to configure this event."));
+            form.context.push_error(form::Error::validation(
+                "You must be a global admin to configure this event.",
+            ));
         }
-        let (source_series, source_event_slug) = match value.source_event.splitn(2, '/').collect::<Vec<_>>()[..] {
-            [s, e] if !s.is_empty() && !e.is_empty() => {
-                let source_series = s.parse::<Series>().map_err(|()| StatusOrError::Status(Status::BadRequest))?;
-                (source_series, e.to_owned())
-            }
-            _ => {
-                form.context.push_error(form::Error::validation("Please select a source event.").with_name("source_event"));
-                return Ok(RedirectOrContent::Content(setup_form(transaction, Some(me), uri, csrf.as_ref(), event_data, form.context).await?));
-            }
-        };
+        let (source_series, source_event_slug) =
+            match value.source_event.splitn(2, '/').collect::<Vec<_>>()[..] {
+                [s, e] if !s.is_empty() && !e.is_empty() => {
+                    let source_series = s
+                        .parse::<Series>()
+                        .map_err(|()| StatusOrError::Status(Status::BadRequest))?;
+                    (source_series, e.to_owned())
+                }
+                _ => {
+                    form.context.push_error(
+                        form::Error::validation("Please select a source event.")
+                            .with_name("source_event"),
+                    );
+                    return Ok(RedirectOrContent::Content(
+                        setup_form(
+                            transaction,
+                            Some(me),
+                            uri,
+                            csrf.as_ref(),
+                            event_data,
+                            form.context,
+                        )
+                        .await?,
+                    ));
+                }
+            };
         if form.context.errors().next().is_some() {
-            return Ok(RedirectOrContent::Content(setup_form(transaction, Some(me), uri, csrf.as_ref(), event_data, form.context).await?));
+            return Ok(RedirectOrContent::Content(
+                setup_form(
+                    transaction,
+                    Some(me),
+                    uri,
+                    csrf.as_ref(),
+                    event_data,
+                    form.context,
+                )
+                .await?,
+            ));
         }
         sqlx::query!(
             "INSERT INTO organizers (series, event, organizer) SELECT $1, $2, organizer FROM organizers WHERE series = $3 AND event = $4 ON CONFLICT DO NOTHING",
@@ -1565,7 +1976,17 @@ pub(crate) async fn copy_organizers(pool: &State<PgPool>, me: User, uri: Origin<
         transaction.commit().await?;
         RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event))))
     } else {
-        RedirectOrContent::Content(setup_form(transaction, Some(me), uri, csrf.as_ref(), event_data, form.context).await?)
+        RedirectOrContent::Content(
+            setup_form(
+                transaction,
+                Some(me),
+                uri,
+                csrf.as_ref(),
+                event_data,
+                form.context,
+            )
+            .await?,
+        )
     })
 }
 
@@ -1577,29 +1998,59 @@ pub(crate) struct UpdateEnterFlowForm {
 }
 
 #[rocket::post("/event/<series>/<event>/setup/update-enter-flow", data = "<form>")]
-pub(crate) async fn update_enter_flow(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, form: Form<Contextual<'_, UpdateEnterFlowForm>>) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
+pub(crate) async fn update_enter_flow(
+    pool: &State<PgPool>,
+    me: User,
+    uri: Origin<'_>,
+    csrf: Option<CsrfToken>,
+    series: Series,
+    event: &str,
+    form: Form<Contextual<'_, UpdateEnterFlowForm>>,
+) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
     let mut transaction = pool.begin().await?;
-    let event_data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+    let event_data = Data::new(&mut transaction, series, event)
+        .await?
+        .ok_or(StatusOrError::Status(Status::NotFound))?;
     let mut form = form.into_inner();
     form.verify(&csrf);
-    
+
     Ok(if let Some(ref value) = form.value {
         if event_data.is_ended() {
-            form.context.push_error(form::Error::validation("This event has ended and can no longer be configured"));
+            form.context.push_error(form::Error::validation(
+                "This event has ended and can no longer be configured",
+            ));
         }
         if !me.is_global_admin() {
-            form.context.push_error(form::Error::validation("You must be a global admin to configure this event."));
+            form.context.push_error(form::Error::validation(
+                "You must be a global admin to configure this event.",
+            ));
         }
-        
+
         if form.context.errors().next().is_some() {
-            RedirectOrContent::Content(setup_form(transaction, Some(me), uri, csrf.as_ref(), event_data, form.context).await?)
+            RedirectOrContent::Content(
+                setup_form(
+                    transaction,
+                    Some(me),
+                    uri,
+                    csrf.as_ref(),
+                    event_data,
+                    form.context,
+                )
+                .await?,
+            )
         } else {
             // Parse enter_flow JSON and validate against Flow struct
             let enter_flow_json = if !value.enter_flow_json.trim().is_empty() {
                 match serde_json::from_str::<enter::Flow>(&value.enter_flow_json) {
-                    Ok(_) => Some(serde_json::from_str::<serde_json::Value>(&value.enter_flow_json).expect("already validated as JSON")),
+                    Ok(_) => Some(
+                        serde_json::from_str::<serde_json::Value>(&value.enter_flow_json)
+                            .expect("already validated as JSON"),
+                    ),
                     Err(e) => {
-                        form.context.push_error(form::Error::validation(format!("Invalid enter flow: {e}")).with_name("enter_flow_json"));
+                        form.context.push_error(
+                            form::Error::validation(format!("Invalid enter flow: {e}"))
+                                .with_name("enter_flow_json"),
+                        );
                         None
                     }
                 }
@@ -1609,10 +2060,21 @@ pub(crate) async fn update_enter_flow(pool: &State<PgPool>, me: User, uri: Origi
 
             // Check for validation errors before updating database
             if form.context.errors().next().is_some() {
-                RedirectOrContent::Content(setup_form(transaction, Some(me), uri, csrf.as_ref(), event_data, form.context).await?)
+                RedirectOrContent::Content(
+                    setup_form(
+                        transaction,
+                        Some(me),
+                        uri,
+                        csrf.as_ref(),
+                        event_data,
+                        form.context,
+                    )
+                    .await?,
+                )
             } else {
                 // Update database
-                sqlx::query!(r#"
+                sqlx::query!(
+                    r#"
                     UPDATE events
                     SET enter_flow = $1
                     WHERE series = $2 AND event = $3
@@ -1620,31 +2082,49 @@ pub(crate) async fn update_enter_flow(pool: &State<PgPool>, me: User, uri: Origi
                     enter_flow_json,
                     event_data.series as _,
                     &event_data.event
-                ).execute(&mut *transaction).await?;
+                )
+                .execute(&mut *transaction)
+                .await?;
 
                 transaction.commit().await?;
                 RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event))))
             }
         }
     } else {
-        RedirectOrContent::Content(setup_form(transaction, Some(me), uri, csrf.as_ref(), event_data, form.context).await?)
+        RedirectOrContent::Content(
+            setup_form(
+                transaction,
+                Some(me),
+                uri,
+                csrf.as_ref(),
+                event_data,
+                form.context,
+            )
+            .await?,
+        )
     })
 }
 
 #[rocket::get("/event/setup/search-users?<query>")]
-pub(crate) async fn search_users(pool: &State<PgPool>, query: Option<&str>) -> Result<RawText<String>, StatusOrError<event::Error>> {
+pub(crate) async fn search_users(
+    pool: &State<PgPool>,
+    query: Option<&str>,
+) -> Result<RawText<String>, StatusOrError<event::Error>> {
     let mut transaction = pool.begin().await?;
     let results = search_users_internal(&mut transaction, query).await?;
     transaction.commit().await?;
     Ok(RawText(serde_json::to_string(&results)?))
 }
 
-async fn search_users_internal(transaction: &mut Transaction<'_, Postgres>, query: Option<&str>) -> Result<Vec<UserSearchResult>, event::Error> {
+async fn search_users_internal(
+    transaction: &mut Transaction<'_, Postgres>,
+    query: Option<&str>,
+) -> Result<Vec<UserSearchResult>, event::Error> {
     let query = query.unwrap_or("");
     if query.len() < 2 {
         return Ok(Vec::new());
     }
-    
+
     let rows = sqlx::query_as!(UserSearchRow, r#"
         SELECT id, display_source AS "display_source: DisplaySource", racetime_display_name, racetime_id, discord_display_name, discord_username
         FROM users 
@@ -1658,16 +2138,19 @@ async fn search_users_internal(transaction: &mut Transaction<'_, Postgres>, quer
         LIMIT 10
     "#, format!("%{}%", query))
     .fetch_all(&mut **transaction).await?;
-    
-    Ok(rows.into_iter().map(|row| UserSearchResult {
-        id: row.id,
-        display_name: match row.display_source {
-            DisplaySource::RaceTime => row.racetime_display_name.unwrap_or_default(),
-            DisplaySource::Discord => row.discord_display_name.unwrap_or_default(),
-        },
-        racetime_id: row.racetime_id,
-        discord_username: row.discord_username,
-    }).collect())
+
+    Ok(rows
+        .into_iter()
+        .map(|row| UserSearchResult {
+            id: row.id,
+            display_name: match row.display_source {
+                DisplaySource::RaceTime => row.racetime_display_name.unwrap_or_default(),
+                DisplaySource::Discord => row.discord_display_name.unwrap_or_default(),
+            },
+            racetime_id: row.racetime_id,
+            discord_username: row.discord_username,
+        })
+        .collect())
 }
 
 #[derive(serde::Serialize)]
@@ -1694,7 +2177,12 @@ struct UserSearchRow {
     discord_display_name: Option<String>,
     discord_username: Option<String>,
 }
-fn create_form_content(me: &Option<User>, _uri: &Origin<'_>, csrf: Option<&CsrfToken>, ctx: Context<'_>) -> RawHtml<String> {
+fn create_form_content(
+    me: &Option<User>,
+    _uri: &Origin<'_>,
+    csrf: Option<&CsrfToken>,
+    ctx: Context<'_>,
+) -> RawHtml<String> {
     if let Some(me) = me {
         if me.is_global_admin() {
             let mut errors = ctx.errors().collect_vec();
@@ -1787,11 +2275,22 @@ fn create_form_content(me: &Option<User>, _uri: &Origin<'_>, csrf: Option<&CsrfT
                             label(class = "help") : " (JSON configuration for generic draft modes. Leave empty if not applicable.)";
                         });
 
+                        : form_field("qualifier_mode", &mut errors, html! {
+                            label(for = "qualifier_mode") : "Qualification method";
+                            select(id = "qualifier_mode", name = "qualifier_mode") {
+                                @for (slug, label) in [("none", "No qualification"), ("rank", "Stored qualifier ranks"), ("single", "Single async qualifier"), ("score", "Configured scoring"), ("pooled_by_mode", "Pooled by mode")] {
+                                    option(value = slug, selected? = ctx.field_value("qualifier_mode").unwrap_or("none") == slug) : label;
+                                }
+                            }
+                            label(class = "help") : "Choose how entrants qualify. Stored ranks and async submissions only affect qualification when their method is selected. Configured scoring combines live qualifier races and qualifier async results.";
+                        });
+
                         : form_field("qualifier_score_kind", &mut errors, html! {
                             label(for = "qualifier_score_kind") : "Qualifier Score Kind";
                             select(id = "qualifier_score_kind", name = "qualifier_score_kind", style = "width: 100%; max-width: 600px;") {
                                 option(value = "", selected? = ctx.field_value("qualifier_score_kind").map_or(true, |v| v.is_empty())) : "None";
                                 @for (slug, label) in &[
+                                    ("time_relative", "Time relative to par (configurable)"),
                                     ("standard", "Standard"),
                                     ("sgl_2023_online", "SGL 2023 Online"),
                                     ("sgl_2024_online", "SGL 2024 Online"),
@@ -1802,6 +2301,14 @@ fn create_form_content(me: &Option<User>, _uri: &Origin<'_>, csrf: Option<&CsrfT
                                     option(value = slug, selected? = ctx.field_value("qualifier_score_kind").map_or(false, |v| v == *slug)) : *label;
                                 }
                             }
+                        });
+
+                        : form_field("qualifier_score_config", &mut errors, html! {
+                            label(for = "qualifier_score_config") : "Qualifier scoring parameters (JSON)";
+                            textarea(id = "qualifier_score_config", name = "qualifier_score_config", rows = "5", style = "font-family: monospace; width: 100%; max-width: 800px;") {
+                                : ctx.field_value("qualifier_score_config").unwrap_or("");
+                            }
+                            label(class = "help") : "Leave empty for the selected strategy's defaults. Example: {\"par_finishers\":4,\"required_finishes\":3,\"counted_attempts\":6,\"best_results\":3}.";
                         });
 
                         : form_field("is_single_race", &mut errors, html! {
@@ -1857,7 +2364,7 @@ fn create_form_content(me: &Option<User>, _uri: &Origin<'_>, csrf: Option<&CsrfT
                         : form_field("is_live_event", &mut errors, html! {
                             input(type = "checkbox", id = "is_live_event", name = "is_live_event", checked? = ctx.field_value("is_live_event").map_or(false, |value| value == "on"));
                             label(for = "is_live_event") : "Is Live Event";
-                            label(class = "help") : " (When enabled, rooms are created for scheduled races. Used for SpeedGaming live broadcasts.)";
+                            label(class = "help") : " (In-person event: scheduled races after the event starts send notifications instead of creating racetime.gg rooms.)";
                         });
 
                         h3 : "Seed Generation";
@@ -1918,10 +2425,23 @@ fn create_form_content(me: &Option<User>, _uri: &Origin<'_>, csrf: Option<&CsrfT
 }
 
 #[rocket::get("/event/new")]
-pub(crate) async fn create_get(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>, csrf: Option<CsrfToken>) -> Result<RawHtml<String>, StatusOrError<event::Error>> {
+pub(crate) async fn create_get(
+    pool: &State<PgPool>,
+    me: Option<User>,
+    uri: Origin<'_>,
+    csrf: Option<CsrfToken>,
+) -> Result<RawHtml<String>, StatusOrError<event::Error>> {
     let transaction = pool.begin().await?;
     let content = create_form_content(&me, &uri, csrf.as_ref(), Context::default());
-    Ok(page(transaction, &me, &uri, PageStyle::default(), "Create New Event", content).await?)
+    Ok(page(
+        transaction,
+        &me,
+        &uri,
+        PageStyle::default(),
+        "Create New Event",
+        content,
+    )
+    .await?)
 }
 
 #[derive(FromForm, CsrfForm)]
@@ -1937,7 +2457,9 @@ pub(crate) struct CreateEventForm {
     racetime_goal_slug: Option<String>,
     draft_kind: Option<String>,
     draft_config: Option<String>,
+    qualifier_mode: String,
     qualifier_score_kind: Option<String>,
+    qualifier_score_config: Option<String>,
     is_single_race: bool,
     hide_entrants: bool,
     #[field(default = 15)]
@@ -1955,32 +2477,44 @@ pub(crate) struct CreateEventForm {
 }
 
 #[rocket::post("/event/new", data = "<form>")]
-pub(crate) async fn create_post(pool: &State<PgPool>, me: User, uri: Origin<'_>, csrf: Option<CsrfToken>, form: Form<Contextual<'_, CreateEventForm>>) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
+pub(crate) async fn create_post(
+    pool: &State<PgPool>,
+    me: User,
+    uri: Origin<'_>,
+    csrf: Option<CsrfToken>,
+    form: Form<Contextual<'_, CreateEventForm>>,
+) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
     let mut form = form.into_inner();
     form.verify(&csrf);
 
     Ok(if let Some(ref value) = form.value {
         if !me.is_global_admin() {
-            form.context.push_error(form::Error::validation("You must be a global admin to create events."));
+            form.context.push_error(form::Error::validation(
+                "You must be a global admin to create events.",
+            ));
         }
 
         // Parse series
         let series = match value.series.parse::<Series>() {
             Ok(s) => Some(s),
             Err(()) => {
-                form.context.push_error(form::Error::validation("Invalid series.").with_name("series"));
+                form.context
+                    .push_error(form::Error::validation("Invalid series.").with_name("series"));
                 None
             }
         };
 
         // Validate event slug is non-empty
         if value.event.is_empty() {
-            form.context.push_error(form::Error::validation("Event slug is required.").with_name("event"));
+            form.context
+                .push_error(form::Error::validation("Event slug is required.").with_name("event"));
         }
 
         // Validate display name is non-empty
         if value.display_name.is_empty() {
-            form.context.push_error(form::Error::validation("Display name is required.").with_name("display_name"));
+            form.context.push_error(
+                form::Error::validation("Display name is required.").with_name("display_name"),
+            );
         }
 
         // Parse team_config
@@ -1991,7 +2525,9 @@ pub(crate) async fn create_post(pool: &State<PgPool>, me: User, uri: Origin<'_>,
             "pictionary" => TeamConfig::Pictionary,
             "multiworld" => TeamConfig::Multiworld,
             _ => {
-                form.context.push_error(form::Error::validation("Invalid team configuration.").with_name("team_config"));
+                form.context.push_error(
+                    form::Error::validation("Invalid team configuration.").with_name("team_config"),
+                );
                 TeamConfig::Solo
             }
         };
@@ -2003,50 +2539,71 @@ pub(crate) async fn create_post(pool: &State<PgPool>, me: User, uri: Origin<'_>,
             "de" => German,
             "pt" => Portuguese,
             _ => {
-                form.context.push_error(form::Error::validation("Invalid language.").with_name("language"));
+                form.context
+                    .push_error(form::Error::validation("Invalid language.").with_name("language"));
                 English
             }
         };
 
         // Parse optional string fields
-        let racetime_goal_slug = value.racetime_goal_slug.as_ref().and_then(|s| if s.is_empty() { None } else { Some(s.clone()) });
-        let draft_kind = value.draft_kind.as_ref().and_then(|s| if s.is_empty() { None } else { Some(s.clone()) });
-        let qualifier_score_kind = value.qualifier_score_kind.as_ref().and_then(|s| if s.is_empty() { None } else { Some(s.clone()) });
-        let seed_gen_type = value.seed_gen_type.as_ref().and_then(|s| if s.is_empty() { None } else { Some(s.clone()) });
+        let racetime_goal_slug = value
+            .racetime_goal_slug
+            .as_ref()
+            .and_then(|s| if s.is_empty() { None } else { Some(s.clone()) });
+        let draft_kind = value
+            .draft_kind
+            .as_ref()
+            .and_then(|s| if s.is_empty() { None } else { Some(s.clone()) });
+        let qualifier_score_kind = value
+            .qualifier_score_kind
+            .as_ref()
+            .and_then(|s| if s.is_empty() { None } else { Some(s.clone()) });
+        let seed_gen_type = value
+            .seed_gen_type
+            .as_ref()
+            .and_then(|s| if s.is_empty() { None } else { Some(s.clone()) });
 
         // Parse draft_config JSON
-        let draft_config_json: Option<serde_json::Value> = if let Some(ref dc_str) = value.draft_config {
-            if dc_str.trim().is_empty() {
-                None
-            } else {
-                match serde_json::from_str(dc_str) {
-                    Ok(v) => Some(v),
-                    Err(e) => {
-                        form.context.push_error(form::Error::validation(format!("Invalid draft config JSON: {e}")).with_name("draft_config"));
-                        None
+        let draft_config_json: Option<serde_json::Value> =
+            if let Some(ref dc_str) = value.draft_config {
+                if dc_str.trim().is_empty() {
+                    None
+                } else {
+                    match serde_json::from_str(dc_str) {
+                        Ok(v) => Some(v),
+                        Err(e) => {
+                            form.context.push_error(
+                                form::Error::validation(format!("Invalid draft config JSON: {e}"))
+                                    .with_name("draft_config"),
+                            );
+                            None
+                        }
                     }
                 }
-            }
-        } else {
-            None
-        };
+            } else {
+                None
+            };
 
         // Parse seed_config JSON
-        let seed_config_json: Option<serde_json::Value> = if let Some(ref sc_str) = value.seed_config {
-            if sc_str.trim().is_empty() {
-                None
-            } else {
-                match serde_json::from_str(sc_str) {
-                    Ok(v) => Some(v),
-                    Err(e) => {
-                        form.context.push_error(form::Error::validation(format!("Invalid seed config JSON: {e}")).with_name("seed_config"));
-                        None
+        let seed_config_json: Option<serde_json::Value> =
+            if let Some(ref sc_str) = value.seed_config {
+                if sc_str.trim().is_empty() {
+                    None
+                } else {
+                    match serde_json::from_str(sc_str) {
+                        Ok(v) => Some(v),
+                        Err(e) => {
+                            form.context.push_error(
+                                form::Error::validation(format!("Invalid seed config JSON: {e}"))
+                                    .with_name("seed_config"),
+                            );
+                            None
+                        }
                     }
                 }
-            }
-        } else {
-            None
-        };
+            } else {
+                None
+            };
 
         // Parse start_delay_open
         let start_delay_open: Option<i32> = if let Some(ref sdo_str) = value.start_delay_open {
@@ -2056,7 +2613,10 @@ pub(crate) async fn create_post(pool: &State<PgPool>, me: User, uri: Origin<'_>,
                 match sdo_str.trim().parse::<i32>() {
                     Ok(v) => Some(v),
                     Err(_) => {
-                        form.context.push_error(form::Error::validation("Invalid start delay open value.").with_name("start_delay_open"));
+                        form.context.push_error(
+                            form::Error::validation("Invalid start delay open value.")
+                                .with_name("start_delay_open"),
+                        );
                         None
                     }
                 }
@@ -2065,11 +2625,76 @@ pub(crate) async fn create_post(pool: &State<PgPool>, me: User, uri: Origin<'_>,
             None
         };
 
+        if let Err(error) = event::configuration::validate_qualification(
+            &value.qualifier_mode,
+            qualifier_score_kind.as_deref(),
+        ) {
+            form.context
+                .push_error(form::Error::validation(error).with_name("qualifier_mode"));
+        }
+        let qualifier_score_config = parse_score_config(
+            value.qualifier_score_config.as_deref(),
+            qualifier_score_kind.as_deref(),
+            &mut form.context,
+        );
+        for (field, result) in [
+            (
+                "seed_config",
+                event::configuration::validate_seed(
+                    seed_gen_type.as_deref(),
+                    seed_config_json.as_ref(),
+                ),
+            ),
+            (
+                "preroll_mode",
+                event::configuration::validate_seed_policies(
+                    &value.preroll_mode,
+                    &value.spoiler_unlock,
+                    seed_gen_type.as_deref(),
+                ),
+            ),
+            (
+                "draft_config",
+                event::configuration::validate_draft(
+                    draft_kind.as_deref(),
+                    draft_config_json.as_ref(),
+                    seed_gen_type.as_deref(),
+                    seed_config_json.as_ref(),
+                    None,
+                ),
+            ),
+            (
+                "start_delay",
+                event::configuration::validate_start_delay(value.start_delay),
+            ),
+            (
+                "start_delay_open",
+                start_delay_open
+                    .map(event::configuration::validate_start_delay)
+                    .unwrap_or(Ok(())),
+            ),
+        ] {
+            if let Err(error) = result {
+                form.context
+                    .push_error(form::Error::validation(error).with_name(field));
+            }
+        }
+
         if form.context.errors().next().is_some() {
             let me = Some(me);
             let transaction = pool.begin().await?;
             let content = create_form_content(&me, &uri, csrf.as_ref(), form.context);
-            return Ok(RedirectOrContent::Content(page(transaction, &me, &uri, PageStyle::default(), "Create New Event", content).await?));
+            return Ok(RedirectOrContent::Content(
+                page(
+                    transaction,
+                    &me,
+                    &uri,
+                    PageStyle::default(),
+                    "Create New Event",
+                    content,
+                )
+                .await?,
+            ));
         }
 
         let series = series.expect("series should be valid if no errors");
@@ -2108,12 +2733,174 @@ pub(crate) async fn create_post(pool: &State<PgPool>, me: User, uri: Origin<'_>,
             seed_config_json as _,
         ).execute(&mut *transaction).await?;
 
+        mirror_twwr_permalink(&mut transaction, series, &value.event).await?;
+        save_score_config(
+            &mut transaction,
+            series,
+            &value.event,
+            qualifier_score_config,
+        )
+        .await?;
+        save_qualifier_mode(
+            &mut transaction,
+            series,
+            &value.event,
+            &value.qualifier_mode,
+        )
+        .await?;
         transaction.commit().await?;
         RedirectOrContent::Redirect(Redirect::to(uri!(get(series, &*value.event))))
     } else {
         let me = Some(me);
         let transaction = pool.begin().await?;
         let content = create_form_content(&me, &uri, csrf.as_ref(), form.context);
-        RedirectOrContent::Content(page(transaction, &me, &uri, PageStyle::default(), "Create New Event", content).await?)
+        RedirectOrContent::Content(
+            page(
+                transaction,
+                &me,
+                &uri,
+                PageStyle::default(),
+                "Create New Event",
+                content,
+            )
+            .await?,
+        )
     })
-} 
+}
+
+async fn mirror_twwr_permalink(
+    transaction: &mut Transaction<'_, Postgres>,
+    series: Series,
+    event: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE events SET settings_string = seed_config->>'permalink' WHERE series = $1 AND event = $2 AND seed_gen_type = 'twwr'").bind(series).bind(event).execute(&mut **transaction).await?;
+
+    Ok(())
+}
+
+fn parse_score_config(
+    value: Option<&str>,
+    kind: Option<&str>,
+    context: &mut Context<'_>,
+) -> Option<serde_json::Value> {
+    let result = (|| -> Result<Option<serde_json::Value>, String> {
+        if kind.is_some_and(|kind| event::teams::QualifierScoreKind::from_slug(kind).is_none()) {
+            return Err("Unknown qualifier scoring strategy.".into());
+        }
+        let config = value
+            .filter(|s| !s.trim().is_empty())
+            .map(serde_json::from_str::<serde_json::Value>)
+            .transpose()
+            .map_err(|e| e.to_string())?;
+        event::scoring::ParScoreConfig::for_kind(kind.unwrap_or(""), config.as_ref())?;
+        Ok(config)
+    })();
+    match result {
+        Ok(config) => config,
+        Err(error) => {
+            context.push_error(form::Error::validation(error).with_name("qualifier_score_config"));
+            None
+        }
+    }
+}
+
+async fn save_score_config(
+    transaction: &mut Transaction<'_, Postgres>,
+    series: Series,
+    event: &str,
+    config: Option<serde_json::Value>,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE events SET qualifier_score_config = $1 WHERE series = $2 AND event = $3")
+        .bind(config)
+        .bind(series)
+        .bind(event)
+        .execute(&mut **transaction)
+        .await?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    #[ignore = "requires HTH_TEST_DATABASE_URL pointing to a migrated production-copy *_test database"]
+    async fn database_twwr_edits_keep_all_readers_consistent() {
+        let pool = event::configuration::test_pool().await;
+
+        let mut transaction = pool.begin().await.unwrap();
+        let (series, slug): (String, String) = sqlx::query_as("SELECT series, event FROM events WHERE seed_gen_type = 'twwr' ORDER BY series, event LIMIT 1")
+            .fetch_one(&mut *transaction).await.unwrap();
+        let series: Series = series.parse().unwrap();
+        // Organizer editing updates the canonical setting and legacy mirror together.
+        event::configuration::save_twwr_permalink(
+            &mut transaction,
+            series,
+            &slug,
+            "organizer-edited-permalink",
+        )
+        .await
+        .unwrap();
+        let data = Data::new(&mut transaction, series, &*slug)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(data.twwr_permalink(), Some("organizer-edited-permalink"));
+        assert_eq!(data.settings_string.as_deref(), data.twwr_permalink());
+        // The basic setup form saves seed_config directly, then mirrors it.
+        sqlx::query("UPDATE events SET seed_config = jsonb_set(seed_config, '{permalink}', '\"setup-edited-permalink\"'::jsonb) WHERE series = $1 AND event = $2")
+            .bind(
+            series).bind(
+            &slug
+        ).execute(&mut *transaction).await.unwrap();
+        mirror_twwr_permalink(&mut transaction, series, &slug)
+            .await
+            .unwrap();
+        let data = Data::new(&mut transaction, series, &*slug)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(data.twwr_permalink(), Some("setup-edited-permalink"));
+        assert_eq!(data.settings_string.as_deref(), data.twwr_permalink());
+
+        transaction.rollback().await.unwrap();
+    }
+}
+
+async fn save_qualifier_mode(
+    transaction: &mut Transaction<'_, Postgres>,
+    series: Series,
+    event: &str,
+    mode: &str,
+) -> sqlx::Result<()> {
+    let previous: String = sqlx::query_scalar(
+        "SELECT qualifier_mode FROM events WHERE series = $1 AND event = $2 FOR UPDATE",
+    )
+    .bind(series)
+    .bind(event)
+    .fetch_one(&mut **transaction)
+    .await?;
+    if previous == "pooled_by_mode" && mode != "pooled_by_mode" {
+        let has_history: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM qualifier_attempts WHERE series = $1 AND event = $2)",
+        )
+        .bind(series)
+        .bind(event)
+        .fetch_one(&mut **transaction)
+        .await?;
+        if has_history {
+            return Err(sqlx::Error::Protocol("An event with pooled qualifier attempts cannot be changed back to another qualification method.".into()));
+        }
+    }
+    sqlx::query("UPDATE events SET qualifier_mode = $1 WHERE series = $2 AND event = $3")
+        .bind(mode)
+        .bind(series)
+        .bind(event)
+        .execute(&mut **transaction)
+        .await?;
+    if mode == "pooled_by_mode" {
+        sqlx::query("INSERT INTO pooled_qualifier_configs (series, event) VALUES ($1, $2) ON CONFLICT (series, event) DO NOTHING")
+            .bind(series).bind(event).execute(&mut **transaction).await?;
+    }
+    Ok(())
+}

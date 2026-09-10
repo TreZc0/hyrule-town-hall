@@ -1,18 +1,14 @@
 use {
-    serde_json::Value as Json,
     crate::{
-        event::{
-            Data,
-            InfoError,
-        },
+        event::{Data, InfoError},
         prelude::*,
     },
+    serde_json::Value as Json,
 };
 
 pub(crate) fn piece_count(team_config: TeamConfig) -> u8 {
     3 * team_config.roles().len() as u8
 }
-
 
 pub(crate) fn parse_seed_url(seed: &Url) -> Option<(bool, Uuid)> {
     if_chain! {
@@ -34,7 +30,10 @@ pub(crate) fn parse_seed_url(seed: &Url) -> Option<(bool, Uuid)> {
     }
 }
 
-pub(crate) async fn info(transaction: &mut Transaction<'_, Postgres>, data: &Data<'_>) -> Result<Option<RawHtml<String>>, InfoError> {
+pub(crate) async fn info(
+    transaction: &mut Transaction<'_, Postgres>,
+    data: &Data<'_>,
+) -> Result<Option<RawHtml<String>>, InfoError> {
     Ok(match &*data.event {
         "2" => Some(html! {
             article {
@@ -169,7 +168,7 @@ pub(crate) fn progression_spoiler(spoiler: Json) -> ProgressionSpoiler {
             _ => value["item"].as_str().unwrap(),
         };
         match item_name {
-            | "Bottle"
+            "Bottle"
             | "Bottle with Milk"
             | "Bottle with Poe"
             | "Bottle with Big Poe"
@@ -235,8 +234,9 @@ pub(crate) fn progression_spoiler(spoiler: Json) -> ProgressionSpoiler {
             | "Bottle with Fairy"
             | "Progressive Wallet"
             | "Small Key (Shadow Temple)"
-            | "Forest Medallion"
-                => spoiler_json.locations.push((key.clone(), item_name.to_owned())),
+            | "Forest Medallion" => spoiler_json
+                .locations
+                .push((key.clone(), item_name.to_owned())),
             _ => {}
         }
     }
@@ -256,7 +256,8 @@ pub(crate) fn progression_spoiler(spoiler: Json) -> ProgressionSpoiler {
                     &mut spoiler_json.gossip_stones_foolish
                 } else {
                     &mut spoiler_json.gossip_stones_other
-                }.push((key.clone(), text));
+                }
+                .push((key.clone(), text));
             }
         }
     }

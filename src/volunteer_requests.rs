@@ -1,29 +1,39 @@
 use {
-    chrono::{DateTime, Duration, Utc},
-    serenity::all::{ButtonStyle, CreateActionRow, CreateButton, CreateMessage, EditMessage},
-    serenity::http::HttpError,
-    serenity::model::{ModelError, id::{ChannelId, MessageId}},
-    serenity_utils::message::TimestampStyle,
-    sqlx::{PgPool, Postgres, Transaction},
-    std::collections::BTreeMap,
-    std::mem,
     crate::{
         cal::{Entrant, Entrants, Race, RaceSchedule},
         discord_bot::PgSnowflake,
-        event::{self, roles::{EffectiveRoleBinding, Signup, VolunteerSignupStatus}},
+        event::{
+            self,
+            roles::{EffectiveRoleBinding, Signup, VolunteerSignupStatus},
+        },
         id::{Id, Races},
         lang::Language,
         prelude::*,
         series::Series,
     },
+    chrono::{DateTime, Duration, Utc},
+    serenity::all::{ButtonStyle, CreateActionRow, CreateButton, CreateMessage, EditMessage},
+    serenity::http::HttpError,
+    serenity::model::{
+        ModelError,
+        id::{ChannelId, MessageId},
+    },
+    serenity_utils::message::TimestampStyle,
+    sqlx::{PgPool, Postgres, Transaction},
+    std::collections::BTreeMap,
+    std::mem,
 };
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum Error {
-    #[error(transparent)] Cal(#[from] cal::Error),
-    #[error(transparent)] Event(#[from] event::DataError),
-    #[error(transparent)] Sql(#[from] sqlx::Error),
-    #[error(transparent)] Serenity(#[from] serenity::Error),
+    #[error(transparent)]
+    Cal(#[from] cal::Error),
+    #[error(transparent)]
+    Event(#[from] event::DataError),
+    #[error(transparent)]
+    Sql(#[from] sqlx::Error),
+    #[error(transparent)]
+    Serenity(#[from] serenity::Error),
 }
 
 fn is_unknown_message(e: &serenity::Error) -> bool {
@@ -57,7 +67,11 @@ fn plan_message_merges(existing: &[(MessageId, i64)], max: i64) -> Vec<MergeGrou
             group.absorbed.push(message_id);
             group.total_count += count;
         } else {
-            groups.push(MergeGroup { survivor: message_id, absorbed: Vec::new(), total_count: count });
+            groups.push(MergeGroup {
+                survivor: message_id,
+                absorbed: Vec::new(),
+                total_count: count,
+            });
         }
     }
     groups
@@ -127,7 +141,8 @@ pub(crate) async fn check_and_post_volunteer_requests(
         // Get event data for display name
         let event_data = {
             let mut transaction = pool.begin().await?;
-            let data = event::Data::new(&mut transaction, event_row.series, &event_row.event).await?;
+            let data =
+                event::Data::new(&mut transaction, event_row.series, &event_row.event).await?;
             transaction.commit().await?;
             match data {
                 Some(data) => data,
@@ -141,15 +156,13 @@ pub(crate) async fn check_and_post_volunteer_requests(
             &event_data,
             channel_id,
             lead_time,
-        ).await;
+        )
+        .await;
 
         // Always refresh existing posts to remove races that have since started
-        let _ = update_volunteer_posts_for_event(
-            pool,
-            discord_ctx,
-            event_row.series,
-            &event_row.event,
-        ).await;
+        let _ =
+            update_volunteer_posts_for_event(pool, discord_ctx, event_row.series, &event_row.event)
+                .await;
     }
 
     Ok(())
@@ -203,13 +216,9 @@ pub(crate) async fn check_and_post_for_event(
         }
     };
 
-    let result = post_volunteer_requests_for_event(
-        pool,
-        discord_ctx,
-        &event_data,
-        channel_id,
-        lead_time,
-    ).await?;
+    let result =
+        post_volunteer_requests_for_event(pool, discord_ctx, &event_data, channel_id, lead_time)
+            .await?;
 
     Ok(result)
 }
@@ -235,7 +244,8 @@ async fn post_volunteer_requests_for_event(
         event_data.series,
         &event_data.event,
         lead_time,
-    ).await?;
+    )
+    .await?;
 
     let count = races_needing_volunteers.len();
 
@@ -280,15 +290,23 @@ async fn post_volunteer_requests_for_event(
     let mut remaining = races_needing_volunteers.as_slice();
 
     // Existing posts (message_id, race_count) in earliest-race-first order.
-    let existing_counts: Vec<(MessageId, i64)> = existing_messages.iter()
-        .filter_map(|existing| existing.message_id.map(|PgSnowflake(id)| (id, existing.race_count)))
+    let existing_counts: Vec<(MessageId, i64)> = existing_messages
+        .iter()
+        .filter_map(|existing| {
+            existing
+                .message_id
+                .map(|PgSnowflake(id)| (id, existing.race_count))
+        })
         .collect();
 
     // Repack under-filled posts together so fewer messages remain, then restore
     // earliest-race-first order so existing behavior is unchanged when nothing merges.
     let mut merge_groups = plan_message_merges(&existing_counts, MAX_RACES_PER_POST as i64);
     merge_groups.sort_by_key(|group| {
-        existing_counts.iter().position(|(id, _)| *id == group.survivor).unwrap_or(usize::MAX)
+        existing_counts
+            .iter()
+            .position(|(id, _)| *id == group.survivor)
+            .unwrap_or(usize::MAX)
     });
 
     // Plan updates for existing posts while the transaction is open.
@@ -306,7 +324,10 @@ async fn post_volunteer_requests_for_event(
         }
 
         let mut all_race_ids = Vec::new();
-        for (i, message_id) in iter::once(group.survivor).chain(group.absorbed.iter().copied()).enumerate() {
+        for (i, message_id) in iter::once(group.survivor)
+            .chain(group.absorbed.iter().copied())
+            .enumerate()
+        {
             let ids = sqlx::query_scalar!(
                 r#"SELECT id AS "id: Id<Races>"
                 FROM races
@@ -325,7 +346,11 @@ async fn post_volunteer_requests_for_event(
             }
             all_race_ids.extend(ids);
         }
-        let new_race_ids: Vec<_> = add_race_ids.iter().copied().filter(|id| !all_race_ids.contains(id)).collect();
+        let new_race_ids: Vec<_> = add_race_ids
+            .iter()
+            .copied()
+            .filter(|id| !all_race_ids.contains(id))
+            .collect();
         all_race_ids.extend(new_race_ids);
 
         let all_needs = build_volunteer_needs_for_race_ids(
@@ -333,7 +358,8 @@ async fn post_volunteer_requests_for_event(
             event_data,
             &all_race_ids,
             &http_client,
-        ).await?;
+        )
+        .await?;
 
         let (content, components) = build_announcement_content(&all_needs, event_data, now, cutoff);
         existing_post_plans.push(ExistingPostPlan {
@@ -355,15 +381,25 @@ async fn post_volunteer_requests_for_event(
     transaction.commit().await?;
 
     for plan in existing_post_plans {
-        if let Err(e) = channel_id.edit_message(
-            discord_ctx,
-            plan.message_id,
-            EditMessage::new().content(plan.content).components(plan.components),
-        ).await {
-            eprintln!("volunteer post update: failed to edit message {}: {e}", plan.message_id);
+        if let Err(e) = channel_id
+            .edit_message(
+                discord_ctx,
+                plan.message_id,
+                EditMessage::new()
+                    .content(plan.content)
+                    .components(plan.components),
+            )
+            .await
+        {
+            eprintln!(
+                "volunteer post update: failed to edit message {}: {e}",
+                plan.message_id
+            );
             if is_unknown_message(&e) || is_message_too_long(&e) {
                 if is_message_too_long(&e) {
-                    let _ = channel_id.delete_message(discord_ctx, plan.message_id).await;
+                    let _ = channel_id
+                        .delete_message(discord_ctx, plan.message_id)
+                        .await;
                 }
                 let mut cleanup_tx = pool.begin().await?;
                 sqlx::query!(
@@ -394,7 +430,9 @@ async fn post_volunteer_requests_for_event(
 
         for absorbed_id in plan.absorbed_message_ids {
             if let Err(e) = channel_id.delete_message(discord_ctx, absorbed_id).await {
-                eprintln!("volunteer post merge: failed to delete absorbed message {absorbed_id}: {e}");
+                eprintln!(
+                    "volunteer post merge: failed to delete absorbed message {absorbed_id}: {e}"
+                );
             }
         }
     }
@@ -433,11 +471,9 @@ async fn build_volunteer_needs_for_race_ids(
     race_ids: &[Id<Races>],
     http_client: &reqwest::Client,
 ) -> Result<Vec<RaceVolunteerNeed>, Error> {
-    let role_bindings = EffectiveRoleBinding::for_event(
-        &mut *transaction,
-        event_data.series,
-        &event_data.event,
-    ).await?;
+    let role_bindings =
+        EffectiveRoleBinding::for_event(&mut *transaction, event_data.series, &event_data.event)
+            .await?;
     let mut needs = Vec::new();
 
     for rid in race_ids {
@@ -450,14 +486,15 @@ async fn build_volunteer_needs_for_race_ids(
         };
         let matchup = get_matchup_description(&mut *transaction, http_client, &race).await?;
         let signups = Signup::for_race(&mut *transaction, *rid).await?;
-        let (role_needs, has_any_need) = collect_role_needs_for_bindings(
-            &mut *transaction,
-            &role_bindings,
-            &signups,
-        ).await?;
+        let (role_needs, has_any_need) =
+            collect_role_needs_for_bindings(&mut *transaction, &role_bindings, &signups).await?;
 
         if has_any_need {
-            needs.push(RaceVolunteerNeed { race, matchup, role_needs });
+            needs.push(RaceVolunteerNeed {
+                race,
+                matchup,
+                role_needs,
+            });
         }
     }
 
@@ -516,7 +553,7 @@ async fn get_races_needing_announcements(
 
         // Check restream consent - all teams must have consented
         // Skip this check for open-entry races and qualifiers
-        if !matches!(race.entrants, Entrants::Open) && !race.phase.as_ref().is_some_and(|p| p == "Qualifier") {
+        if !matches!(race.entrants, Entrants::Open) && !race.is_qualifier {
             if !race.restream_consent_required {
                 if let Some(mut teams) = race.teams_opt() {
                     if !teams.all(|team| team.restream_consent) {
@@ -533,10 +570,12 @@ async fn get_races_needing_announcements(
         let matchup = get_matchup_description(&mut *transaction, &http_client, &race).await?;
 
         // Get role bindings and check volunteer counts
-        let role_bindings = EffectiveRoleBinding::for_event(&mut *transaction, series, event).await?;
+        let role_bindings =
+            EffectiveRoleBinding::for_event(&mut *transaction, series, event).await?;
         let signups = Signup::for_race(&mut *transaction, race_id).await?;
 
-        let (role_needs, has_any_need) = collect_role_needs_for_bindings(&mut *transaction, &role_bindings, &signups).await?;
+        let (role_needs, has_any_need) =
+            collect_role_needs_for_bindings(&mut *transaction, &role_bindings, &signups).await?;
 
         if has_any_need {
             needs.push(RaceVolunteerNeed {
@@ -557,11 +596,21 @@ async fn get_races_needing_announcements(
 }
 
 /// Joins round, phase, and game number (in that order) for display, e.g. "Round 1, Winners, Game 2".
-pub(crate) fn format_round_phase_game(round: Option<&str>, phase: Option<&str>, game: Option<i16>) -> Option<String> {
+pub(crate) fn format_round_phase_game(
+    round: Option<&str>,
+    phase: Option<&str>,
+    game: Option<i16>,
+) -> Option<String> {
     let mut parts = Vec::new();
-    if let Some(r) = round { parts.push(r.to_string()); }
-    if let Some(p) = phase { parts.push(p.to_string()); }
-    if let Some(g) = game { parts.push(format!("Game {g}")); }
+    if let Some(r) = round {
+        parts.push(r.to_string());
+    }
+    if let Some(p) = phase {
+        parts.push(p.to_string());
+    }
+    if let Some(g) = game {
+        parts.push(format!("Game {g}"));
+    }
     (!parts.is_empty()).then(|| parts.join(", "))
 }
 
@@ -572,7 +621,7 @@ async fn get_matchup_description(
     race: &Race,
 ) -> Result<String, Error> {
     if let Some(custom_title) = &race.custom_title {
-        return Ok(custom_title.clone())
+        return Ok(custom_title.clone());
     }
 
     if let Some(label) = race.seeding_race_label(transaction).await? {
@@ -580,8 +629,12 @@ async fn get_matchup_description(
     }
 
     // For qualifier races, use "Qualifier <round>" (e.g., "Qualifier 1")
-    if race.phase.as_ref().is_some_and(|p| p == "Qualifier") {
-        return Ok(race.round.as_ref().map(|r| format!("Qualifier {}", r)).unwrap_or_else(|| "Qualifier".to_string()));
+    if race.is_qualifier {
+        return Ok(race
+            .round
+            .as_ref()
+            .map(|r| format!("Qualifier {}", r))
+            .unwrap_or_else(|| "Qualifier".to_string()));
     }
 
     let matchup = match &race.entrants {
@@ -600,18 +653,25 @@ async fn get_matchup_description(
         _ => "Unknown matchup".to_string(),
     };
 
-    let event_data = event::Data::new(transaction, race.series, &race.event).await.ok().flatten();
+    let event_data = event::Data::new(transaction, race.series, &race.event)
+        .await
+        .ok()
+        .flatten();
     let draft_mode = race.draft.as_ref().and_then(|draft| {
         let game = race.game.unwrap_or(1);
         let preset = draft.settings.get(&*format!("game{game}_preset"))?;
-        event_data.as_ref()?.draft_kind().and_then(|kind| kind.preset_display_name(preset.as_ref()).map(|s| s.to_owned()))
+        event_data.as_ref()?.draft_kind().and_then(|kind| {
+            kind.preset_display_name(preset.as_ref())
+                .map(|s| s.to_owned())
+        })
     });
 
     // Add round/phase/game info if available, then draft mode
-    let mut result = match format_round_phase_game(race.round.as_deref(), race.phase.as_deref(), race.game) {
-        Some(suffix) => format!("{matchup} ({suffix})"),
-        None => matchup,
-    };
+    let mut result =
+        match format_round_phase_game(race.round.as_deref(), race.phase.as_deref(), race.game) {
+            Some(suffix) => format!("{matchup} ({suffix})"),
+            None => matchup,
+        };
 
     // Append draft mode if present
     if let Some(mode) = draft_mode {
@@ -635,7 +695,11 @@ async fn get_matchup_description(
             Entrants::Open => "Open Signup Race".to_string(),
             _ => "Unknown matchup".to_string(),
         };
-        let companion_matchup = match format_round_phase_game(companion.round.as_deref(), companion.phase.as_deref(), companion.game) {
+        let companion_matchup = match format_round_phase_game(
+            companion.round.as_deref(),
+            companion.phase.as_deref(),
+            companion.game,
+        ) {
             Some(suffix) => format!("{companion_matchup} ({suffix})"),
             None => companion_matchup,
         };
@@ -651,13 +715,13 @@ async fn get_entrant_name(
     entrant: &Entrant,
 ) -> Result<String, Error> {
     Ok(match entrant {
-        Entrant::MidosHouseTeam(team) => {
-            team.name(transaction).await
-                .ok()
-                .flatten()
-                .map(|n| n.into_owned())
-                .unwrap_or_else(|| "Unknown Team".to_string())
-        }
+        Entrant::MidosHouseTeam(team) => team
+            .name(transaction)
+            .await
+            .ok()
+            .flatten()
+            .map(|n| n.into_owned())
+            .unwrap_or_else(|| "Unknown Team".to_string()),
         Entrant::Named { name, .. } => name.clone(),
         Entrant::Discord { .. } => "Discord User".to_string(),
     })
@@ -703,8 +767,12 @@ async fn collect_role_needs_for_bindings(
             continue;
         }
 
-        let confirmed_signups: Vec<_> = signups.iter()
-            .filter(|s| s.role_binding_id == binding.id && matches!(s.status, VolunteerSignupStatus::Confirmed))
+        let confirmed_signups: Vec<_> = signups
+            .iter()
+            .filter(|s| {
+                s.role_binding_id == binding.id
+                    && matches!(s.status, VolunteerSignupStatus::Confirmed)
+            })
             .collect();
         let confirmed_count = confirmed_signups.len() as i32;
 
@@ -715,8 +783,12 @@ async fn collect_role_needs_for_bindings(
             }
         }
 
-        let pending_count = signups.iter()
-            .filter(|s| s.role_binding_id == binding.id && matches!(s.status, VolunteerSignupStatus::Pending))
+        let pending_count = signups
+            .iter()
+            .filter(|s| {
+                s.role_binding_id == binding.id
+                    && matches!(s.status, VolunteerSignupStatus::Pending)
+            })
             .count() as i32;
 
         let is_full = confirmed_count >= binding.max_count;
@@ -841,7 +913,12 @@ fn build_announcement_content(
     }
 
     // Add signup link
-    msg.push(format!("Sign up through the website or the buttons below: <{}/event/{}/{}/volunteer-roles>", base_uri(), event_data.series.slug(), &*event_data.event));
+    msg.push(format!(
+        "Sign up through the website or the buttons below: <{}/event/{}/{}/volunteer-roles>",
+        base_uri(),
+        event_data.series.slug(),
+        &*event_data.event
+    ));
 
     // Build buttons for each race (max 5 buttons per row, max 5 rows = 25 buttons)
     // Skip races that have already started
@@ -861,12 +938,14 @@ fn build_announcement_content(
 
         // Button label: truncate matchup to fit Discord's 80 char limit.
         // If multiple races share the same matchup string, add the date to disambiguate.
-        let has_duplicate_matchup = needs.iter()
-            .filter(|n| n.matchup == need.matchup)
-            .count() > 1;
+        let has_duplicate_matchup = needs.iter().filter(|n| n.matchup == need.matchup).count() > 1;
         let label = if has_duplicate_matchup {
             if let RaceSchedule::Live { start, .. } = need.race.schedule {
-                format!("Sign up: {} - {}", truncate_string(&need.matchup, 60), start.format("%b %d"))
+                format!(
+                    "Sign up: {} - {}",
+                    truncate_string(&need.matchup, 60),
+                    start.format("%b %d")
+                )
             } else {
                 format!("Sign up: {}", truncate_string(&need.matchup, 60))
             }
@@ -904,15 +983,9 @@ fn build_announcement_message(
     time_window_start: DateTime<Utc>,
     time_window_end: DateTime<Utc>,
 ) -> CreateMessage {
-    let (content, components) = build_announcement_content(
-        needs,
-        event_data,
-        time_window_start,
-        time_window_end,
-    );
-    CreateMessage::new()
-        .content(content)
-        .components(components)
+    let (content, components) =
+        build_announcement_content(needs, event_data, time_window_start, time_window_end);
+    CreateMessage::new().content(content).components(components)
 }
 
 /// Updates the volunteer request post for a race when signups change.
@@ -981,29 +1054,25 @@ pub(crate) async fn update_volunteer_post_for_race(
     }
 
     // Get event data for display name
-    let event_data = match event::Data::new(&mut transaction, race_info.series, &race_info.event).await? {
-        Some(data) => data,
-        None => return Ok(()),
-    };
+    let event_data =
+        match event::Data::new(&mut transaction, race_info.series, &race_info.event).await? {
+            Some(data) => data,
+            None => return Ok(()),
+        };
 
     // Build volunteer needs for all races in this post
-    let mut needs = build_volunteer_needs_for_race_ids(
-        &mut transaction,
-        &event_data,
-        &race_ids,
-        &http_client,
-    ).await?;
+    let mut needs =
+        build_volunteer_needs_for_race_ids(&mut transaction, &event_data, &race_ids, &http_client)
+            .await?;
 
     // Calculate current time
     let now = Utc::now();
     let grace_cutoff = now - Duration::minutes(15);
 
     // Filter out races that started more than 15 minutes ago
-    needs.retain(|need| {
-        match need.race.schedule {
-            RaceSchedule::Live { start, .. } => start > grace_cutoff,
-            _ => false,
-        }
+    needs.retain(|need| match need.race.schedule {
+        RaceSchedule::Live { start, .. } => start > grace_cutoff,
+        _ => false,
     });
 
     // All races in this post have started - delete the now-empty Discord message
@@ -1026,23 +1095,19 @@ pub(crate) async fn update_volunteer_post_for_race(
     let cutoff = now + lead_time;
 
     // Build the updated message content
-    let (content, components) = build_announcement_content(
-        &needs,
-        &event_data,
-        now,
-        cutoff,
-    );
+    let (content, components) = build_announcement_content(&needs, &event_data, now, cutoff);
 
     transaction.commit().await?;
 
     // Edit the message
-    if let Err(e) = channel_id.edit_message(
-        discord_ctx,
-        message_id,
-        EditMessage::new()
-            .content(content)
-            .components(components)
-    ).await {
+    if let Err(e) = channel_id
+        .edit_message(
+            discord_ctx,
+            message_id,
+            EditMessage::new().content(content).components(components),
+        )
+        .await
+    {
         if is_unknown_message(&e) || is_message_too_long(&e) {
             if is_message_too_long(&e) {
                 let _ = channel_id.delete_message(discord_ctx, message_id).await;
@@ -1179,12 +1244,9 @@ pub(crate) async fn update_volunteer_post_by_message_id(
     };
 
     // Build volunteer needs for remaining races
-    let mut needs = build_volunteer_needs_for_race_ids(
-        &mut transaction,
-        &event_data,
-        &race_ids,
-        &http_client,
-    ).await?;
+    let mut needs =
+        build_volunteer_needs_for_race_ids(&mut transaction, &event_data, &race_ids, &http_client)
+            .await?;
 
     let now = Utc::now();
     let grace_cutoff = now - Duration::minutes(15);
@@ -1205,15 +1267,19 @@ pub(crate) async fn update_volunteer_post_by_message_id(
     }
 
     let lead_time = Duration::hours(event_config.volunteer_request_lead_time_hours as i64);
-    let (content, components) = build_announcement_content(&needs, &event_data, now, now + lead_time);
+    let (content, components) =
+        build_announcement_content(&needs, &event_data, now, now + lead_time);
 
     transaction.commit().await?;
 
-    if let Err(e) = channel_id.edit_message(
-        discord_ctx,
-        message_id,
-        EditMessage::new().content(content).components(components),
-    ).await {
+    if let Err(e) = channel_id
+        .edit_message(
+            discord_ctx,
+            message_id,
+            EditMessage::new().content(content).components(components),
+        )
+        .await
+    {
         if is_unknown_message(&e) || is_message_too_long(&e) {
             if is_message_too_long(&e) {
                 let _ = channel_id.delete_message(discord_ctx, message_id).await;
@@ -1237,7 +1303,9 @@ pub(crate) async fn update_volunteer_post_by_message_id(
 mod tests {
     use super::*;
 
-    fn msg(n: u64) -> MessageId { MessageId::new(n) }
+    fn msg(n: u64) -> MessageId {
+        MessageId::new(n)
+    }
 
     #[test]
     fn merges_small_posts_together() {
@@ -1263,8 +1331,14 @@ mod tests {
 
     #[test]
     fn format_round_phase_game_orders_parts() {
-        assert_eq!(format_round_phase_game(Some("Round 1"), Some("Winners"), Some(2)), Some("Round 1, Winners, Game 2".to_string()));
+        assert_eq!(
+            format_round_phase_game(Some("Round 1"), Some("Winners"), Some(2)),
+            Some("Round 1, Winners, Game 2".to_string())
+        );
         assert_eq!(format_round_phase_game(None, None, None), None);
-        assert_eq!(format_round_phase_game(None, None, Some(2)), Some("Game 2".to_string()));
+        assert_eq!(
+            format_round_phase_game(None, None, Some(2)),
+            Some("Game 2".to_string())
+        );
     }
 }

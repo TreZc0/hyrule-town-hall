@@ -1,0 +1,59 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT race.id AS \"id: Id<Races>\", race.phase, race.qualifier_number,\n            race.round, race.start, race.room, mode.display_name AS mode_name\n        FROM races race\n        LEFT JOIN qualifier_seeds seed ON seed.live_race_id = race.id AND seed.source = 'live'\n        LEFT JOIN qualifier_modes mode ON mode.id = seed.mode_id\n        WHERE race.series = $1 AND race.event = $2 AND race.is_qualifier\n        ORDER BY race.start NULLS LAST, race.round",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id: Id<Races>",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "phase",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "qualifier_number",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 3,
+        "name": "round",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "start",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 5,
+        "name": "room",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "mode_name",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "9f4e5b5304f3cf1fa7e250564409ba982510a933aa1f22c4be404bbb51ccd85d"
+}

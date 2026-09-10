@@ -1,7 +1,11 @@
 use crate::prelude::*;
 
 #[rocket::get("/legal")]
-pub(crate) async fn legal_disclaimer(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>) -> PageResult {
+pub(crate) async fn legal_disclaimer(
+    pool: &State<PgPool>,
+    me: Option<User>,
+    uri: Origin<'_>,
+) -> PageResult {
     page(pool.begin().await?, &me, &uri, PageStyle::default(), "Legal — Hyrule Town Hall", html! {
             p {
                 strong : "Information in accordance with Section 5 TMG";
@@ -46,16 +50,16 @@ pub(crate) async fn legal_disclaimer(pool: &State<PgPool>, me: Option<User>, uri
             }
             p : "This policy covers:";
             ol {
-                li { 
+                li {
                     strong : "I. Information about us as controllers of your data";
                 };
-                li { 
+                li {
                     strong : "II. The rights of users and data subjects";
                 };
-                li { 
+                li {
                     strong : "III. Information about the data processing";
                 };
-                li { 
+                li {
                     strong : "IV. Detailed info on processing your personal data";
                 };
             }

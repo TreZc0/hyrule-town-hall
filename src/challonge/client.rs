@@ -1,3 +1,5 @@
+use super::types::*;
+use crate::prelude::*;
 use {
     std::{
         collections::HashMap,
@@ -7,8 +9,6 @@ use {
     },
     tokio::sync::Mutex,
 };
-use crate::prelude::*;
-use super::types::*;
 
 /// Challonge has a 5000 requests/month limit.
 /// Safe daily limit: ~160 requests (5000/31)
@@ -34,10 +34,14 @@ static RATE_LIMITER: LazyLock<Mutex<RateLimiter>> = LazyLock::new(|| {
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum Error {
-    #[error(transparent)] Reqwest(#[from] reqwest::Error),
-    #[error(transparent)] Sql(#[from] sqlx::Error),
-    #[error(transparent)] Url(#[from] url::ParseError),
-    #[error(transparent)] Wheel(#[from] wheel::Error),
+    #[error(transparent)]
+    Reqwest(#[from] reqwest::Error),
+    #[error(transparent)]
+    Sql(#[from] sqlx::Error),
+    #[error(transparent)]
+    Url(#[from] url::ParseError),
+    #[error(transparent)]
+    Wheel(#[from] wheel::Error),
     #[error("daily Challonge API budget exceeded ({0}/{SAFE_DAILY_LIMIT} requests)")]
     DailyBudgetExceeded(u32),
 }
@@ -76,8 +80,14 @@ where
 }
 
 /// Build a Challonge API request with standard headers.
-pub(crate) fn api_request(http_client: &reqwest::Client, method: reqwest::Method, url: impl reqwest::IntoUrl, api_key: &str) -> reqwest::RequestBuilder {
-    http_client.request(method, url)
+pub(crate) fn api_request(
+    http_client: &reqwest::Client,
+    method: reqwest::Method,
+    url: impl reqwest::IntoUrl,
+    api_key: &str,
+) -> reqwest::RequestBuilder {
+    http_client
+        .request(method, url)
         .header(reqwest::header::ACCEPT, "application/json")
         .header(reqwest::header::CONTENT_TYPE, "application/vnd.api+json")
         .header("Authorization-Type", "v1")
@@ -87,7 +97,9 @@ pub(crate) fn api_request(http_client: &reqwest::Client, method: reqwest::Method
 /// Build the base URL for a tournament-scoped API endpoint.
 pub(crate) fn tournament_url(community: Option<&str>, tournament: &str, resource: &str) -> String {
     if let Some(community) = community {
-        format!("https://api.challonge.com/v2/communities/{community}/tournaments/{tournament}/{resource}.json")
+        format!(
+            "https://api.challonge.com/v2/communities/{community}/tournaments/{tournament}/{resource}.json"
+        )
     } else {
         format!("https://api.challonge.com/v2/tournaments/{tournament}/{resource}.json")
     }
@@ -113,7 +125,10 @@ fn cache_key(community: Option<&str>, tournament: &str) -> String {
     }
 }
 
-pub(crate) async fn cached_participants(community: Option<&str>, tournament: &str) -> Option<Vec<Participant>> {
+pub(crate) async fn cached_participants(
+    community: Option<&str>,
+    tournament: &str,
+) -> Option<Vec<Participant>> {
     let key = cache_key(community, tournament);
     let cache = PARTICIPANTS_CACHE.lock().await;
     cache.get(&key).and_then(|entry| {
@@ -125,13 +140,31 @@ pub(crate) async fn cached_participants(community: Option<&str>, tournament: &st
     })
 }
 
-pub(crate) async fn store_participants(community: Option<&str>, tournament: &str, data: Vec<Participant>) {
+pub(crate) async fn store_participants(
+    community: Option<&str>,
+    tournament: &str,
+    data: Vec<Participant>,
+) {
     let key = cache_key(community, tournament);
-    PARTICIPANTS_CACHE.lock().await.insert(key, CacheEntry { data, retrieved_at: Instant::now() });
+    PARTICIPANTS_CACHE.lock().await.insert(
+        key,
+        CacheEntry {
+            data,
+            retrieved_at: Instant::now(),
+        },
+    );
 }
 
-pub(crate) async fn cached_matches(community: Option<&str>, tournament: &str, state: Option<&str>) -> Option<Vec<Match>> {
-    let key = format!("{}:{}", cache_key(community, tournament), state.unwrap_or("all"));
+pub(crate) async fn cached_matches(
+    community: Option<&str>,
+    tournament: &str,
+    state: Option<&str>,
+) -> Option<Vec<Match>> {
+    let key = format!(
+        "{}:{}",
+        cache_key(community, tournament),
+        state.unwrap_or("all")
+    );
     let cache = MATCHES_CACHE.lock().await;
     cache.get(&key).and_then(|entry| {
         if entry.retrieved_at.elapsed() < MATCHES_CACHE_TTL {
@@ -142,7 +175,22 @@ pub(crate) async fn cached_matches(community: Option<&str>, tournament: &str, st
     })
 }
 
-pub(crate) async fn store_matches(community: Option<&str>, tournament: &str, state: Option<&str>, data: Vec<Match>) {
-    let key = format!("{}:{}", cache_key(community, tournament), state.unwrap_or("all"));
-    MATCHES_CACHE.lock().await.insert(key, CacheEntry { data, retrieved_at: Instant::now() });
+pub(crate) async fn store_matches(
+    community: Option<&str>,
+    tournament: &str,
+    state: Option<&str>,
+    data: Vec<Match>,
+) {
+    let key = format!(
+        "{}:{}",
+        cache_key(community, tournament),
+        state.unwrap_or("all")
+    );
+    MATCHES_CACHE.lock().await.insert(
+        key,
+        CacheEntry {
+            data,
+            retrieved_at: Instant::now(),
+        },
+    );
 }

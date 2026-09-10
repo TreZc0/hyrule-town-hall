@@ -1,29 +1,23 @@
 use {
+    crate::prelude::*,
     anyhow::anyhow,
+    chrono::TimeDelta,
     rocket::http::{
         impl_from_uri_param_identity,
         uri::{
             self,
-            fmt::{
-                Path,
-                UriDisplay,
-            },
+            fmt::{Path, UriDisplay},
         },
     },
     sqlx::{
-        Decode,
-        Encode,
-        postgres::{
-            PgArgumentBuffer,
-            PgTypeInfo,
-            PgValueRef,
-        },
+        Decode, Encode,
+        postgres::{PgArgumentBuffer, PgTypeInfo, PgValueRef},
     },
-    crate::prelude::*,
-    chrono::TimeDelta,
 };
 
 pub(crate) mod alttprde;
+pub(crate) mod botwany;
+pub(crate) mod botwmsr;
 pub(crate) mod br;
 pub(crate) mod cabookey;
 pub(crate) mod coop;
@@ -41,18 +35,18 @@ pub(crate) mod scrubs;
 pub(crate) mod sgl;
 pub(crate) mod soh;
 pub(crate) mod tfb;
-pub(crate) mod wttbb;
-pub(crate) mod xkeys;
 pub(crate) mod twwrmain;
 pub(crate) mod wolfdash;
-pub(crate) mod botwany;
-pub(crate) mod botwmsr;
+pub(crate) mod wttbb;
+pub(crate) mod xkeys;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Sequence)]
 pub(crate) enum Series {
     BotwAny,
     BotwMsr,
     AlttprDe,
+    AlttprMain,
+    AlttprEnemizer,
     AlttprSpecials,
     BattleRoyale,
     Cabookey,
@@ -85,6 +79,8 @@ impl Series {
             Self::BotwAny => "botwany",
             Self::BotwMsr => "botwmsr",
             Self::AlttprDe => "alttprde",
+            Self::AlttprMain => "alttprmain",
+            Self::AlttprEnemizer => "alttprenemizer",
             Self::AlttprSpecials => "alttprspecials",
             Self::BattleRoyale => "ohko",
             Self::Cabookey => "cabookey",
@@ -117,6 +113,8 @@ impl Series {
             Self::BotwAny => "BotW Any% Tournaments",
             Self::BotwMsr => "BotW MSR Tournaments",
             Self::AlttprDe => "Deutsche ALTTPR Turniere",
+            Self::AlttprMain => "ALTTPR Main",
+            Self::AlttprEnemizer => "ALTTPR Enemizer",
             Self::AlttprSpecials => "ALTTPR Specials",
             Self::BattleRoyale => "Battle Royale",
             Self::Cabookey => "Cabookey Tournaments",
@@ -147,9 +145,28 @@ impl Series {
     pub(crate) fn default_race_duration(&self) -> TimeDelta {
         match self {
             Self::TriforceBlitz => TimeDelta::hours(2),
-            Self::AlttprDe | Self::AlttprSpecials | Self::BattleRoyale | Self::Cabookey | Self::Casboots | Self::Crosskeys | Self::MysteryD | Self::TwwrMain => TimeDelta::hours(2) + TimeDelta::minutes(30),
-            Self::CoOp | Self::MixedPools | Self::Scrubs | Self::SpeedGaming | Self::WeTryToBeBetter => TimeDelta::hours(3),
-            Self::CopaDoBrasil | Self::League | Self::NineDaysOfSaws | Self::SongsOfHope | Self::Standard | Self::TournoiFrancophone | Self::Wolfdash => TimeDelta::hours(3) + TimeDelta::minutes(30),
+            Self::AlttprDe
+            | Self::AlttprMain
+            | Self::AlttprEnemizer
+            | Self::AlttprSpecials
+            | Self::BattleRoyale
+            | Self::Cabookey
+            | Self::Casboots
+            | Self::Crosskeys
+            | Self::MysteryD
+            | Self::TwwrMain => TimeDelta::hours(2) + TimeDelta::minutes(30),
+            Self::CoOp
+            | Self::MixedPools
+            | Self::Scrubs
+            | Self::SpeedGaming
+            | Self::WeTryToBeBetter => TimeDelta::hours(3),
+            Self::CopaDoBrasil
+            | Self::League
+            | Self::NineDaysOfSaws
+            | Self::SongsOfHope
+            | Self::Standard
+            | Self::TournoiFrancophone
+            | Self::Wolfdash => TimeDelta::hours(3) + TimeDelta::minutes(30),
             Self::Mq | Self::Multiworld | Self::Pictionary => TimeDelta::hours(4),
             Self::BotwAny => TimeDelta::hours(1),
             Self::BotwMsr => TimeDelta::hours(2),
@@ -167,18 +184,28 @@ impl FromStr for Series {
 }
 
 impl<'r> Decode<'r, Postgres> for Series {
-    fn decode(value: PgValueRef<'r>) -> Result<Self, Box<dyn std::error::Error + 'static + Send + Sync>> {
+    fn decode(
+        value: PgValueRef<'r>,
+    ) -> Result<Self, Box<dyn std::error::Error + 'static + Send + Sync>> {
         let series = <&str as Decode<Postgres>>::decode(value)?;
-        series.parse().map_err(|()| anyhow!("unknown series: {series}").into())
+        series
+            .parse()
+            .map_err(|()| anyhow!("unknown series: {series}").into())
     }
 }
 
 impl<'q> Encode<'q, Postgres> for Series {
-    fn encode_by_ref(&self, buf: &mut PgArgumentBuffer) -> Result<sqlx::encode::IsNull, Box<dyn std::error::Error + Send + Sync>> {
+    fn encode_by_ref(
+        &self,
+        buf: &mut PgArgumentBuffer,
+    ) -> Result<sqlx::encode::IsNull, Box<dyn std::error::Error + Send + Sync>> {
         Encode::<Postgres>::encode_by_ref(&self.slug(), buf)
     }
 
-    fn encode(self, buf: &mut PgArgumentBuffer) -> Result<sqlx::encode::IsNull, Box<dyn std::error::Error + Send + Sync>> {
+    fn encode(
+        self,
+        buf: &mut PgArgumentBuffer,
+    ) -> Result<sqlx::encode::IsNull, Box<dyn std::error::Error + Send + Sync>> {
         Encode::<Postgres>::encode(self.slug(), buf)
     }
 

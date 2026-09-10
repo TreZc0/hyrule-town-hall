@@ -1,27 +1,27 @@
 //! Database-driven weekly schedule configuration.
 
 use {
-    chrono::{
-        DateTime,
-        Days,
-        NaiveDate,
-        NaiveTime,
-        TimeZone,
-    },
+    crate::{discord_bot::PgSnowflake, id::Table, prelude::*},
+    chrono::{DateTime, Days, NaiveDate, NaiveTime, TimeZone},
     chrono_tz::Tz,
     serenity::model::id::{ChannelId, MessageId, RoleId},
-    crate::{
-        discord_bot::PgSnowflake,
-        id::Table,
-        prelude::*,
-    },
 };
 
 pub(crate) enum WeeklySchedules {}
 
 impl Table for WeeklySchedules {
-    fn query_exists(id: i64) -> sqlx::query::QueryScalar<'static, Postgres, bool, <Postgres as sqlx::Database>::Arguments<'static>> {
-        sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM weekly_schedules WHERE id = $1) AS "exists!""#, id)
+    fn query_exists(
+        id: i64,
+    ) -> sqlx::query::QueryScalar<
+        'static,
+        Postgres,
+        bool,
+        <Postgres as sqlx::Database>::Arguments<'static>,
+    > {
+        sqlx::query_scalar!(
+            r#"SELECT EXISTS (SELECT 1 FROM weekly_schedules WHERE id = $1) AS "exists!""#,
+            id
+        )
     }
 }
 
@@ -50,7 +50,8 @@ impl WeeklySchedule {
     /// Calculate the next occurrence after a given time.
     pub(crate) fn next_after(&self, min_time: DateTime<impl TimeZone>) -> DateTime<Tz> {
         // Start from the anchor date at the configured time
-        let mut time = self.anchor_date
+        let mut time = self
+            .anchor_date
             .and_time(self.time_of_day)
             .and_local_timezone(self.timezone)
             .single()
@@ -58,7 +59,8 @@ impl WeeklySchedule {
 
         // Advance by frequency_days until we're past min_time
         while time <= min_time {
-            let date = time.date_naive()
+            let date = time
+                .date_naive()
                 .checked_add_days(Days::new(self.frequency_days as u64))
                 .expect("overflow calculating next weekly");
             time = date
@@ -108,17 +110,27 @@ impl WeeklySchedule {
         for row in rows {
             schedules.push(Self {
                 id: Id::from(row.id),
-                series: row.series.parse().expect("invalid series in weekly_schedules"),
+                series: row
+                    .series
+                    .parse()
+                    .expect("invalid series in weekly_schedules"),
                 event: row.event,
                 name: row.name,
                 frequency_days: row.frequency_days,
                 time_of_day: row.time_of_day,
-                timezone: row.timezone.parse().expect("invalid timezone in weekly_schedules"),
+                timezone: row
+                    .timezone
+                    .parse()
+                    .expect("invalid timezone in weekly_schedules"),
                 anchor_date: row.anchor_date,
                 active: row.active,
                 settings_description: row.settings_description,
-                notification_channel_id: row.notification_channel_id.map(|id| PgSnowflake(ChannelId::new(id as u64))),
-                notification_role_id: row.notification_role_id.map(|id| PgSnowflake(RoleId::new(id as u64))),
+                notification_channel_id: row
+                    .notification_channel_id
+                    .map(|id| PgSnowflake(ChannelId::new(id as u64))),
+                notification_role_id: row
+                    .notification_role_id
+                    .map(|id| PgSnowflake(RoleId::new(id as u64))),
                 room_open_minutes_before: row.room_open_minutes_before,
                 racetime_goal: row.racetime_goal,
             });
@@ -159,17 +171,27 @@ impl WeeklySchedule {
 
         Ok(row.map(|row| Self {
             id: Id::from(row.id),
-            series: row.series.parse().expect("invalid series in weekly_schedules"),
+            series: row
+                .series
+                .parse()
+                .expect("invalid series in weekly_schedules"),
             event: row.event,
             name: row.name,
             frequency_days: row.frequency_days,
             time_of_day: row.time_of_day,
-            timezone: row.timezone.parse().expect("invalid timezone in weekly_schedules"),
+            timezone: row
+                .timezone
+                .parse()
+                .expect("invalid timezone in weekly_schedules"),
             anchor_date: row.anchor_date,
             active: row.active,
             settings_description: row.settings_description,
-            notification_channel_id: row.notification_channel_id.map(|id| PgSnowflake(ChannelId::new(id as u64))),
-            notification_role_id: row.notification_role_id.map(|id| PgSnowflake(RoleId::new(id as u64))),
+            notification_channel_id: row
+                .notification_channel_id
+                .map(|id| PgSnowflake(ChannelId::new(id as u64))),
+            notification_role_id: row
+                .notification_role_id
+                .map(|id| PgSnowflake(RoleId::new(id as u64))),
             room_open_minutes_before: row.room_open_minutes_before,
             racetime_goal: row.racetime_goal,
         }))
@@ -212,24 +234,37 @@ impl WeeklySchedule {
 
         Ok(row.map(|row| Self {
             id: Id::from(row.id),
-            series: row.series.parse().expect("invalid series in weekly_schedules"),
+            series: row
+                .series
+                .parse()
+                .expect("invalid series in weekly_schedules"),
             event: row.event,
             name: row.name,
             frequency_days: row.frequency_days,
             time_of_day: row.time_of_day,
-            timezone: row.timezone.parse().expect("invalid timezone in weekly_schedules"),
+            timezone: row
+                .timezone
+                .parse()
+                .expect("invalid timezone in weekly_schedules"),
             anchor_date: row.anchor_date,
             active: row.active,
             settings_description: row.settings_description,
-            notification_channel_id: row.notification_channel_id.map(|id| PgSnowflake(ChannelId::new(id as u64))),
-            notification_role_id: row.notification_role_id.map(|id| PgSnowflake(RoleId::new(id as u64))),
+            notification_channel_id: row
+                .notification_channel_id
+                .map(|id| PgSnowflake(ChannelId::new(id as u64))),
+            notification_role_id: row
+                .notification_role_id
+                .map(|id| PgSnowflake(RoleId::new(id as u64))),
             room_open_minutes_before: row.room_open_minutes_before,
             racetime_goal: row.racetime_goal,
         }))
     }
 
     /// Save this schedule to the database (update if exists).
-    pub(crate) async fn save(&self, transaction: &mut Transaction<'_, Postgres>) -> Result<(), sqlx::Error> {
+    pub(crate) async fn save(
+        &self,
+        transaction: &mut Transaction<'_, Postgres>,
+    ) -> Result<(), sqlx::Error> {
         sqlx::query!(
             r#"
             INSERT INTO weekly_schedules (id, series, event, name, frequency_days, time_of_day, timezone, anchor_date, active, settings_description, notification_channel_id, notification_role_id, room_open_minutes_before, racetime_goal)
@@ -281,7 +316,10 @@ impl WeeklySchedule {
 
     /// Deletes all upcoming (future, non-ignored) races created by this schedule.
     /// Returns the number of races deleted.
-    pub(crate) async fn delete_upcoming_races(&self, transaction: &mut Transaction<'_, Postgres>) -> Result<Vec<MessageId>, sqlx::Error> {
+    pub(crate) async fn delete_upcoming_races(
+        &self,
+        transaction: &mut Transaction<'_, Postgres>,
+    ) -> Result<Vec<MessageId>, sqlx::Error> {
         let round = self.round_name();
         // Capture message IDs of announced races before deleting them, so the
         // caller can update the Discord volunteer posts after the commit.
@@ -311,7 +349,10 @@ impl WeeklySchedule {
     }
 
     /// Delete this schedule from the database.
-    pub(crate) async fn delete(transaction: &mut Transaction<'_, Postgres>, id: Id<WeeklySchedules>) -> Result<(), sqlx::Error> {
+    pub(crate) async fn delete(
+        transaction: &mut Transaction<'_, Postgres>,
+        id: Id<WeeklySchedules>,
+    ) -> Result<(), sqlx::Error> {
         sqlx::query!("DELETE FROM weekly_schedules WHERE id = $1", id as _)
             .execute(&mut **transaction)
             .await?;

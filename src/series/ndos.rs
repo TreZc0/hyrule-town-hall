@@ -1,12 +1,12 @@
 use crate::{
-    event::{
-        Data,
-        InfoError,
-    },
+    event::{Data, InfoError},
     prelude::*,
 };
 
-pub(crate) async fn info(transaction: &mut Transaction<'_, Postgres>, data: &Data<'_>) -> Result<RawHtml<String>, InfoError> {
+pub(crate) async fn info(
+    transaction: &mut Transaction<'_, Postgres>,
+    data: &Data<'_>,
+) -> Result<RawHtml<String>, InfoError> {
     Ok(html! {
         article {
             p {

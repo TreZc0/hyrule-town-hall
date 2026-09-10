@@ -1,30 +1,25 @@
 use {
-    async_proto::{
-        ReadError,
-        ReadErrorKind,
+    crate::{
+        discord_bot::{Element, MULTIWORLD_GUILD},
+        prelude::*,
+        racetime_bot::{
+            CleanShutdownUpdate, PrerollMode, RollError, SeedCommandParseResult, SeedRollUpdate,
+            VersionedBranch, seed_gen_type::SeedGenType,
+        },
     },
+    async_proto::{ReadError, ReadErrorKind},
     mhstatus::PrepareStopUpdate,
     serde_json::Value as Json,
     tokio::net::UnixListener,
-    crate::{
-        discord_bot::{
-            Element,
-            MULTIWORLD_GUILD,
-        },
-        prelude::*,
-        racetime_bot::{
-            CleanShutdownUpdate,
-            PrerollMode,
-            RollError,
-            SeedCommandParseResult,
-            SeedRollUpdate,
-            VersionedBranch,
-            seed_gen_type::SeedGenType,
-        },
-    },
 };
 
-pub(crate) const PATH: &str = "/usr/local/share/midos-house/sock";
+pub(crate) fn path() -> PathBuf {
+    if matches!(Environment::default(), Environment::Local) {
+        std::env::temp_dir().join("midos-house-local.sock")
+    } else {
+        PathBuf::from("/usr/local/share/midos-house/sock")
+    }
+}
 
 fn json_arg(arg: &str) -> serde_json::Result<Json> {
     serde_json::from_str(arg)
@@ -78,9 +73,14 @@ pub(crate) enum ClientMessage {
     },
 }
 
-pub(crate) async fn listen(mut shutdown: rocket::Shutdown, clean_shutdown: Arc<Mutex<racetime_bot::CleanShutdown>>, global_state: Arc<racetime_bot::GlobalState>) -> wheel::Result<()> {
-    fs::remove_file(PATH).await.missing_ok()?;
-    let listener = UnixListener::bind(PATH).at(PATH)?;
+pub(crate) async fn listen(
+    mut shutdown: rocket::Shutdown,
+    clean_shutdown: Arc<Mutex<racetime_bot::CleanShutdown>>,
+    global_state: Arc<racetime_bot::GlobalState>,
+) -> wheel::Result<()> {
+    let path = path();
+    fs::remove_file(&path).await.missing_ok()?;
+    let listener = UnixListener::bind(&path).at(&path)?;
     loop {
         select! {
             () = &mut shutdown => break,

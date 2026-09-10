@@ -1,16 +1,12 @@
 use crate::{
-    event::{
-        Data,
-        Error,
-        FindTeamError,
-        InfoError,
-        Tab,
-        enter,
-    },
+    event::{Data, Error, FindTeamError, InfoError, Tab, enter},
     prelude::*,
 };
 
-pub(crate) async fn info(transaction: &mut Transaction<'_, Postgres>, data: &Data<'_>) -> Result<Option<RawHtml<String>>, InfoError> {
+pub(crate) async fn info(
+    transaction: &mut Transaction<'_, Postgres>,
+    data: &Data<'_>,
+) -> Result<Option<RawHtml<String>>, InfoError> {
     let is_random_settings = data.event.starts_with("rs");
     let settings = match &*data.event {
         "5" => html! {
@@ -199,30 +195,221 @@ pub(crate) async fn info(transaction: &mut Transaction<'_, Postgres>, data: &Dat
         _ => return Ok(None),
     };
     let sample_seeds = match &*data.event {
-        "5" => Some(seed::table(stream::iter(vec![
-            seed::Data { file_hash: None, password: None, seed_data: Some(seed::Files::MidosHouse { file_stem: Cow::Borrowed("OoT_F35CF_7F1NK3FEGY"), locked_spoiler_log_path: None }.to_seed_data_base()), progression_spoiler: false },
-            seed::Data { file_hash: None, password: None, seed_data: Some(seed::Files::MidosHouse { file_stem: Cow::Borrowed("OoT_F35CF_XULLQE310I"), locked_spoiler_log_path: None }.to_seed_data_base()), progression_spoiler: false },
-            seed::Data { file_hash: None, password: None, seed_data: Some(seed::Files::MidosHouse { file_stem: Cow::Borrowed("OoT_F35CF_3PT90NK69D"), locked_spoiler_log_path: None }.to_seed_data_base()), progression_spoiler: false },
-            seed::Data { file_hash: None, password: None, seed_data: Some(seed::Files::MidosHouse { file_stem: Cow::Borrowed("OoT_F35CF_I7BN7K3S2Z"), locked_spoiler_log_path: None }.to_seed_data_base()), progression_spoiler: false },
-            seed::Data { file_hash: None, password: None, seed_data: Some(seed::Files::MidosHouse { file_stem: Cow::Borrowed("OoT_F35CF_99YI7I0K6O"), locked_spoiler_log_path: None }.to_seed_data_base()), progression_spoiler: false },
-        ]), true, transaction, 1).await?),
-        "rs1" => Some(seed::table(stream::iter(vec![
-            seed::Data { file_hash: None, password: None, seed_data: Some(seed::Files::MidosHouse { file_stem: Cow::Borrowed("OoTR_1079630_V6516H22IW"), locked_spoiler_log_path: None }.to_seed_data_base()), progression_spoiler: false },
-            seed::Data { file_hash: None, password: None, seed_data: Some(seed::Files::MidosHouse { file_stem: Cow::Borrowed("OoTR_1079637_HAH75EOAHQ"), locked_spoiler_log_path: None }.to_seed_data_base()), progression_spoiler: false },
-            seed::Data { file_hash: None, password: None, seed_data: Some(seed::Files::MidosHouse { file_stem: Cow::Borrowed("OoTR_1079645_6XZJOSDCRW"), locked_spoiler_log_path: None }.to_seed_data_base()), progression_spoiler: false },
-            seed::Data { file_hash: None, password: None, seed_data: Some(seed::Files::MidosHouse { file_stem: Cow::Borrowed("OoTR_1079646_AJZWAB1X3U"), locked_spoiler_log_path: None }.to_seed_data_base()), progression_spoiler: false },
-            seed::Data { file_hash: None, password: None, seed_data: Some(seed::Files::MidosHouse { file_stem: Cow::Borrowed("OoTR_1079648_1DHCCQB5AC"), locked_spoiler_log_path: None }.to_seed_data_base()), progression_spoiler: false },
-        ]), true, transaction, 1).await?),
-        "rs2" => Some(seed::table(stream::iter(vec![
-            seed::Data { file_hash: None, password: None, seed_data: Some(seed::Files::MidosHouse { file_stem: Cow::Borrowed("OoT_5ADE7_1S6GBQNP8R"), locked_spoiler_log_path: None }.to_seed_data_base()), progression_spoiler: false },
-            seed::Data { file_hash: None, password: None, seed_data: Some(seed::Files::MidosHouse { file_stem: Cow::Borrowed("OoT_5ADE7_IIPBIQ4XAB"), locked_spoiler_log_path: None }.to_seed_data_base()), progression_spoiler: false },
-            seed::Data { file_hash: None, password: None, seed_data: Some(seed::Files::MidosHouse { file_stem: Cow::Borrowed("OoT_5ADE7_LBZIZMD75C"), locked_spoiler_log_path: None }.to_seed_data_base()), progression_spoiler: false },
-            seed::Data { file_hash: None, password: None, seed_data: Some(seed::Files::MidosHouse { file_stem: Cow::Borrowed("OoT_5ADE7_3OBW74243M"), locked_spoiler_log_path: None }.to_seed_data_base()), progression_spoiler: false },
-            seed::Data { file_hash: None, password: None, seed_data: Some(seed::Files::MidosHouse { file_stem: Cow::Borrowed("OoT_5ADE7_E18HE17UKF"), locked_spoiler_log_path: None }.to_seed_data_base()), progression_spoiler: false },
-        ]), true, transaction, 1).await?),
+        "5" => Some(
+            seed::table(
+                stream::iter(vec![
+                    seed::Data {
+                        file_hash: None,
+                        password: None,
+                        seed_data: Some(
+                            seed::Files::MidosHouse {
+                                file_stem: Cow::Borrowed("OoT_F35CF_7F1NK3FEGY"),
+                                locked_spoiler_log_path: None,
+                            }
+                            .to_seed_data_base(),
+                        ),
+                        progression_spoiler: false,
+                    },
+                    seed::Data {
+                        file_hash: None,
+                        password: None,
+                        seed_data: Some(
+                            seed::Files::MidosHouse {
+                                file_stem: Cow::Borrowed("OoT_F35CF_XULLQE310I"),
+                                locked_spoiler_log_path: None,
+                            }
+                            .to_seed_data_base(),
+                        ),
+                        progression_spoiler: false,
+                    },
+                    seed::Data {
+                        file_hash: None,
+                        password: None,
+                        seed_data: Some(
+                            seed::Files::MidosHouse {
+                                file_stem: Cow::Borrowed("OoT_F35CF_3PT90NK69D"),
+                                locked_spoiler_log_path: None,
+                            }
+                            .to_seed_data_base(),
+                        ),
+                        progression_spoiler: false,
+                    },
+                    seed::Data {
+                        file_hash: None,
+                        password: None,
+                        seed_data: Some(
+                            seed::Files::MidosHouse {
+                                file_stem: Cow::Borrowed("OoT_F35CF_I7BN7K3S2Z"),
+                                locked_spoiler_log_path: None,
+                            }
+                            .to_seed_data_base(),
+                        ),
+                        progression_spoiler: false,
+                    },
+                    seed::Data {
+                        file_hash: None,
+                        password: None,
+                        seed_data: Some(
+                            seed::Files::MidosHouse {
+                                file_stem: Cow::Borrowed("OoT_F35CF_99YI7I0K6O"),
+                                locked_spoiler_log_path: None,
+                            }
+                            .to_seed_data_base(),
+                        ),
+                        progression_spoiler: false,
+                    },
+                ]),
+                true,
+                transaction,
+                1,
+            )
+            .await?,
+        ),
+        "rs1" => Some(
+            seed::table(
+                stream::iter(vec![
+                    seed::Data {
+                        file_hash: None,
+                        password: None,
+                        seed_data: Some(
+                            seed::Files::MidosHouse {
+                                file_stem: Cow::Borrowed("OoTR_1079630_V6516H22IW"),
+                                locked_spoiler_log_path: None,
+                            }
+                            .to_seed_data_base(),
+                        ),
+                        progression_spoiler: false,
+                    },
+                    seed::Data {
+                        file_hash: None,
+                        password: None,
+                        seed_data: Some(
+                            seed::Files::MidosHouse {
+                                file_stem: Cow::Borrowed("OoTR_1079637_HAH75EOAHQ"),
+                                locked_spoiler_log_path: None,
+                            }
+                            .to_seed_data_base(),
+                        ),
+                        progression_spoiler: false,
+                    },
+                    seed::Data {
+                        file_hash: None,
+                        password: None,
+                        seed_data: Some(
+                            seed::Files::MidosHouse {
+                                file_stem: Cow::Borrowed("OoTR_1079645_6XZJOSDCRW"),
+                                locked_spoiler_log_path: None,
+                            }
+                            .to_seed_data_base(),
+                        ),
+                        progression_spoiler: false,
+                    },
+                    seed::Data {
+                        file_hash: None,
+                        password: None,
+                        seed_data: Some(
+                            seed::Files::MidosHouse {
+                                file_stem: Cow::Borrowed("OoTR_1079646_AJZWAB1X3U"),
+                                locked_spoiler_log_path: None,
+                            }
+                            .to_seed_data_base(),
+                        ),
+                        progression_spoiler: false,
+                    },
+                    seed::Data {
+                        file_hash: None,
+                        password: None,
+                        seed_data: Some(
+                            seed::Files::MidosHouse {
+                                file_stem: Cow::Borrowed("OoTR_1079648_1DHCCQB5AC"),
+                                locked_spoiler_log_path: None,
+                            }
+                            .to_seed_data_base(),
+                        ),
+                        progression_spoiler: false,
+                    },
+                ]),
+                true,
+                transaction,
+                1,
+            )
+            .await?,
+        ),
+        "rs2" => Some(
+            seed::table(
+                stream::iter(vec![
+                    seed::Data {
+                        file_hash: None,
+                        password: None,
+                        seed_data: Some(
+                            seed::Files::MidosHouse {
+                                file_stem: Cow::Borrowed("OoT_5ADE7_1S6GBQNP8R"),
+                                locked_spoiler_log_path: None,
+                            }
+                            .to_seed_data_base(),
+                        ),
+                        progression_spoiler: false,
+                    },
+                    seed::Data {
+                        file_hash: None,
+                        password: None,
+                        seed_data: Some(
+                            seed::Files::MidosHouse {
+                                file_stem: Cow::Borrowed("OoT_5ADE7_IIPBIQ4XAB"),
+                                locked_spoiler_log_path: None,
+                            }
+                            .to_seed_data_base(),
+                        ),
+                        progression_spoiler: false,
+                    },
+                    seed::Data {
+                        file_hash: None,
+                        password: None,
+                        seed_data: Some(
+                            seed::Files::MidosHouse {
+                                file_stem: Cow::Borrowed("OoT_5ADE7_LBZIZMD75C"),
+                                locked_spoiler_log_path: None,
+                            }
+                            .to_seed_data_base(),
+                        ),
+                        progression_spoiler: false,
+                    },
+                    seed::Data {
+                        file_hash: None,
+                        password: None,
+                        seed_data: Some(
+                            seed::Files::MidosHouse {
+                                file_stem: Cow::Borrowed("OoT_5ADE7_3OBW74243M"),
+                                locked_spoiler_log_path: None,
+                            }
+                            .to_seed_data_base(),
+                        ),
+                        progression_spoiler: false,
+                    },
+                    seed::Data {
+                        file_hash: None,
+                        password: None,
+                        seed_data: Some(
+                            seed::Files::MidosHouse {
+                                file_stem: Cow::Borrowed("OoT_5ADE7_E18HE17UKF"),
+                                locked_spoiler_log_path: None,
+                            }
+                            .to_seed_data_base(),
+                        ),
+                        progression_spoiler: false,
+                    },
+                ]),
+                true,
+                transaction,
+                1,
+            )
+            .await?,
+        ),
         _ => None,
     };
-    let winniedemon = User::from_id(&mut **transaction, Id::from(1807131022132982871_u64)).await?.ok_or(Error::OrganizerUserData)?;
+    let winniedemon = User::from_id(&mut **transaction, Id::from(1807131022132982871_u64))
+        .await?
+        .ok_or(Error::OrganizerUserData)?;
     Ok(Some(html! {
         article {
             h2 : "What is a Pictionary Spoiler Log Race?";
@@ -399,7 +586,9 @@ impl From<Role> for event::Role {
     }
 }
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, sqlx::Type, FromFormField)]
+#[derive(
+    Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, sqlx::Type, FromFormField,
+)]
 #[sqlx(type_name = "role_preference", rename_all = "snake_case")]
 pub(crate) enum RolePreference {
     #[field(value = "sheikah_only")]
@@ -437,7 +626,8 @@ impl ToHtml for RolePreference {
     }
 }
 
-pub(crate) enum EnterFormDefaults<'v> { //TODO move to crate::event::enter
+pub(crate) enum EnterFormDefaults<'v> {
+    //TODO move to crate::event::enter
     Context(Context<'v>),
     Values {
         my_role: Option<Role>,
@@ -499,8 +689,17 @@ impl<'v> EnterFormDefaults<'v> {
 }
 
 #[allow(unused_qualifications)] // rocket endpoint and uri macros don't work with relative module paths
-pub(crate) async fn enter_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>, uri: Origin<'_>, csrf: Option<&CsrfToken>, data: Data<'_>, defaults: EnterFormDefaults<'_>) -> Result<RawHtml<String>, Error> {
-    let header = data.header(&mut transaction, me.as_ref(), Tab::Enter, false).await?;
+pub(crate) async fn enter_form(
+    mut transaction: Transaction<'_, Postgres>,
+    me: Option<User>,
+    uri: Origin<'_>,
+    csrf: Option<&CsrfToken>,
+    data: Data<'_>,
+    defaults: EnterFormDefaults<'_>,
+) -> Result<RawHtml<String>, Error> {
+    let header = data
+        .header(&mut transaction, me.as_ref(), Tab::Enter, false)
+        .await?;
     Ok(page(transaction, &me, &uri, PageStyle { chests: data.chests().await?, ..PageStyle::default() }, &format!("Enter — {}", data.display_name), if me.is_some() {
         let mut errors = defaults.errors();
         html! {
@@ -544,8 +743,17 @@ pub(crate) async fn enter_form(mut transaction: Transaction<'_, Postgres>, me: O
 }
 
 #[allow(unused_qualifications)] // rocket endpoint and uri macros don't work with relative module paths
-pub(crate) async fn find_team_form(mut transaction: Transaction<'_, Postgres>, me: Option<User>, uri: Origin<'_>, csrf: Option<&CsrfToken>, data: Data<'_>, ctx: Context<'_>) -> Result<RawHtml<String>, FindTeamError> {
-    let header = data.header(&mut transaction, me.as_ref(), Tab::FindTeam, false).await?;
+pub(crate) async fn find_team_form(
+    mut transaction: Transaction<'_, Postgres>,
+    me: Option<User>,
+    uri: Origin<'_>,
+    csrf: Option<&CsrfToken>,
+    data: Data<'_>,
+    ctx: Context<'_>,
+) -> Result<RawHtml<String>, FindTeamError> {
+    let header = data
+        .header(&mut transaction, me.as_ref(), Tab::FindTeam, false)
+        .await?;
     let mut my_role = None;
     let mut looking_for_team = Vec::default();
     for row in sqlx::query!(r#"SELECT user_id AS "user: Id<Users>", role AS "role: RolePreference" FROM looking_for_team WHERE series = $1 AND event = $2"#, data.series as _, &data.event).fetch_all(&mut *transaction).await? {
@@ -557,24 +765,30 @@ pub(crate) async fn find_team_form(mut transaction: Transaction<'_, Postgres>, m
     let form = if me.is_some() {
         let mut errors = ctx.errors().collect_vec();
         if my_role.is_none() {
-            Some(full_form(uri!(event::find_team_post(data.series, &*data.event)), csrf, html! {
-                legend {
-                    : "Fill out this form to add yourself to the list below.";
-                }
-                : form_field("role", &mut errors, html! {
-                    label(for = "role") : "Role:";
-                    input(id = "role-sheikah_only", class = "sheikah", type = "radio", name = "role", value = "sheikah_only", checked? = ctx.field_value("role") == Some("sheikah_only"));
-                    label(class = "sheikah", for = "role-sheikah_only") : "Runner only";
-                    input(id = "role-sheikah_preferred", class = "sheikah", type = "radio", name = "role", value = "sheikah_preferred", checked? = ctx.field_value("role") == Some("sheikah_preferred"));
-                    label(class = "sheikah", for = "role-sheikah_preferred") : "Runner preferred";
-                    input(id = "role-no_preference", type = "radio", name = "role", value = "no_preference", checked? = ctx.field_value("role").is_none_or(|role| role == "no_preference"));
-                    label(for = "role-no_preference") : "No preference";
-                    input(id = "role-gerudo_preferred", class = "gerudo", type = "radio", name = "role", value = "gerudo_preferred", checked? = ctx.field_value("role") == Some("gerudo_preferred"));
-                    label(class = "gerudo", for = "role-gerudo_preferred") : "Pilot preferred";
-                    input(id = "role-gerudo_only", class = "gerudo", type = "radio", name = "role", value = "gerudo_only", checked? = ctx.field_value("role") == Some("gerudo_only"));
-                    label(class = "gerudo", for = "role-gerudo_only") : "Pilot only";
-                });
-            }, errors, "Submit"))
+            Some(full_form(
+                uri!(event::find_team_post(data.series, &*data.event)),
+                csrf,
+                html! {
+                    legend {
+                        : "Fill out this form to add yourself to the list below.";
+                    }
+                    : form_field("role", &mut errors, html! {
+                        label(for = "role") : "Role:";
+                        input(id = "role-sheikah_only", class = "sheikah", type = "radio", name = "role", value = "sheikah_only", checked? = ctx.field_value("role") == Some("sheikah_only"));
+                        label(class = "sheikah", for = "role-sheikah_only") : "Runner only";
+                        input(id = "role-sheikah_preferred", class = "sheikah", type = "radio", name = "role", value = "sheikah_preferred", checked? = ctx.field_value("role") == Some("sheikah_preferred"));
+                        label(class = "sheikah", for = "role-sheikah_preferred") : "Runner preferred";
+                        input(id = "role-no_preference", type = "radio", name = "role", value = "no_preference", checked? = ctx.field_value("role").is_none_or(|role| role == "no_preference"));
+                        label(for = "role-no_preference") : "No preference";
+                        input(id = "role-gerudo_preferred", class = "gerudo", type = "radio", name = "role", value = "gerudo_preferred", checked? = ctx.field_value("role") == Some("gerudo_preferred"));
+                        label(class = "gerudo", for = "role-gerudo_preferred") : "Pilot preferred";
+                        input(id = "role-gerudo_only", class = "gerudo", type = "radio", name = "role", value = "gerudo_only", checked? = ctx.field_value("role") == Some("gerudo_only"));
+                        label(class = "gerudo", for = "role-gerudo_only") : "Pilot only";
+                    });
+                },
+                errors,
+                "Submit",
+            ))
         } else {
             None
         }
@@ -588,20 +802,33 @@ pub(crate) async fn find_team_form(mut transaction: Transaction<'_, Postgres>, m
             }
         })
     };
-    let can_invite_any = looking_for_team.iter().any(|&(_, _, can_invite)| can_invite);
-    let looking_for_team = looking_for_team.into_iter()
-        .map(|(user, role, can_invite)| (user, role, can_invite.then(|| match (my_role, role) {
-            // if I haven't signed up looking for team, default to the role opposite the invitee's preference
-            (None, RolePreference::SheikahOnly | RolePreference::SheikahPreferred) => Some(Role::Gerudo),
-            (None, RolePreference::GerudoOnly | RolePreference::GerudoPreferred) => Some(Role::Sheikah),
-            (None, RolePreference::NoPreference) => None,
-            // if I have signed up looking for team, take the role that's more preferred by me than by the invitee
-            (Some(my_role), _) => match my_role.cmp(&role) {
-                Less => Some(Role::Sheikah),
-                Equal => None,
-                Greater => Some(Role::Gerudo),
-            },
-        })))
+    let can_invite_any = looking_for_team
+        .iter()
+        .any(|&(_, _, can_invite)| can_invite);
+    let looking_for_team = looking_for_team
+        .into_iter()
+        .map(|(user, role, can_invite)| {
+            (
+                user,
+                role,
+                can_invite.then(|| match (my_role, role) {
+                    // if I haven't signed up looking for team, default to the role opposite the invitee's preference
+                    (None, RolePreference::SheikahOnly | RolePreference::SheikahPreferred) => {
+                        Some(Role::Gerudo)
+                    }
+                    (None, RolePreference::GerudoOnly | RolePreference::GerudoPreferred) => {
+                        Some(Role::Sheikah)
+                    }
+                    (None, RolePreference::NoPreference) => None,
+                    // if I have signed up looking for team, take the role that's more preferred by me than by the invitee
+                    (Some(my_role), _) => match my_role.cmp(&role) {
+                        Less => Some(Role::Sheikah),
+                        Equal => None,
+                        Greater => Some(Role::Gerudo),
+                    },
+                }),
+            )
+        })
         .collect_vec();
     Ok(page(transaction, &me, &uri, PageStyle { chests: data.chests().await?, ..PageStyle::default() }, &format!("Find Teammates — {}", data.display_name), html! {
         : header;

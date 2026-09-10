@@ -1,7 +1,4 @@
-use {
-    async_proto::Protocol,
-    serde::Deserialize,
-};
+use {async_proto::Protocol, serde::Deserialize};
 
 // Note: We need to redefine SpoilerLog here instead of using ootr_utils::spoiler::SpoilerLog
 // because our database migration changed file_hash from [HashIcon; 5] to [String; 5].

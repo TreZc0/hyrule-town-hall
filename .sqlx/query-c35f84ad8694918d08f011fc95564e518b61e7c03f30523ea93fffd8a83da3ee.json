@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE races SET round = $1, start = $2, room = $3, last_edited_by = $4, last_edited_at = $5, phase = $9, qualifier_number = $10 WHERE id = $6 AND series = $7 AND event = $8 AND is_qualifier",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Timestamptz",
+        "Text",
+        "Int8",
+        "Timestamptz",
+        "Int8",
+        "Text",
+        "Text",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "c35f84ad8694918d08f011fc95564e518b61e7c03f30523ea93fffd8a83da3ee"
+}

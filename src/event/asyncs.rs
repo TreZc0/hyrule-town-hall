@@ -19,7 +19,9 @@ fn async_seed_form_kind(event: &Data<'_>) -> AsyncSeedFormKind {
     match event.seed_gen_type.as_ref() {
         Some(SeedGenType::TWWR { .. }) => AsyncSeedFormKind::Twwr,
         Some(SeedGenType::OotrTriforceBlitz) => AsyncSeedFormKind::TriforceBlitz,
-        Some(SeedGenType::Owr { .. } | SeedGenType::AlttprDoorRando { .. }) => AsyncSeedFormKind::AlttprDoorRando,
+        Some(SeedGenType::Owr { .. } | SeedGenType::AlttprDoorRando { .. }) => {
+            AsyncSeedFormKind::AlttprDoorRando
+        }
         Some(SeedGenType::AlttprAvianart { .. }) => AsyncSeedFormKind::AlttprAvianart,
         _ => match event.series {
             Series::TwwrMain => AsyncSeedFormKind::Twwr,
@@ -40,13 +42,26 @@ fn avianart_seed_fields(seed_data: &serde_json::Value) -> (String, String) {
         Some(seed::Files::AvianartSeed { hash, .. }) => Some(hash.clone()),
         _ => None,
     }
-    .or_else(|| seed_data.get("avianart_hash").and_then(|value| value.as_str()).map(str::to_owned))
+    .or_else(|| {
+        seed_data
+            .get("avianart_hash")
+            .and_then(|value| value.as_str())
+            .map(str::to_owned)
+    })
     .unwrap_or_default();
     let seed_hash = match parsed.as_ref() {
-        Some(seed::Files::AvianartSeed { seed_hash: Some(seed_hash), .. }) => Some(seed_hash.join(", ")),
+        Some(seed::Files::AvianartSeed {
+            seed_hash: Some(seed_hash),
+            ..
+        }) => Some(seed_hash.join(", ")),
         _ => None,
     }
-    .or_else(|| seed_data.get("avianart_seed_hash").and_then(|value| value.as_str()).map(str::to_owned))
+    .or_else(|| {
+        seed_data
+            .get("avianart_seed_hash")
+            .and_then(|value| value.as_str())
+            .map(str::to_owned)
+    })
     .unwrap_or_default();
     (hash, seed_hash)
 }
@@ -60,7 +75,9 @@ async fn asyncs_form(
     edit_kind: Option<AsyncKind>,
     ctx: Context<'_>,
 ) -> Result<RawHtml<String>, event::Error> {
-    let header = event.header(&mut transaction, Some(&me), Tab::Asyncs, false).await?;
+    let header = event
+        .header(&mut transaction, Some(&me), Tab::Asyncs, false)
+        .await?;
 
     struct AsyncRow {
         kind: AsyncKind,
@@ -107,7 +124,8 @@ async fn asyncs_form(
         .unwrap_or_default();
     let default_xkeys_uuid = editing_async
         .and_then(|row| {
-            row.seed_data.as_ref()
+            row.seed_data
+                .as_ref()
                 .and_then(seed::Files::from_seed_data)
                 .and_then(|files| match files {
                     seed::Files::AlttprDoorRando { uuid, .. } => Some(uuid.to_string()),
@@ -511,11 +529,73 @@ pub(crate) async fn post(
     Ok(if let Some(ref value) = form.value {
         let seed_form_kind = async_seed_form_kind(&event_data);
         let hidden_fields = match seed_form_kind {
-            AsyncSeedFormKind::Twwr => ["file_stem", "web_id", "tfb_uuid", "xkeys_uuid", "avianart_hash", "avianart_seed_hash", "hash1", "hash2", "hash3", "hash4", "hash5"].as_slice(),
-            AsyncSeedFormKind::TriforceBlitz => ["file_stem", "web_id", "permalink", "seed_hash", "xkeys_uuid", "avianart_hash", "avianart_seed_hash", "hash1", "hash2", "hash3", "hash4", "hash5"].as_slice(),
-            AsyncSeedFormKind::AlttprDoorRando => ["file_stem", "web_id", "permalink", "seed_hash", "tfb_uuid", "avianart_hash", "avianart_seed_hash"].as_slice(),
-            AsyncSeedFormKind::AlttprAvianart => ["file_stem", "web_id", "permalink", "seed_hash", "tfb_uuid", "xkeys_uuid", "hash1", "hash2", "hash3", "hash4", "hash5"].as_slice(),
-            AsyncSeedFormKind::FileStemWebId => ["permalink", "seed_hash", "tfb_uuid", "xkeys_uuid", "avianart_hash", "avianart_seed_hash", "hash1", "hash2", "hash3", "hash4", "hash5"].as_slice(),
+            AsyncSeedFormKind::Twwr => [
+                "file_stem",
+                "web_id",
+                "tfb_uuid",
+                "xkeys_uuid",
+                "avianart_hash",
+                "avianart_seed_hash",
+                "hash1",
+                "hash2",
+                "hash3",
+                "hash4",
+                "hash5",
+            ]
+            .as_slice(),
+            AsyncSeedFormKind::TriforceBlitz => [
+                "file_stem",
+                "web_id",
+                "permalink",
+                "seed_hash",
+                "xkeys_uuid",
+                "avianart_hash",
+                "avianart_seed_hash",
+                "hash1",
+                "hash2",
+                "hash3",
+                "hash4",
+                "hash5",
+            ]
+            .as_slice(),
+            AsyncSeedFormKind::AlttprDoorRando => [
+                "file_stem",
+                "web_id",
+                "permalink",
+                "seed_hash",
+                "tfb_uuid",
+                "avianart_hash",
+                "avianart_seed_hash",
+            ]
+            .as_slice(),
+            AsyncSeedFormKind::AlttprAvianart => [
+                "file_stem",
+                "web_id",
+                "permalink",
+                "seed_hash",
+                "tfb_uuid",
+                "xkeys_uuid",
+                "hash1",
+                "hash2",
+                "hash3",
+                "hash4",
+                "hash5",
+            ]
+            .as_slice(),
+            AsyncSeedFormKind::FileStemWebId => [
+                "permalink",
+                "seed_hash",
+                "tfb_uuid",
+                "xkeys_uuid",
+                "avianart_hash",
+                "avianart_seed_hash",
+                "hash1",
+                "hash2",
+                "hash3",
+                "hash4",
+                "hash5",
+            ]
+            .as_slice(),
         };
         let has_relevant_errors = form
             .context
@@ -608,10 +688,22 @@ pub(crate) async fn post(
                     Some(h.map(str::to_owned))
                 } else if filled > 0 {
                     form.context.push_error(
-                        form::Error::validation("All 5 hash icons must be selected, or leave all blank").with_name("hash1"),
+                        form::Error::validation(
+                            "All 5 hash icons must be selected, or leave all blank",
+                        )
+                        .with_name("hash1"),
                     );
                     return Ok(RedirectOrContent::Content(
-                        asyncs_form(transaction, me, uri, csrf.as_ref(), event_data, Some(value.kind), form.context).await?,
+                        asyncs_form(
+                            transaction,
+                            me,
+                            uri,
+                            csrf.as_ref(),
+                            event_data,
+                            Some(value.kind),
+                            form.context,
+                        )
+                        .await?,
                     ));
                 } else {
                     None
@@ -638,7 +730,8 @@ pub(crate) async fn post(
                 }
                 AsyncSeedFormKind::AlttprAvianart => {
                     let avianart_hash = value.avianart_hash.as_deref().unwrap_or("").trim();
-                    let avianart_seed_hash = value.avianart_seed_hash.as_deref().unwrap_or("").trim();
+                    let avianart_seed_hash =
+                        value.avianart_seed_hash.as_deref().unwrap_or("").trim();
                     let seed_hash = if avianart_seed_hash.is_empty() {
                         None
                     } else {
@@ -646,28 +739,48 @@ pub(crate) async fn post(
                             Ok(seed_hash) => Some(seed_hash),
                             Err(_) => {
                                 form.context.push_error(
-                                    form::Error::validation("Expected 5 hash icons separated by comma and space").with_name("avianart_seed_hash"),
+                                    form::Error::validation(
+                                        "Expected 5 hash icons separated by comma and space",
+                                    )
+                                    .with_name("avianart_seed_hash"),
                                 );
                                 return Ok(RedirectOrContent::Content(
-                                    asyncs_form(transaction, me, uri, csrf.as_ref(), event_data, Some(value.kind), form.context).await?,
+                                    asyncs_form(
+                                        transaction,
+                                        me,
+                                        uri,
+                                        csrf.as_ref(),
+                                        event_data,
+                                        Some(value.kind),
+                                        form.context,
+                                    )
+                                    .await?,
                                 ));
                             }
                         }
                     };
                     let seed_data = if !avianart_hash.is_empty() {
-                        Some(seed::Files::AvianartSeed {
-                            hash: avianart_hash.to_owned(),
-                            seed_hash,
-                        }.to_seed_data_base())
+                        Some(
+                            seed::Files::AvianartSeed {
+                                hash: avianart_hash.to_owned(),
+                                seed_hash,
+                            }
+                            .to_seed_data_base(),
+                        )
                     } else {
                         None
                     };
                     (seed_data, None)
                 }
                 AsyncSeedFormKind::AlttprDoorRando => {
-                    let is_owr = matches!(event_data.seed_gen_type.as_ref(), Some(SeedGenType::Owr { .. }));
+                    let is_owr = matches!(
+                        event_data.seed_gen_type.as_ref(),
+                        Some(SeedGenType::Owr { .. })
+                    );
                     (
-                        xkeys_uuid_parsed.map(|uuid| seed::Files::AlttprDoorRando { uuid, is_owr }.to_seed_data_base()),
+                        xkeys_uuid_parsed.map(|uuid| {
+                            seed::Files::AlttprDoorRando { uuid, is_owr }.to_seed_data_base()
+                        }),
                         None,
                     )
                 }
@@ -687,10 +800,13 @@ pub(crate) async fn post(
             let start = if let Some(ref start_str) = value.start {
                 if !start_str.is_empty() {
                     match NaiveDateTime::parse_from_str(start_str, "%Y-%m-%dT%H:%M") {
-                        Ok(naive_dt) => Some(DateTime::<Utc>::from_naive_utc_and_offset(naive_dt, Utc)),
+                        Ok(naive_dt) => {
+                            Some(DateTime::<Utc>::from_naive_utc_and_offset(naive_dt, Utc))
+                        }
                         Err(_) => {
                             form.context.push_error(
-                                form::Error::validation("Invalid start time format").with_name("start"),
+                                form::Error::validation("Invalid start time format")
+                                    .with_name("start"),
                             );
                             return Ok(RedirectOrContent::Content(
                                 asyncs_form(
@@ -716,7 +832,9 @@ pub(crate) async fn post(
             let end_time = if let Some(ref end_str) = value.end_time {
                 if !end_str.is_empty() {
                     match NaiveDateTime::parse_from_str(end_str, "%Y-%m-%dT%H:%M") {
-                        Ok(naive_dt) => Some(DateTime::<Utc>::from_naive_utc_and_offset(naive_dt, Utc)),
+                        Ok(naive_dt) => {
+                            Some(DateTime::<Utc>::from_naive_utc_and_offset(naive_dt, Utc))
+                        }
                         Err(_) => {
                             form.context.push_error(
                                 form::Error::validation("Invalid end time format")
@@ -743,7 +861,13 @@ pub(crate) async fn post(
                 None
             };
 
-            let (hash1, hash2, hash3, hash4, hash5): (Option<String>, Option<String>, Option<String>, Option<String>, Option<String>) = match alttpr_hash {
+            let (hash1, hash2, hash3, hash4, hash5): (
+                Option<String>,
+                Option<String>,
+                Option<String>,
+                Option<String>,
+                Option<String>,
+            ) = match alttpr_hash {
                 Some([h1, h2, h3, h4, h5]) => (Some(h1), Some(h2), Some(h3), Some(h4), Some(h5)),
                 None => (None, None, None, None, None),
             };
@@ -782,9 +906,7 @@ pub(crate) async fn post(
             .execute(&mut *transaction)
             .await?;
             transaction.commit().await?;
-            RedirectOrContent::Redirect(Redirect::to(uri!(
-                get(series, event, None::<String>)
-            )))
+            RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event, None::<String>))))
         }
     } else {
         RedirectOrContent::Content(
@@ -845,9 +967,5 @@ pub(crate) async fn delete(
         transaction.commit().await?;
     }
 
-    Ok(Redirect::to(uri!(get(
-        series,
-        event,
-        None::<String>
-    ))))
+    Ok(Redirect::to(uri!(get(series, event, None::<String>))))
 }

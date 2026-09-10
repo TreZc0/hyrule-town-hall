@@ -7,12 +7,16 @@ pub(crate) async fn handle_member_join(
     user_id: UserId,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Get the database pool from the Discord context
-    let db_pool = discord_ctx.data.read().await.get::<crate::discord_bot::DbPool>()
+    let db_pool = discord_ctx
+        .data
+        .read()
+        .await
+        .get::<crate::discord_bot::DbPool>()
         .expect("database connection pool missing from Discord context")
         .clone();
-    
+
     let mut transaction = db_pool.begin().await?;
-    
+
     // Check if this user has any pending Discord invites
     let pending_invites = sqlx::query!(
         r#"SELECT role_request_id, discord_role_id, invite_url 
@@ -24,14 +28,25 @@ pub(crate) async fn handle_member_join(
     )
     .fetch_all(&mut *transaction)
     .await?;
-    
+
     for invite in pending_invites {
         // Try to assign the Discord role
-        if let Err(e) = guild_id.member(discord_ctx, user_id).await?.add_role(discord_ctx, RoleId::new(invite.discord_role_id.try_into().unwrap())).await {
-            eprintln!("Failed to assign Discord role {} to user {}: {}", invite.discord_role_id, user_id, e);
+        if let Err(e) = guild_id
+            .member(discord_ctx, user_id)
+            .await?
+            .add_role(
+                discord_ctx,
+                RoleId::new(invite.discord_role_id.try_into().unwrap()),
+            )
+            .await
+        {
+            eprintln!(
+                "Failed to assign Discord role {} to user {}: {}",
+                invite.discord_role_id, user_id, e
+            );
             continue;
         }
-        
+
         // Remove the pending invite since the role was successfully assigned
         sqlx::query!(
             r#"DELETE FROM pending_discord_invites 
@@ -41,11 +56,13 @@ pub(crate) async fn handle_member_join(
         )
         .execute(&mut *transaction)
         .await?;
-        
-        eprintln!("Successfully assigned Discord role {} to user {} for role request {}", 
-                 invite.discord_role_id, user_id, invite.role_request_id);
+
+        eprintln!(
+            "Successfully assigned Discord role {} to user {} for role request {}",
+            invite.discord_role_id, user_id, invite.role_request_id
+        );
     }
-    
+
     transaction.commit().await?;
     Ok(())
 }
@@ -55,7 +72,7 @@ pub(crate) async fn cleanup_expired_invites(
     db_pool: &PgPool,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut transaction = db_pool.begin().await?;
-    
+
     // Delete expired pending invites
     let deleted_count = sqlx::query!(
         r#"DELETE FROM pending_discord_invites 
@@ -64,11 +81,11 @@ pub(crate) async fn cleanup_expired_invites(
     .execute(&mut *transaction)
     .await?
     .rows_affected();
-    
+
     if deleted_count > 0 {
         eprintln!("Cleaned up {} expired Discord invites", deleted_count);
     }
-    
+
     transaction.commit().await?;
     Ok(())
-} 
+}

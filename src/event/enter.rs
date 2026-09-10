@@ -1,19 +1,12 @@
 use {
+    crate::{
+        discord_bot::ADMIN_USER,
+        event::{Data, DataError, Role, SignupStatus, Tab, teams},
+        prelude::*,
+    },
     lazy_regex::Regex,
     racetime::model::EntrantStatusValue,
     serde_with::DeserializeAs,
-    crate::{
-        discord_bot::ADMIN_USER,
-        event::{
-            Data,
-            DataError,
-            Role,
-            SignupStatus,
-            Tab,
-            teams,
-        },
-        prelude::*,
-    },
 };
 
 #[derive(Debug, Clone)]
@@ -42,10 +35,7 @@ struct RequirementEntry {
 
 #[derive(Clone, Copy)]
 pub(crate) enum FlowDisplayItem<'a> {
-    Section {
-        section: &'a Section,
-        depth: usize,
-    },
+    Section { section: &'a Section, depth: usize },
     Requirement(&'a Requirement),
 }
 
@@ -65,7 +55,9 @@ impl<'de> DeserializeAs<'de, Regex> for DeserializeRegex {
     }
 }
 
-fn make_true() -> bool { true }
+fn make_true() -> bool {
+    true
+}
 
 impl<'de> Deserialize<'de> for Flow {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
@@ -77,19 +69,33 @@ impl<'de> Deserialize<'de> for Flow {
             closes: Option<DateTime<Utc>>,
         }
 
-        let RawFlow { sections, requirements, closes } = RawFlow::deserialize(deserializer)?;
+        let RawFlow {
+            sections,
+            requirements,
+            closes,
+        } = RawFlow::deserialize(deserializer)?;
         let mut parsed_requirements = Vec::with_capacity(requirements.len());
         for mut value in requirements {
-            let section = match value.as_object_mut().and_then(|object| object.remove("section")) {
+            let section = match value
+                .as_object_mut()
+                .and_then(|object| object.remove("section"))
+            {
                 None | Some(serde_json::Value::Null) => None,
                 Some(serde_json::Value::String(section)) => Some(section),
                 Some(_) => return Err(D::Error::custom("requirement section must be a string")),
             };
             let requirement = serde_json::from_value(value).map_err(D::Error::custom)?;
-            parsed_requirements.push(RequirementEntry { section, requirement });
+            parsed_requirements.push(RequirementEntry {
+                section,
+                requirement,
+            });
         }
 
-        let flow = Self { sections, requirements: parsed_requirements, closes };
+        let flow = Self {
+            sections,
+            requirements: parsed_requirements,
+            closes,
+        };
         flow.validate().map_err(D::Error::custom)?;
         Ok(flow)
     }
@@ -100,31 +106,38 @@ impl Flow {
         let mut section_ids = HashSet::new();
         for section in &self.sections {
             if section.id.trim().is_empty() {
-                return Err("section IDs must not be empty".to_owned())
+                return Err("section IDs must not be empty".to_owned());
             }
             if !section_ids.insert(section.id.as_str()) {
-                return Err(format!("duplicate section ID: {}", section.id))
+                return Err(format!("duplicate section ID: {}", section.id));
             }
         }
         for section in &self.sections {
             if let Some(parent) = section.parent.as_deref() {
                 if !section_ids.contains(parent) {
-                    return Err(format!("section {} references missing parent section {parent}", section.id))
+                    return Err(format!(
+                        "section {} references missing parent section {parent}",
+                        section.id
+                    ));
                 }
                 let mut seen = HashSet::from([section.id.as_str()]);
                 let mut current = Some(parent);
                 while let Some(id) = current {
                     if !seen.insert(id) {
-                        return Err(format!("section hierarchy contains a cycle involving {id}"))
+                        return Err(format!("section hierarchy contains a cycle involving {id}"));
                     }
-                    current = self.sections.iter().find(|candidate| candidate.id == id).and_then(|candidate| candidate.parent.as_deref());
+                    current = self
+                        .sections
+                        .iter()
+                        .find(|candidate| candidate.id == id)
+                        .and_then(|candidate| candidate.parent.as_deref());
                 }
             }
         }
         for entry in &self.requirements {
             if let Some(section) = entry.section.as_deref() {
                 if !section_ids.contains(section) {
-                    return Err(format!("requirement references missing section {section}"))
+                    return Err(format!("requirement references missing section {section}"));
                 }
             }
         }
@@ -139,30 +152,64 @@ impl Flow {
         self.requirements.iter().map(|entry| &entry.requirement)
     }
 
-    pub(crate) fn display_items(&self, include: impl Fn(&Requirement) -> bool) -> Vec<FlowDisplayItem<'_>> {
-        fn section_has_items(flow: &Flow, section_id: &str, include: &impl Fn(&Requirement) -> bool) -> bool {
-            flow.requirements.iter().any(|entry| entry.section.as_deref() == Some(section_id) && include(&entry.requirement))
-                || flow.sections.iter().filter(|section| section.parent.as_deref() == Some(section_id)).any(|section| section_has_items(flow, &section.id, include))
+    pub(crate) fn display_items(
+        &self,
+        include: impl Fn(&Requirement) -> bool,
+    ) -> Vec<FlowDisplayItem<'_>> {
+        fn section_has_items(
+            flow: &Flow,
+            section_id: &str,
+            include: &impl Fn(&Requirement) -> bool,
+        ) -> bool {
+            flow.requirements.iter().any(|entry| {
+                entry.section.as_deref() == Some(section_id) && include(&entry.requirement)
+            }) || flow
+                .sections
+                .iter()
+                .filter(|section| section.parent.as_deref() == Some(section_id))
+                .any(|section| section_has_items(flow, &section.id, include))
         }
 
-        fn append_section<'a>(flow: &'a Flow, section: &'a Section, depth: usize, include: &impl Fn(&Requirement) -> bool, items: &mut Vec<FlowDisplayItem<'a>>) {
+        fn append_section<'a>(
+            flow: &'a Flow,
+            section: &'a Section,
+            depth: usize,
+            include: &impl Fn(&Requirement) -> bool,
+            items: &mut Vec<FlowDisplayItem<'a>>,
+        ) {
             if !section_has_items(flow, &section.id, include) {
-                return
+                return;
             }
             items.push(FlowDisplayItem::Section { section, depth });
-            items.extend(flow.requirements.iter()
-                .filter(|entry| entry.section.as_deref() == Some(section.id.as_str()) && include(&entry.requirement))
-                .map(|entry| FlowDisplayItem::Requirement(&entry.requirement)));
-            for child in flow.sections.iter().filter(|candidate| candidate.parent.as_deref() == Some(section.id.as_str())) {
+            items.extend(
+                flow.requirements
+                    .iter()
+                    .filter(|entry| {
+                        entry.section.as_deref() == Some(section.id.as_str())
+                            && include(&entry.requirement)
+                    })
+                    .map(|entry| FlowDisplayItem::Requirement(&entry.requirement)),
+            );
+            for child in flow
+                .sections
+                .iter()
+                .filter(|candidate| candidate.parent.as_deref() == Some(section.id.as_str()))
+            {
                 append_section(flow, child, depth + 1, include, items);
             }
         }
 
-        let mut items = self.requirements.iter()
+        let mut items = self
+            .requirements
+            .iter()
             .filter(|entry| entry.section.is_none() && include(&entry.requirement))
             .map(|entry| FlowDisplayItem::Requirement(&entry.requirement))
             .collect::<Vec<_>>();
-        for section in self.sections.iter().filter(|section| section.parent.is_none()) {
+        for section in self
+            .sections
+            .iter()
+            .filter(|section| section.parent.is_none())
+        {
             append_section(self, section, 0, &include, &mut items);
         }
         items
@@ -280,13 +327,9 @@ pub(crate) enum Requirement {
         locked: bool,
     },
     /// Must agree to the event rules
-    Rules {
-        document: Option<Url>,
-    },
+    Rules { document: Option<Url> },
     /// Must submit a response to a custom poll
-    Poll {
-        document: Option<Url>,
-    },
+    Poll { document: Option<Url> },
     /// Must agree to be restreamed
     RestreamConsent {
         #[serde(default)]
@@ -352,21 +395,38 @@ enum RequirementDisplay {
 }
 
 impl Requirement {
-    async fn is_checked(&self, transaction: &mut Transaction<'_, Postgres>, http_client: &reqwest::Client, discord_ctx: &RwFuture<DiscordCtx>, me: &User, data: &Data<'_>, config: &Config) -> Result<Option<bool>, Error> {
+    async fn is_checked(
+        &self,
+        transaction: &mut Transaction<'_, Postgres>,
+        http_client: &reqwest::Client,
+        discord_ctx: &RwFuture<DiscordCtx>,
+        me: &User,
+        data: &Data<'_>,
+        config: &Config,
+    ) -> Result<Option<bool>, Error> {
         let mut cache = teams::Cache::new(http_client.clone());
         Ok(match self {
             Self::RaceTime => Some(me.racetime.is_some()),
-            Self::RaceTimeInvite { invites, .. } => Some(me.racetime.as_ref().is_some_and(|racetime| invites.contains(&racetime.id))),
-            Self::Twitch => Some(if let Some(Some(racetime_user_data)) = me.racetime_user_data(http_client).await? {
-                racetime_user_data.twitch_channel.is_some()
-            } else {
-                false
-            }),
+            Self::RaceTimeInvite { invites, .. } => Some(
+                me.racetime
+                    .as_ref()
+                    .is_some_and(|racetime| invites.contains(&racetime.id)),
+            ),
+            Self::Twitch => Some(
+                if let Some(Some(racetime_user_data)) = me.racetime_user_data(http_client).await? {
+                    racetime_user_data.twitch_channel.is_some()
+                } else {
+                    false
+                },
+            ),
             Self::Discord => Some(me.discord.is_some()),
             Self::DiscordGuild { role_id, .. } => Some({
                 let discord_guild = data.discord_guild.ok_or(Error::DiscordGuild)?;
                 if let Some(ref discord) = me.discord {
-                    if let Ok(member) = discord_guild.member(&*discord_ctx.read().await, discord.id).await {
+                    if let Ok(member) = discord_guild
+                        .member(&*discord_ctx.read().await, discord.id)
+                        .await
+                    {
                         if let Some(required_role) = role_id {
                             member.roles.contains(&RoleId::new(*required_role as u64))
                         } else {
@@ -381,14 +441,20 @@ impl Requirement {
             }),
             Self::Challonge => Some(me.challonge_id.is_some()),
             Self::StartGG { .. } => Some(me.startgg_id.is_some()),
-            Self::StartGGEventSignup { event_slug, .. } => Some(if let Some(startgg_id) = &me.startgg_id {
-                let entrants = startgg::fetch_event_entrants(http_client, config, event_slug).await?;
-                entrants.iter().any(|(_, _, user_ids)| {
-                    user_ids.iter().filter_map(|id| id.as_ref()).any(|id| id == startgg_id)
+            Self::StartGGEventSignup { event_slug, .. } => {
+                Some(if let Some(startgg_id) = &me.startgg_id {
+                    let entrants =
+                        startgg::fetch_event_entrants(http_client, config, event_slug).await?;
+                    entrants.iter().any(|(_, _, user_ids)| {
+                        user_ids
+                            .iter()
+                            .filter_map(|id| id.as_ref())
+                            .any(|id| id == startgg_id)
+                    })
+                } else {
+                    false
                 })
-            } else {
-                false
-            }),
+            }
             Self::TextField { .. } => Some(false),
             Self::TextField2 { .. } => Some(false),
             Self::YesNo { .. } => Some(false),
@@ -401,11 +467,17 @@ impl Requirement {
             Self::TripleQualifier { .. } => Some('checked: {
                 if let Some(racetime) = &me.racetime {
                     for race in Race::for_event(transaction, http_client, data).await? {
-                        if race.phase.as_ref().is_some_and(|phase| phase == "Live Qualifier") {
+                        if race.is_qualifier {
                             if let Ok(room) = race.rooms().exactly_one() {
                                 let room_data = cache.race_data(&room).await?;
-                                if room_data.entrants.iter().any(|entrant| entrant.status.value == EntrantStatusValue::Done && entrant.user.as_ref().is_some_and(|user| user.id == racetime.id)) {
-                                    break 'checked true
+                                if room_data.entrants.iter().any(|entrant| {
+                                    entrant.status.value == EntrantStatusValue::Done
+                                        && entrant
+                                            .user
+                                            .as_ref()
+                                            .is_some_and(|user| user.id == racetime.id)
+                                }) {
+                                    break 'checked true;
                                 }
                             }
                         }
@@ -413,7 +485,13 @@ impl Requirement {
                 }
                 false
             }),
-            Self::QualifierPlacement { num_players, min_races, need_finish, event, exclude_players } => Some(if_chain! {
+            Self::QualifierPlacement {
+                num_players,
+                min_races,
+                need_finish,
+                event,
+                exclude_players,
+            } => Some(if_chain! {
                 let data = if let Some(event) = event {
                     &Data::new(&mut *transaction, data.series, event).await?.ok_or(Error::NoSuchEvent)?
                 } else {
@@ -439,9 +517,17 @@ impl Requirement {
                 }
             }),
             Self::RslLeaderboard => Some(if let Some(racetime) = &me.racetime {
-                let rsl::Leaderboard { metadata, qualified, .. } = rsl::Leaderboard::get(http_client).await?;
-                if metadata.season != data.event { return Ok(None) }
-                qualified.iter().any(|iter_player| iter_player.userid == racetime.id)
+                let rsl::Leaderboard {
+                    metadata,
+                    qualified,
+                    ..
+                } = rsl::Leaderboard::get(http_client).await?;
+                if metadata.season != data.event {
+                    return Ok(None);
+                }
+                qualified
+                    .iter()
+                    .any(|iter_player| iter_player.userid == racetime.id)
             } else {
                 false
             }),
@@ -449,7 +535,17 @@ impl Requirement {
         })
     }
 
-    async fn check_get(&self, http_client: &reqwest::Client, discord_ctx: &RwFuture<DiscordCtx>, data: &Data<'_>, is_checked: Option<bool>, redirect_uri: rocket::http::uri::Origin<'_>, defaults: &pic::EnterFormDefaults<'_>, me: &User, _config: &Config) -> Result<RequirementStatus, Error> {
+    async fn check_get(
+        &self,
+        http_client: &reqwest::Client,
+        discord_ctx: &RwFuture<DiscordCtx>,
+        data: &Data<'_>,
+        is_checked: Option<bool>,
+        redirect_uri: rocket::http::uri::Origin<'_>,
+        defaults: &pic::EnterFormDefaults<'_>,
+        me: &User,
+        _config: &Config,
+    ) -> Result<RequirementStatus, Error> {
         Ok(match self {
             Self::RaceTime => {
                 let mut html_content = html! {
@@ -470,11 +566,13 @@ impl Requirement {
                 let text = text.clone();
                 RequirementStatus {
                     blocks_submit: !is_checked.unwrap(),
-                    html_content: Box::new(move |_| html! {
-                        @if let Some(text) = text {
-                            : text;
-                        } else {
-                            : "You must be on a list of invited racetime.gg users";
+                    html_content: Box::new(move |_| {
+                        html! {
+                            @if let Some(text) = text {
+                                : text;
+                            } else {
+                                : "You must be on a list of invited racetime.gg users";
+                            }
                         }
                     }),
                 }
@@ -514,18 +612,31 @@ impl Requirement {
                 let invite_url = data.discord_invite_url.as_ref().map(|url| url.to_string());
 
                 let role_name = if let (Some(rid), Some(guild_id)) = (role_id, data.discord_guild) {
-                    guild_id.roles(&*discord_ctx.read().await).await.ok()
-                        .and_then(|roles| roles.get(&RoleId::new(rid as u64)).map(|r| r.name.clone()))
+                    guild_id
+                        .roles(&*discord_ctx.read().await)
+                        .await
+                        .ok()
+                        .and_then(|roles| {
+                            roles.get(&RoleId::new(rid as u64)).map(|r| r.name.clone())
+                        })
                 } else {
                     None
                 };
 
                 RequirementStatus {
                     blocks_submit: !is_checked.unwrap(),
-                    html_content: Box::new(move |_| html! {
-                        @if let Some(role_name) = role_name {
-                            @if let Some(invite_url) = invite_url {
-                                a(href = invite_url, target = "_blank") {
+                    html_content: Box::new(move |_| {
+                        html! {
+                            @if let Some(role_name) = role_name {
+                                @if let Some(invite_url) = invite_url {
+                                    a(href = invite_url, target = "_blank") {
+                                        : "You must have the ";
+                                        strong : role_name;
+                                        : " role in the ";
+                                        bdi : name;
+                                        : " Discord server";
+                                    }
+                                } else {
                                     : "You must have the ";
                                     strong : role_name;
                                     : " role in the ";
@@ -533,23 +644,17 @@ impl Requirement {
                                     : " Discord server";
                                 }
                             } else {
-                                : "You must have the ";
-                                strong : role_name;
-                                : " role in the ";
-                                bdi : name;
-                                : " Discord server";
-                            }
-                        } else {
-                            @if let Some(invite_url) = invite_url {
-                                a(href = invite_url, target = "_blank") {
+                                @if let Some(invite_url) = invite_url {
+                                    a(href = invite_url, target = "_blank") {
+                                        : "Join the ";
+                                        bdi : name;
+                                        : " Discord server";
+                                    }
+                                } else {
                                     : "Join the ";
                                     bdi : name;
                                     : " Discord server";
                                 }
-                            } else {
-                                : "Join the ";
-                                bdi : name;
-                                : " Discord server";
                             }
                         }
                     }),
@@ -584,7 +689,9 @@ impl Requirement {
                 }
             }
             Self::StartGG { optional: true } => {
-                let yes_checked = defaults.field_value("startgg_radio").is_none_or(|value| value == "yes");
+                let yes_checked = defaults
+                    .field_value("startgg_radio")
+                    .is_none_or(|value| value == "yes");
                 let html_content = html! {
                     @if is_checked.unwrap() {
                         : "Enter with your connected start.gg account"; //TODO show name and link to profile
@@ -592,21 +699,27 @@ impl Requirement {
                         a(href = uri!(crate::auth::startgg_login(Some(redirect_uri)))) : "Connect a start.gg account to your Hyrule Town Hall account";
                     }
                 };
-                let no_checked = defaults.field_value("startgg_radio").is_some_and(|value| value == "no");
+                let no_checked = defaults
+                    .field_value("startgg_radio")
+                    .is_some_and(|value| value == "no");
                 RequirementStatus {
                     blocks_submit: false,
-                    html_content: Box::new(move |errors| html! {
-                        : form_field("startgg_radio", errors, html! {
-                            input(id = "startgg_radio-yes", type = "radio", name = "startgg_radio", value = "yes", checked? = yes_checked);
-                            label(for = "startgg_radio-yes") : html_content;
-                            br;
-                            input(id = "startgg_radio-no", type = "radio", name = "startgg_radio", value = "no", checked? = no_checked);
-                            label(for = "startgg_radio-no") : "Enter without connecting a start.gg account";
-                        });
+                    html_content: Box::new(move |errors| {
+                        html! {
+                            : form_field("startgg_radio", errors, html! {
+                                input(id = "startgg_radio-yes", type = "radio", name = "startgg_radio", value = "yes", checked? = yes_checked);
+                                label(for = "startgg_radio-yes") : html_content;
+                                br;
+                                input(id = "startgg_radio-no", type = "radio", name = "startgg_radio", value = "no", checked? = no_checked);
+                                label(for = "startgg_radio-no") : "Enter without connecting a start.gg account";
+                            });
+                        }
                     }),
                 }
             }
-            Self::StartGGEventSignup { event_slug, text, .. } => {
+            Self::StartGGEventSignup {
+                event_slug, text, ..
+            } => {
                 let event_slug = event_slug.clone();
                 let text = text.clone();
                 let mut html_content = if let Some(text) = text {
@@ -629,101 +742,139 @@ impl Requirement {
                     html_content: Box::new(move |_| html_content),
                 }
             }
-            &Self::TextField { ref label, long, .. } => {
+            &Self::TextField {
+                ref label, long, ..
+            } => {
                 let label = label.clone();
-                let value = defaults.field_value("text_field").map(|value| value.to_owned());
+                let value = defaults
+                    .field_value("text_field")
+                    .map(|value| value.to_owned());
                 RequirementStatus {
                     blocks_submit: false,
-                    html_content: Box::new(move |errors| html! {
-                        : label;
-                        : form_field("text_field", errors, html! {
-                            @if long {
-                                textarea(name = "text_field") : value;
-                            } else {
-                                input(type = "text", name = "text_field", value? = value);
-                            }
-                        });
+                    html_content: Box::new(move |errors| {
+                        html! {
+                            : label;
+                            : form_field("text_field", errors, html! {
+                                @if long {
+                                    textarea(name = "text_field") : value;
+                                } else {
+                                    input(type = "text", name = "text_field", value? = value);
+                                }
+                            });
+                        }
                     }),
                 }
             }
-            &Self::TextField2 { ref label, long, .. } => {
+            &Self::TextField2 {
+                ref label, long, ..
+            } => {
                 let label = label.clone();
-                let value = defaults.field_value("text_field2").map(|value| value.to_owned());
+                let value = defaults
+                    .field_value("text_field2")
+                    .map(|value| value.to_owned());
                 RequirementStatus {
                     blocks_submit: false,
-                    html_content: Box::new(move |errors| html! {
-                        : label;
-                        : form_field("text_field2", errors, html! {
-                            @if long {
-                                textarea(name = "text_field2") : value;
-                            } else {
-                                input(type = "text", name = "text_field2", value? = value);
-                            }
-                        });
+                    html_content: Box::new(move |errors| {
+                        html! {
+                            : label;
+                            : form_field("text_field2", errors, html! {
+                                @if long {
+                                    textarea(name = "text_field2") : value;
+                                } else {
+                                    input(type = "text", name = "text_field2", value? = value);
+                                }
+                            });
+                        }
                     }),
                 }
             }
             Self::YesNo { label } => {
                 let label = label.clone();
-                let yes_checked = defaults.field_value("yes_no").is_some_and(|value| value == "yes");
-                let no_checked = defaults.field_value("yes_no").is_some_and(|value| value == "no");
+                let yes_checked = defaults
+                    .field_value("yes_no")
+                    .is_some_and(|value| value == "yes");
+                let no_checked = defaults
+                    .field_value("yes_no")
+                    .is_some_and(|value| value == "no");
                 RequirementStatus {
                     blocks_submit: false,
-                    html_content: Box::new(move |errors| html! {
-                        : form_field("yes_no", errors, html! {
-                            label(for = "yes_no") : label;
-                            br;
-                            input(id = "yes_no-yes", type = "radio", name = "yes_no", value = "yes", checked? = yes_checked);
-                            label(for = "yes_no-yes") : "Yes";
-                            input(id = "yes_no-no", type = "radio", name = "yes_no", value = "no", checked? = no_checked);
-                            label(for = "yes_no-no") : "No";
-                        });
+                    html_content: Box::new(move |errors| {
+                        html! {
+                            : form_field("yes_no", errors, html! {
+                                label(for = "yes_no") : label;
+                                br;
+                                input(id = "yes_no-yes", type = "radio", name = "yes_no", value = "yes", checked? = yes_checked);
+                                label(for = "yes_no-yes") : "Yes";
+                                input(id = "yes_no-no", type = "radio", name = "yes_no", value = "no", checked? = no_checked);
+                                label(for = "yes_no-no") : "No";
+                            });
+                        }
                     }),
                 }
             }
-            Self::BooleanChoice { key, label, prompt, .. } => {
+            Self::BooleanChoice {
+                key, label, prompt, ..
+            } => {
                 let key = key.clone();
                 let display = prompt.as_ref().unwrap_or(label).clone();
-                let yes_checked = defaults.field_value(&format!("custom_choices[{key}]")).is_some_and(|value| value == "yes");
-                let no_checked = defaults.field_value(&format!("custom_choices[{key}]")).is_some_and(|value| value == "no");
+                let yes_checked = defaults
+                    .field_value(&format!("custom_choices[{key}]"))
+                    .is_some_and(|value| value == "yes");
+                let no_checked = defaults
+                    .field_value(&format!("custom_choices[{key}]"))
+                    .is_some_and(|value| value == "no");
                 RequirementStatus {
                     blocks_submit: false,
-                    html_content: Box::new(move |errors| html! {
-                        : form_field(&format!("custom_choices[{key}]"), errors, html! {
-                            label(for = &format!("custom_choices[{key}]")) : display;
-                            br;
-                            input(id = &format!("custom_choices[{key}]-yes"), type = "radio", name = &format!("custom_choices[{key}]"), value = "yes", checked? = yes_checked);
-                            label(for = &format!("custom_choices[{key}]-yes")) : "Yes";
-                            input(id = &format!("custom_choices[{key}]-no"), type = "radio", name = &format!("custom_choices[{key}]"), value = "no", checked? = no_checked);
-                            label(for = &format!("custom_choices[{key}]-no")) : "No";
-                        });
+                    html_content: Box::new(move |errors| {
+                        html! {
+                            : form_field(&format!("custom_choices[{key}]"), errors, html! {
+                                label(for = &format!("custom_choices[{key}]")) : display;
+                                br;
+                                input(id = &format!("custom_choices[{key}]-yes"), type = "radio", name = &format!("custom_choices[{key}]"), value = "yes", checked? = yes_checked);
+                                label(for = &format!("custom_choices[{key}]-yes")) : "Yes";
+                                input(id = &format!("custom_choices[{key}]-no"), type = "radio", name = &format!("custom_choices[{key}]"), value = "no", checked? = no_checked);
+                                label(for = &format!("custom_choices[{key}]-no")) : "No";
+                            });
+                        }
                     }),
                 }
             }
-            Self::RadioChoice { key, label, prompt, .. } => {
+            Self::RadioChoice {
+                key, label, prompt, ..
+            } => {
                 let key = key.clone();
                 let display = prompt.as_ref().unwrap_or(label).clone();
-                let never_checked = defaults.field_value(&format!("custom_choices[{key}]")).is_some_and(|value| value == "never");
-                let random_checked = defaults.field_value(&format!("custom_choices[{key}]")).is_some_and(|value| value == "random");
-                let always_checked = defaults.field_value(&format!("custom_choices[{key}]")).is_some_and(|value| value == "always");
+                let never_checked = defaults
+                    .field_value(&format!("custom_choices[{key}]"))
+                    .is_some_and(|value| value == "never");
+                let random_checked = defaults
+                    .field_value(&format!("custom_choices[{key}]"))
+                    .is_some_and(|value| value == "random");
+                let always_checked = defaults
+                    .field_value(&format!("custom_choices[{key}]"))
+                    .is_some_and(|value| value == "always");
                 RequirementStatus {
                     blocks_submit: false,
-                    html_content: Box::new(move |errors| html! {
-                        : form_field(&format!("custom_choices[{key}]"), errors, html! {
-                            label(for = &format!("custom_choices[{key}]")) : display;
-                            br;
-                            input(id = &format!("custom_choices[{key}]-never"), type = "radio", name = &format!("custom_choices[{key}]"), value = "never", checked? = never_checked);
-                            label(for = &format!("custom_choices[{key}]-never")) : "Never";
-                            input(id = &format!("custom_choices[{key}]-random"), type = "radio", name = &format!("custom_choices[{key}]"), value = "random", checked? = random_checked);
-                            label(for = &format!("custom_choices[{key}]-random")) : "Random";
-                            input(id = &format!("custom_choices[{key}]-always"), type = "radio", name = &format!("custom_choices[{key}]"), value = "always", checked? = always_checked);
-                            label(for = &format!("custom_choices[{key}]-always")) : "Always";
-                        });
+                    html_content: Box::new(move |errors| {
+                        html! {
+                            : form_field(&format!("custom_choices[{key}]"), errors, html! {
+                                label(for = &format!("custom_choices[{key}]")) : display;
+                                br;
+                                input(id = &format!("custom_choices[{key}]-never"), type = "radio", name = &format!("custom_choices[{key}]"), value = "never", checked? = never_checked);
+                                label(for = &format!("custom_choices[{key}]-never")) : "Never";
+                                input(id = &format!("custom_choices[{key}]-random"), type = "radio", name = &format!("custom_choices[{key}]"), value = "random", checked? = random_checked);
+                                label(for = &format!("custom_choices[{key}]-random")) : "Random";
+                                input(id = &format!("custom_choices[{key}]-always"), type = "radio", name = &format!("custom_choices[{key}]"), value = "always", checked? = always_checked);
+                                label(for = &format!("custom_choices[{key}]-always")) : "Always";
+                            });
+                        }
                     }),
                 }
             }
             Self::Rules { document } => {
-                let checked = defaults.field_value("confirm").is_some_and(|value| value == "on");
+                let checked = defaults
+                    .field_value("confirm")
+                    .is_some_and(|value| value == "on");
                 let team_config = data.team_config;
                 let rules_url = if let Some(document) = document {
                     document.to_string()
@@ -732,24 +883,28 @@ impl Requirement {
                 };
                 RequirementStatus {
                     blocks_submit: false,
-                    html_content: Box::new(move |errors| html! {
-                        : form_field("confirm", errors, html! {
-                            input(type = "checkbox", id = "confirm", name = "confirm", checked? = checked);
-                            label(for = "confirm") {
-                                @if let TeamConfig::Solo = team_config {
-                                    : "I have read and agree to ";
-                                } else {
-                                    : "We have read and agree to ";
+                    html_content: Box::new(move |errors| {
+                        html! {
+                            : form_field("confirm", errors, html! {
+                                input(type = "checkbox", id = "confirm", name = "confirm", checked? = checked);
+                                label(for = "confirm") {
+                                    @if let TeamConfig::Solo = team_config {
+                                        : "I have read and agree to ";
+                                    } else {
+                                        : "We have read and agree to ";
+                                    }
+                                    a(href = rules_url, target = "_blank") : "the event rules";
+                                    : ".";
                                 }
-                                a(href = rules_url, target = "_blank") : "the event rules";
-                                : ".";
-                            }
-                        });
+                            });
+                        }
                     }),
                 }
             }
             Self::Poll { document } => {
-                let checked = defaults.field_value("confirm").is_some_and(|value| value == "on");
+                let checked = defaults
+                    .field_value("confirm")
+                    .is_some_and(|value| value == "on");
                 let team_config = data.team_config;
                 let poll_url = if let Some(document) = document {
                     document.to_string()
@@ -758,152 +913,195 @@ impl Requirement {
                 };
                 RequirementStatus {
                     blocks_submit: false,
-                    html_content: Box::new(move |errors| html! {
-                        : form_field("confirm", errors, html! {
-                            input(type = "checkbox", id = "confirm", name = "confirm", checked? = checked);
-                            label(for = "confirm") {
-                                @if let TeamConfig::Solo = team_config {
-                                    : "I have submitted a response to ";
-                                } else {
-                                    : "We have submitted a response to  ";
+                    html_content: Box::new(move |errors| {
+                        html! {
+                            : form_field("confirm", errors, html! {
+                                input(type = "checkbox", id = "confirm", name = "confirm", checked? = checked);
+                                label(for = "confirm") {
+                                    @if let TeamConfig::Solo = team_config {
+                                        : "I have submitted a response to ";
+                                    } else {
+                                        : "We have submitted a response to  ";
+                                    }
+                                    a(href = poll_url, target = "_blank") : "the settings poll";
+                                    : ".";
                                 }
-                                a(href = poll_url, target = "_blank") : "the settings poll";
-                                : ".";
-                            }
-                        });
+                            });
+                        }
                     }),
                 }
             }
-            Self::RestreamConsent { optional: false, note } => {
-                let checked = defaults.field_value("restream_consent").is_some_and(|value| value == "on");
+            Self::RestreamConsent {
+                optional: false,
+                note,
+            } => {
+                let checked = defaults
+                    .field_value("restream_consent")
+                    .is_some_and(|value| value == "on");
                 let team_config = data.team_config;
                 let note = note.clone();
                 RequirementStatus {
                     blocks_submit: false,
-                    html_content: Box::new(move |errors| html! {
-                        : form_field("restream_consent", errors, html! {
-                            input(type = "checkbox", id = "restream_consent", name = "restream_consent", checked? = checked);
-                            label(for = "restream_consent") {
-                                @if let TeamConfig::Solo = team_config {
-                                    : "I am okay with being restreamed.";
-                                } else {
-                                    : "We are okay with being restreamed.";
+                    html_content: Box::new(move |errors| {
+                        html! {
+                            : form_field("restream_consent", errors, html! {
+                                input(type = "checkbox", id = "restream_consent", name = "restream_consent", checked? = checked);
+                                label(for = "restream_consent") {
+                                    @if let TeamConfig::Solo = team_config {
+                                        : "I am okay with being restreamed.";
+                                    } else {
+                                        : "We are okay with being restreamed.";
+                                    }
+                                    @if let Some(note) = note {
+                                        br;
+                                        : note;
+                                    }
                                 }
-                                @if let Some(note) = note {
-                                    br;
-                                    : note;
-                                }
-                            }
-                        });
+                            });
+                        }
                     }),
                 }
             }
-            Self::RestreamConsent { optional: true, note } => {
-                let yes_checked = defaults.field_value("restream_consent_radio").is_some_and(|value| value == "yes");
-                let no_checked = defaults.field_value("restream_consent_radio").is_some_and(|value| value == "no");
+            Self::RestreamConsent {
+                optional: true,
+                note,
+            } => {
+                let yes_checked = defaults
+                    .field_value("restream_consent_radio")
+                    .is_some_and(|value| value == "yes");
+                let no_checked = defaults
+                    .field_value("restream_consent_radio")
+                    .is_some_and(|value| value == "no");
                 let note = note.clone();
                 RequirementStatus {
                     blocks_submit: false,
-                    html_content: Box::new(move |errors| html! {
-                        : form_field("restream_consent_radio", errors, html! {
-                            label(for = "restream_consent_radio") {
-                                : "Let us know whether you are okay with being restreamed:";
-                            }
-                            br;
-                            input(id = "restream_consent_radio-yes", type = "radio", name = "restream_consent_radio", value = "yes", checked? = yes_checked);
-                            label(for = "restream_consent_radio-yes") : "Yes";
-                            input(id = "restream_consent_radio-no", type = "radio", name = "restream_consent_radio", value = "no", checked? = no_checked);
-                            label(for = "restream_consent_radio-no") : "No";
-                            @if let Some(note) = note {
+                    html_content: Box::new(move |errors| {
+                        html! {
+                            : form_field("restream_consent_radio", errors, html! {
+                                label(for = "restream_consent_radio") {
+                                    : "Let us know whether you are okay with being restreamed:";
+                                }
                                 br;
-                                label(for = "restream_consent_radio") : note;
-                            }
-                        });
+                                input(id = "restream_consent_radio-yes", type = "radio", name = "restream_consent_radio", value = "yes", checked? = yes_checked);
+                                label(for = "restream_consent_radio-yes") : "Yes";
+                                input(id = "restream_consent_radio-no", type = "radio", name = "restream_consent_radio", value = "no", checked? = no_checked);
+                                label(for = "restream_consent_radio-no") : "No";
+                                @if let Some(note) = note {
+                                    br;
+                                    label(for = "restream_consent_radio") : note;
+                                }
+                            });
+                        }
                     }),
                 }
             }
-            &Self::Qualifier { async_start, async_end, live_start } => {
+            &Self::Qualifier {
+                async_start,
+                async_end,
+                live_start,
+            } => {
                 let now = Utc::now();
                 let async_available = now >= async_start && now < async_end;
                 let series = data.series;
-                let checked = defaults.field_value("confirm").is_some_and(|value| value == "on");
+                let checked = defaults
+                    .field_value("confirm")
+                    .is_some_and(|value| value == "on");
                 RequirementStatus {
                     blocks_submit: !async_available,
-                    html_content: Box::new(move |errors| html! {
-                        @if async_available {
-                            : "Play the qualifier seed, either live on ";
-                            : format_datetime(live_start, DateTimeFormat { long: true, running_text: true });
-                            : " or request it as an async using this form by ";
-                            : format_datetime(async_end, DateTimeFormat { long: true, running_text: true });
-                            : ".";
-                            @match series {
-                                Series::TriforceBlitz => : tfb::qualifier_async_rules();
-                                _ => @unimplemented
-                            }
-                            : form_field("confirm", errors, html! {
-                                input(type = "checkbox", id = "confirm", name = "confirm", checked? = checked);
-                                label(for = "confirm") : "I have read the above and am ready to play the seed";
-                            });
-                        } else {
-                            : "Play the qualifier seed, either live on ";
-                            : format_datetime(live_start, DateTimeFormat { long: true, running_text: true });
-                            : " or async between ";
-                            : format_datetime(async_start, DateTimeFormat { long: false, running_text: true });
-                            : " and ";
-                            : format_datetime(async_end, DateTimeFormat { long: false, running_text: true });
-                            @if now < async_start {
-                                : ". The form to request the async will appear on this page.";
-                            }
-                        }
-                    }),
-                }
-            }
-            &Self::TripleQualifier { async_starts, async_ends, live_starts } => {
-                let now = Utc::now();
-                let async_available = async_starts.into_iter().zip_eq(async_ends).any(|(async_start, async_end)| now >= async_start && now < async_end);
-                let series = data.series;
-                let checked = defaults.field_value("confirm").is_some_and(|value| value == "on");
-                RequirementStatus {
-                    blocks_submit: !is_checked.unwrap() && !async_available,
-                    html_content: Box::new(move |errors| html! {
-                        @if is_checked.unwrap() {
-                            : "Play at least one of the 3 qualifier seeds, either live or async.";
-                            br;
-                            : "If you would like to play additional asyncs, enter the event and request them from your status page.";
-                        } else if async_available {
-                            : "Play at least one of the 3 qualifier seeds, either live or by requesting as an async using this form: ";
-                        } else {
-                            : "Play at least one of the 3 qualifier seeds, either live or async. The form to request an async will appear on this page.";
-                        }
-                        ol {
-                            @for ((async_start, async_end), live_start) in async_starts.into_iter().zip_eq(async_ends).zip(live_starts) {
-                                li {
-                                    : "Live at ";
-                                    : format_datetime(live_start, DateTimeFormat { long: true, running_text: true });
-                                    : " or async between ";
-                                    : format_datetime(async_start, DateTimeFormat { long: false, running_text: true });
-                                    : " and ";
-                                    : format_datetime(async_end, DateTimeFormat { long: false, running_text: true });
+                    html_content: Box::new(move |errors| {
+                        html! {
+                            @if async_available {
+                                : "Play the qualifier seed, either live on ";
+                                : format_datetime(live_start, DateTimeFormat { long: true, running_text: true });
+                                : " or request it as an async using this form by ";
+                                : format_datetime(async_end, DateTimeFormat { long: true, running_text: true });
+                                : ".";
+                                @match series {
+                                    Series::TriforceBlitz => : tfb::qualifier_async_rules();
+                                    _ => @unimplemented
+                                }
+                                : form_field("confirm", errors, html! {
+                                    input(type = "checkbox", id = "confirm", name = "confirm", checked? = checked);
+                                    label(for = "confirm") : "I have read the above and am ready to play the seed";
+                                });
+                            } else {
+                                : "Play the qualifier seed, either live on ";
+                                : format_datetime(live_start, DateTimeFormat { long: true, running_text: true });
+                                : " or async between ";
+                                : format_datetime(async_start, DateTimeFormat { long: false, running_text: true });
+                                : " and ";
+                                : format_datetime(async_end, DateTimeFormat { long: false, running_text: true });
+                                @if now < async_start {
+                                    : ". The form to request the async will appear on this page.";
                                 }
                             }
                         }
-                        @if !is_checked.unwrap() && async_available {
-                            @match series {
-                                Series::TriforceBlitz => : tfb::qualifier_async_rules();
-                                _ => @unimplemented
+                    }),
+                }
+            }
+            &Self::TripleQualifier {
+                async_starts,
+                async_ends,
+                live_starts,
+            } => {
+                let now = Utc::now();
+                let async_available = async_starts
+                    .into_iter()
+                    .zip_eq(async_ends)
+                    .any(|(async_start, async_end)| now >= async_start && now < async_end);
+                let series = data.series;
+                let checked = defaults
+                    .field_value("confirm")
+                    .is_some_and(|value| value == "on");
+                RequirementStatus {
+                    blocks_submit: !is_checked.unwrap() && !async_available,
+                    html_content: Box::new(move |errors| {
+                        html! {
+                            @if is_checked.unwrap() {
+                                : "Play at least one of the 3 qualifier seeds, either live or async.";
+                                br;
+                                : "If you would like to play additional asyncs, enter the event and request them from your status page.";
+                            } else if async_available {
+                                : "Play at least one of the 3 qualifier seeds, either live or by requesting as an async using this form: ";
+                            } else {
+                                : "Play at least one of the 3 qualifier seeds, either live or async. The form to request an async will appear on this page.";
                             }
-                            : form_field("confirm", errors, html! {
-                                input(type = "checkbox", id = "confirm", name = "confirm", checked? = checked);
-                                label(for = "confirm") : "I have read the above and am ready to play the seed";
-                            });
+                            ol {
+                                @for ((async_start, async_end), live_start) in async_starts.into_iter().zip_eq(async_ends).zip(live_starts) {
+                                    li {
+                                        : "Live at ";
+                                        : format_datetime(live_start, DateTimeFormat { long: true, running_text: true });
+                                        : " or async between ";
+                                        : format_datetime(async_start, DateTimeFormat { long: false, running_text: true });
+                                        : " and ";
+                                        : format_datetime(async_end, DateTimeFormat { long: false, running_text: true });
+                                    }
+                                }
+                            }
+                            @if !is_checked.unwrap() && async_available {
+                                @match series {
+                                    Series::TriforceBlitz => : tfb::qualifier_async_rules();
+                                    _ => @unimplemented
+                                }
+                                : form_field("confirm", errors, html! {
+                                    input(type = "checkbox", id = "confirm", name = "confirm", checked? = checked);
+                                    label(for = "confirm") : "I have read the above and am ready to play the seed";
+                                });
+                            }
                         }
                     }),
                 }
             }
-            &Self::QualifierPlacement { num_players, min_races, need_finish, exclude_players, event: _ } => {
-                RequirementStatus {
-                    blocks_submit: !is_checked.unwrap(),
-                    html_content: Box::new(move |_| html! {
+            &Self::QualifierPlacement {
+                num_players,
+                min_races,
+                need_finish,
+                exclude_players,
+                event: _,
+            } => RequirementStatus {
+                blocks_submit: !is_checked.unwrap(),
+                html_content: Box::new(move |_| {
+                    html! {
                         @if min_races == 0 {
                             : "Place";
                         } else {
@@ -934,112 +1132,263 @@ impl Requirement {
                             : " in this range";
                         }
                         : " due to other players opting out. You will be notified by an organizer if this is the case.";
-                    }),
-                }
-            }
+                    }
+                }),
+            },
             Self::RslLeaderboard => {
-                let rsl::Leaderboard { metadata: rsl::LeaderboardMetadata { required_races, .. }, .. } = rsl::Leaderboard::get(http_client).await?;
+                let rsl::Leaderboard {
+                    metadata: rsl::LeaderboardMetadata { required_races, .. },
+                    ..
+                } = rsl::Leaderboard::get(http_client).await?;
                 RequirementStatus {
                     blocks_submit: is_checked.is_none_or(|is_checked| !is_checked),
-                    html_content: Box::new(move |_| html! {
-                        : "Have ";
-                        : required_races;
-                        : " finishes on ";
-                        a(href = "https://rsl.one/") : "the RSL leaderboard";
+                    html_content: Box::new(move |_| {
+                        html! {
+                            : "Have ";
+                            : required_races;
+                            : " finishes on ";
+                            a(href = "https://rsl.one/") : "the RSL leaderboard";
+                        }
                     }),
                 }
             }
-            Self::External { html, text, blocks_submit } => {
+            Self::External {
+                html,
+                text,
+                blocks_submit,
+            } => {
                 let html = html.clone();
                 let text = text.clone();
                 RequirementStatus {
                     blocks_submit: *blocks_submit,
-                    html_content: Box::new(move |_| html! {
+                    html_content: Box::new(move |_| {
+                        html! {
                         : html;
                         : text;
+                        }
                     }),
                 }
             }
         })
     }
 
-    async fn check_form(&self, transaction: &mut Transaction<'_, Postgres>, http_client: &reqwest::Client, discord_ctx: &RwFuture<DiscordCtx>, me: &User, data: &Data<'_>, form_ctx: &mut Context<'_>, value: &EnterForm, config: &Config) -> Result<(), Error> {
+    async fn check_form(
+        &self,
+        transaction: &mut Transaction<'_, Postgres>,
+        http_client: &reqwest::Client,
+        discord_ctx: &RwFuture<DiscordCtx>,
+        me: &User,
+        data: &Data<'_>,
+        form_ctx: &mut Context<'_>,
+        value: &EnterForm,
+        config: &Config,
+    ) -> Result<(), Error> {
         match self {
-            Self::StartGG { optional: false } => if !self.is_checked(transaction, http_client, discord_ctx, me, data, config).await?.unwrap_or(false) {
-                form_ctx.push_error(form::Error::validation("A start.gg account is required to enter this event.")); //TODO link to /login/startgg
-            },
+            Self::StartGG { optional: false } => {
+                if !self
+                    .is_checked(transaction, http_client, discord_ctx, me, data, config)
+                    .await?
+                    .unwrap_or(false)
+                {
+                    form_ctx.push_error(form::Error::validation(
+                        "A start.gg account is required to enter this event.",
+                    )); //TODO link to /login/startgg
+                }
+            }
             Self::StartGG { optional: true } => match value.startgg_radio {
-                Some(BoolRadio::Yes) => if !self.is_checked(transaction, http_client, discord_ctx, me, data, config).await?.unwrap_or(false) {
-                    form_ctx.push_error(form::Error::validation("Sign in with start.gg or opt out of start.gg integration.").with_name("startgg_radio")); //TODO link to /login/startgg
-                },
+                Some(BoolRadio::Yes) => {
+                    if !self
+                        .is_checked(transaction, http_client, discord_ctx, me, data, config)
+                        .await?
+                        .unwrap_or(false)
+                    {
+                        form_ctx.push_error(
+                            form::Error::validation(
+                                "Sign in with start.gg or opt out of start.gg integration.",
+                            )
+                            .with_name("startgg_radio"),
+                        ); //TODO link to /login/startgg
+                    }
+                }
                 Some(BoolRadio::No) => {}
-                None => form_ctx.push_error(form::Error::validation("Please select one of the options.").with_name("startgg_radio")),
+                None => form_ctx.push_error(
+                    form::Error::validation("Please select one of the options.")
+                        .with_name("startgg_radio"),
+                ),
             },
-            Self::StartGGEventSignup { .. } => if !self.is_checked(transaction, http_client, discord_ctx, me, data, config).await?.unwrap_or(false) {
-                form_ctx.push_error(form::Error::validation("You must be signed up to the event on start.gg to enter."));
-            },
-            Self::TextField { regex, regex_error_messages, fallback_error_message, .. } => if !regex.is_match(&value.text_field) {
-                let error_message = if let Some((_, error_message)) = regex_error_messages.iter().find(|(regex, _)| regex.is_match(&value.text_field)) {
-                    error_message.clone()
-                } else {
-                    fallback_error_message.clone()
-                };
-                form_ctx.push_error(form::Error::validation(error_message).with_name("text_field"));
-            },
-            Self::TextField2 { regex, regex_error_messages, fallback_error_message, .. } => if !regex.is_match(&value.text_field2) {
-                let error_message = if let Some((_, error_message)) = regex_error_messages.iter().find(|(regex, _)| regex.is_match(&value.text_field2)) {
-                    error_message.clone()
-                } else {
-                    fallback_error_message.clone()
-                };
-                form_ctx.push_error(form::Error::validation(error_message).with_name("text_field2"));
-            },
-            Self::YesNo { .. } => if value.yes_no.is_none() {
-                form_ctx.push_error(form::Error::validation("Please select one of the options.").with_name("yes_no"));
-            },
-            Self::BooleanChoice { key, .. } => if !value.custom_choices.contains_key(key) {
-                form_ctx.push_error(form::Error::validation("Please select one of the options.").with_name(format!("custom_choices[{key}]")));
-            },
-            Self::RadioChoice { key, .. } => if !value.custom_choices.get(key).is_some_and(|value| matches!(value.as_str(), "never" | "random" | "always")) {
-                form_ctx.push_error(form::Error::validation("Please select one of the options.").with_name(format!("custom_choices[{key}]")));
-            },
-            Self::Rules { .. } => if !value.confirm {
-                form_ctx.push_error(form::Error::validation("This field is required.").with_name("confirm"));
-            },
-            Self::Poll { .. } => if !value.confirm {
-                form_ctx.push_error(form::Error::validation("This field is required.").with_name("confirm"));
-            },
-            Self::RestreamConsent { optional: false, .. } => if !value.restream_consent {
-                form_ctx.push_error(form::Error::validation("Restream consent is required to enter this event.").with_name("restream_consent"));
-            },
-            Self::RestreamConsent { optional: true, .. } => if value.restream_consent_radio.is_none() {
-                form_ctx.push_error(form::Error::validation("Please select one of the options.").with_name("restream_consent_radio"));
-            },
-            Self::Qualifier { async_start, async_end, .. } => {
+            Self::StartGGEventSignup { .. } => {
+                if !self
+                    .is_checked(transaction, http_client, discord_ctx, me, data, config)
+                    .await?
+                    .unwrap_or(false)
+                {
+                    form_ctx.push_error(form::Error::validation(
+                        "You must be signed up to the event on start.gg to enter.",
+                    ));
+                }
+            }
+            Self::TextField {
+                regex,
+                regex_error_messages,
+                fallback_error_message,
+                ..
+            } => {
+                if !regex.is_match(&value.text_field) {
+                    let error_message = if let Some((_, error_message)) = regex_error_messages
+                        .iter()
+                        .find(|(regex, _)| regex.is_match(&value.text_field))
+                    {
+                        error_message.clone()
+                    } else {
+                        fallback_error_message.clone()
+                    };
+                    form_ctx
+                        .push_error(form::Error::validation(error_message).with_name("text_field"));
+                }
+            }
+            Self::TextField2 {
+                regex,
+                regex_error_messages,
+                fallback_error_message,
+                ..
+            } => {
+                if !regex.is_match(&value.text_field2) {
+                    let error_message = if let Some((_, error_message)) = regex_error_messages
+                        .iter()
+                        .find(|(regex, _)| regex.is_match(&value.text_field2))
+                    {
+                        error_message.clone()
+                    } else {
+                        fallback_error_message.clone()
+                    };
+                    form_ctx.push_error(
+                        form::Error::validation(error_message).with_name("text_field2"),
+                    );
+                }
+            }
+            Self::YesNo { .. } => {
+                if value.yes_no.is_none() {
+                    form_ctx.push_error(
+                        form::Error::validation("Please select one of the options.")
+                            .with_name("yes_no"),
+                    );
+                }
+            }
+            Self::BooleanChoice { key, .. } => {
+                if !value.custom_choices.contains_key(key) {
+                    form_ctx.push_error(
+                        form::Error::validation("Please select one of the options.")
+                            .with_name(format!("custom_choices[{key}]")),
+                    );
+                }
+            }
+            Self::RadioChoice { key, .. } => {
+                if !value
+                    .custom_choices
+                    .get(key)
+                    .is_some_and(|value| matches!(value.as_str(), "never" | "random" | "always"))
+                {
+                    form_ctx.push_error(
+                        form::Error::validation("Please select one of the options.")
+                            .with_name(format!("custom_choices[{key}]")),
+                    );
+                }
+            }
+            Self::Rules { .. } => {
+                if !value.confirm {
+                    form_ctx.push_error(
+                        form::Error::validation("This field is required.").with_name("confirm"),
+                    );
+                }
+            }
+            Self::Poll { .. } => {
+                if !value.confirm {
+                    form_ctx.push_error(
+                        form::Error::validation("This field is required.").with_name("confirm"),
+                    );
+                }
+            }
+            Self::RestreamConsent {
+                optional: false, ..
+            } => {
+                if !value.restream_consent {
+                    form_ctx.push_error(
+                        form::Error::validation(
+                            "Restream consent is required to enter this event.",
+                        )
+                        .with_name("restream_consent"),
+                    );
+                }
+            }
+            Self::RestreamConsent { optional: true, .. } => {
+                if value.restream_consent_radio.is_none() {
+                    form_ctx.push_error(
+                        form::Error::validation("Please select one of the options.")
+                            .with_name("restream_consent_radio"),
+                    );
+                }
+            }
+            Self::Qualifier {
+                async_start,
+                async_end,
+                ..
+            } => {
                 let now = Utc::now();
                 if now >= *async_start && now < *async_end {
                     if !value.confirm {
-                        form_ctx.push_error(form::Error::validation("This field is required.").with_name("confirm"));
+                        form_ctx.push_error(
+                            form::Error::validation("This field is required.").with_name("confirm"),
+                        );
                     }
                 } else {
-                    form_ctx.push_error(form::Error::validation("The qualifier seed is not yet available."));
+                    form_ctx.push_error(form::Error::validation(
+                        "The qualifier seed is not yet available.",
+                    ));
                 }
             }
-            Self::TripleQualifier { async_starts, async_ends, .. } => if !self.is_checked(transaction, http_client, discord_ctx, me, data, config).await?.unwrap_or(false) {
-                let now = Utc::now();
-                if (*async_starts).into_iter().zip_eq(*async_ends).any(|(async_start, async_end)| now >= async_start && now < async_end) {
-                    if !value.confirm {
-                        form_ctx.push_error(form::Error::validation("This field is required.").with_name("confirm"));
+            Self::TripleQualifier {
+                async_starts,
+                async_ends,
+                ..
+            } => {
+                if !self
+                    .is_checked(transaction, http_client, discord_ctx, me, data, config)
+                    .await?
+                    .unwrap_or(false)
+                {
+                    let now = Utc::now();
+                    if (*async_starts)
+                        .into_iter()
+                        .zip_eq(*async_ends)
+                        .any(|(async_start, async_end)| now >= async_start && now < async_end)
+                    {
+                        if !value.confirm {
+                            form_ctx.push_error(
+                                form::Error::validation("This field is required.")
+                                    .with_name("confirm"),
+                            );
+                        }
+                    } else {
+                        form_ctx.push_error(form::Error::validation(
+                            "No qualifier seed is currently available.",
+                        ));
                     }
-                } else {
-                    form_ctx.push_error(form::Error::validation("No qualifier seed is currently available."));
                 }
-            },
-            Self::External { blocks_submit, .. } => if *blocks_submit {
-                form_ctx.push_error(form::Error::validation("Please complete event entry via the external method."));
-            },
-            _ => if !self.is_checked(transaction, http_client, discord_ctx, me, data, config).await?.unwrap_or(false) {
-                form_ctx.push_error(form::Error::validation(match self {
+            }
+            Self::External { blocks_submit, .. } => {
+                if *blocks_submit {
+                    form_ctx.push_error(form::Error::validation(
+                        "Please complete event entry via the external method.",
+                    ));
+                }
+            }
+            _ => {
+                if !self
+                    .is_checked(transaction, http_client, discord_ctx, me, data, config)
+                    .await?
+                    .unwrap_or(false)
+                {
+                    form_ctx.push_error(form::Error::validation(match self {
                     Self::RaceTime => Cow::Borrowed("A racetime.gg account is required to enter this event. Go to your Hyrule Town Hall profile and select 'Connect a racetime.gg account'."), //TODO direct link?
                     Self::RaceTimeInvite { error_text, .. } => if me.racetime.is_some() {
                         if let Some(error_text) = error_text {
@@ -1083,28 +1432,50 @@ impl Requirement {
                     | Self::External { .. }
                         => unreachable!(),
                 }));
+                }
             }
         }
         Ok(())
     }
 
-    async fn request_qualifier(&self, transaction: &mut Transaction<'_, Postgres>, http_client: &reqwest::Client, discord_ctx: &RwFuture<DiscordCtx>, me: &User, data: &Data<'_>, config: &Config) -> Result<Option<AsyncKind>, Error> {
+    async fn request_qualifier(
+        &self,
+        transaction: &mut Transaction<'_, Postgres>,
+        http_client: &reqwest::Client,
+        discord_ctx: &RwFuture<DiscordCtx>,
+        me: &User,
+        data: &Data<'_>,
+        config: &Config,
+    ) -> Result<Option<AsyncKind>, Error> {
         Ok(match self {
             Requirement::Qualifier { .. } => Some(AsyncKind::Qualifier1),
-            Requirement::TripleQualifier { async_starts, async_ends, .. } => {
+            Requirement::TripleQualifier {
+                async_starts,
+                async_ends,
+                ..
+            } => {
                 let now = Utc::now();
-                if self.is_checked(transaction, http_client, discord_ctx, me, data, config).await?.unwrap_or(false) {
+                if self
+                    .is_checked(transaction, http_client, discord_ctx, me, data, config)
+                    .await?
+                    .unwrap_or(false)
+                {
                     None
                 } else {
-                    (*async_starts).into_iter()
+                    (*async_starts)
+                        .into_iter()
                         .zip_eq(*async_ends)
                         .enumerate()
-                        .find(|&(_, (async_start, async_end))| now >= async_start && now < async_end)
+                        .find(|&(_, (async_start, async_end))| {
+                            now >= async_start && now < async_end
+                        })
                         .map(|(idx, _)| match idx {
                             0 => AsyncKind::Qualifier1,
                             1 => AsyncKind::Qualifier2,
                             2 => AsyncKind::Qualifier3,
-                            _ => unreachable!("more than 3 qualifiers in Requirement::TripleQualifier"),
+                            _ => unreachable!(
+                                "more than 3 qualifiers in Requirement::TripleQualifier"
+                            ),
                         })
                 }
             }
@@ -1115,16 +1486,26 @@ impl Requirement {
 
 #[derive(Debug, thiserror::Error, rocket_util::Error)]
 pub(crate) enum Error {
-    #[error(transparent)] Cal(#[from] cal::Error),
-    #[error(transparent)] Data(#[from] DataError),
-    #[error(transparent)] Event(#[from] event::Error),
-    #[error(transparent)] Notification(#[from] crate::notification::Error),
-    #[error(transparent)] Page(#[from] PageError),
-    #[error(transparent)] Reqwest(#[from] reqwest::Error),
-    #[error(transparent)] Serenity(#[from] serenity::Error),
-    #[error(transparent)] Sql(#[from] sqlx::Error),
-    #[error(transparent)] StartGG(#[from] startgg::Error),
-    #[error(transparent)] Wheel(#[from] wheel::Error),
+    #[error(transparent)]
+    Cal(#[from] cal::Error),
+    #[error(transparent)]
+    Data(#[from] DataError),
+    #[error(transparent)]
+    Event(#[from] event::Error),
+    #[error(transparent)]
+    Notification(#[from] crate::notification::Error),
+    #[error(transparent)]
+    Page(#[from] PageError),
+    #[error(transparent)]
+    Reqwest(#[from] reqwest::Error),
+    #[error(transparent)]
+    Serenity(#[from] serenity::Error),
+    #[error(transparent)]
+    Sql(#[from] sqlx::Error),
+    #[error(transparent)]
+    StartGG(#[from] startgg::Error),
+    #[error(transparent)]
+    Wheel(#[from] wheel::Error),
     #[error("event has a discordGuild entry requirement but no Discord guild")]
     DiscordGuild,
     #[error("no such event")]
@@ -1182,7 +1563,17 @@ pub(crate) struct EnterForm {
     custom_choices: HashMap<String, String>,
 }
 
-pub(crate) async fn enter_form(mut transaction: Transaction<'_, Postgres>, http_client: &reqwest::Client, discord_ctx: &RwFuture<DiscordCtx>, me: Option<User>, uri: Origin<'_>, csrf: Option<&CsrfToken>, data: Data<'_>, defaults: pic::EnterFormDefaults<'_>, config: &Config) -> Result<RawHtml<String>, Error> {
+pub(crate) async fn enter_form(
+    mut transaction: Transaction<'_, Postgres>,
+    http_client: &reqwest::Client,
+    discord_ctx: &RwFuture<DiscordCtx>,
+    me: Option<User>,
+    uri: Origin<'_>,
+    csrf: Option<&CsrfToken>,
+    data: Data<'_>,
+    defaults: pic::EnterFormDefaults<'_>,
+    config: &Config,
+) -> Result<RawHtml<String>, Error> {
     //TODO if already entered, redirect to status page
     let my_invites = if let Some(ref me) = me {
         sqlx::query_scalar!(r#"SELECT team AS "team: Id<Teams>" FROM teams, team_members WHERE series = $1 AND event = $2 AND member = $3 AND status = 'unconfirmed'"#, data.series as _, &*data.event, me.id as _).fetch_all(&mut *transaction).await?
@@ -1366,28 +1757,64 @@ pub(crate) async fn enter_form(mut transaction: Transaction<'_, Postgres>, http_
                         }
                     }
                 }
-                TeamConfig::Pictionary => return Ok(pic::enter_form(transaction, me, uri, csrf, data, defaults).await?),
-                TeamConfig::CoOp | TeamConfig::TfbCoOp | TeamConfig::Multiworld => return Ok(mw::enter_form(transaction, me, uri, csrf, data, defaults.into_context(), http_client).await?),
+                TeamConfig::Pictionary => {
+                    return Ok(pic::enter_form(transaction, me, uri, csrf, data, defaults).await?);
+                }
+                TeamConfig::CoOp | TeamConfig::TfbCoOp | TeamConfig::Multiworld => {
+                    return Ok(mw::enter_form(
+                        transaction,
+                        me,
+                        uri,
+                        csrf,
+                        data,
+                        defaults.into_context(),
+                        http_client,
+                    )
+                    .await?);
+                }
             },
         }
     };
-    let header = data.header(&mut transaction, me.as_ref(), Tab::Enter, false).await?;
+    let header = data
+        .header(&mut transaction, me.as_ref(), Tab::Enter, false)
+        .await?;
     let invites = html! {
         @for team_id in my_invites {
             : crate::notification::team_invite(&mut transaction, me.as_ref().expect("got a team invite while not logged in"), csrf, defaults.errors(), crate::notification::TeamInviteSource::Enter, team_id).await?;
         }
     };
-    Ok(page(transaction, &me, &uri, PageStyle { chests: data.chests().await?, ..PageStyle::default() }, &format!("Enter — {}", data.display_name), html! {
-        : header;
-        : invites;
-        : content;
-    }).await?)
+    Ok(page(
+        transaction,
+        &me,
+        &uri,
+        PageStyle {
+            chests: data.chests().await?,
+            ..PageStyle::default()
+        },
+        &format!("Enter — {}", data.display_name),
+        html! {
+            : header;
+            : invites;
+            : content;
+        },
+    )
+    .await?)
 }
 
-fn enter_form_step2<'a, 'b: 'a, 'c: 'a, 'd: 'a>(mut transaction: Transaction<'a, Postgres>, me: Option<User>, uri: Origin<'b>, http_client: &reqwest::Client, csrf: Option<&'a CsrfToken>, data: Data<'c>, defaults: mw::EnterFormStep2Defaults<'d>) -> Pin<Box<dyn Future<Output = Result<RawHtml<String>, Error>> + Send + 'a>> {
+fn enter_form_step2<'a, 'b: 'a, 'c: 'a, 'd: 'a>(
+    mut transaction: Transaction<'a, Postgres>,
+    me: Option<User>,
+    uri: Origin<'b>,
+    http_client: &reqwest::Client,
+    csrf: Option<&'a CsrfToken>,
+    data: Data<'c>,
+    defaults: mw::EnterFormStep2Defaults<'d>,
+) -> Pin<Box<dyn Future<Output = Result<RawHtml<String>, Error>> + Send + 'a>> {
     let team_members = defaults.racetime_members(http_client);
     Box::pin(async move {
-        let header = data.header(&mut transaction, me.as_ref(), Tab::Enter, true).await?;
+        let header = data
+            .header(&mut transaction, me.as_ref(), Tab::Enter, true)
+            .await?;
         let page_content = {
             let team_config = data.team_config;
             let team_members = team_members.await?;
@@ -1480,47 +1907,125 @@ fn enter_form_step2<'a, 'b: 'a, 'c: 'a, 'd: 'a>(mut transaction: Transaction<'a,
                 }, errors, "Enter");
             }
         };
-        Ok(page(transaction, &me, &uri, PageStyle { chests: data.chests().await?, ..PageStyle::default() }, &format!("Enter — {}", data.display_name), page_content).await?)
+        Ok(page(
+            transaction,
+            &me,
+            &uri,
+            PageStyle {
+                chests: data.chests().await?,
+                ..PageStyle::default()
+            },
+            &format!("Enter — {}", data.display_name),
+            page_content,
+        )
+        .await?)
     })
 }
 
 #[rocket::get("/event/<series>/<event>/enter?<my_role>&<teammate>")]
-pub(crate) async fn get(config: &State<Config>, pool: &State<PgPool>, http_client: &State<reqwest::Client>, discord_ctx: &State<RwFuture<DiscordCtx>>, me: Option<User>, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, my_role: Option<pic::Role>, teammate: Option<Id<Users>>) -> Result<RawHtml<String>, StatusOrError<Error>> {
+pub(crate) async fn get(
+    config: &State<Config>,
+    pool: &State<PgPool>,
+    http_client: &State<reqwest::Client>,
+    discord_ctx: &State<RwFuture<DiscordCtx>>,
+    me: Option<User>,
+    uri: Origin<'_>,
+    csrf: Option<CsrfToken>,
+    series: Series,
+    event: &str,
+    my_role: Option<pic::Role>,
+    teammate: Option<Id<Users>>,
+) -> Result<RawHtml<String>, StatusOrError<Error>> {
     let mut transaction = pool.begin().await?;
-    let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
-    Ok(enter_form(transaction, http_client, discord_ctx, me, uri, csrf.as_ref(), data, pic::EnterFormDefaults::Values { my_role, teammate }, config).await?)
+    let data = Data::new(&mut transaction, series, event)
+        .await?
+        .ok_or(StatusOrError::Status(Status::NotFound))?;
+    Ok(enter_form(
+        transaction,
+        http_client,
+        discord_ctx,
+        me,
+        uri,
+        csrf.as_ref(),
+        data,
+        pic::EnterFormDefaults::Values { my_role, teammate },
+        config,
+    )
+    .await?)
 }
 
 #[rocket::post("/event/<series>/<event>/enter", data = "<form>")]
-pub(crate) async fn post(config: &State<Config>, pool: &State<PgPool>, http_client: &State<reqwest::Client>, discord_ctx: &State<RwFuture<DiscordCtx>>, me: User, uri: Origin<'_>, csrf: Option<CsrfToken>, series: Series, event: &str, form: Form<Contextual<'_, EnterForm>>) -> Result<RedirectOrContent, StatusOrError<Error>> {
+pub(crate) async fn post(
+    config: &State<Config>,
+    pool: &State<PgPool>,
+    http_client: &State<reqwest::Client>,
+    discord_ctx: &State<RwFuture<DiscordCtx>>,
+    me: User,
+    uri: Origin<'_>,
+    csrf: Option<CsrfToken>,
+    series: Series,
+    event: &str,
+    form: Form<Contextual<'_, EnterForm>>,
+) -> Result<RedirectOrContent, StatusOrError<Error>> {
     let mut transaction = pool.begin().await?;
-    let data = Data::new(&mut transaction, series, event).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
+    let data = Data::new(&mut transaction, series, event)
+        .await?
+        .ok_or(StatusOrError::Status(Status::NotFound))?;
     let mut form = form.into_inner();
     form.verify(&csrf);
     if let Some(ref value) = form.value {
         if data.is_started(&mut transaction).await? {
-            form.context.push_error(form::Error::validation("You can no longer enter this event since it has already started."));
+            form.context.push_error(form::Error::validation(
+                "You can no longer enter this event since it has already started.",
+            ));
         }
         match data.team_config {
             TeamConfig::Solo => {
                 let mut request_qualifier = None;
                 if let Some(ref flow) = data.enter_flow {
                     if flow.closes.is_some_and(|closes| closes <= Utc::now()) {
-                        form.context.push_error(form::Error::validation("The deadline to enter this event has passed."));
+                        form.context.push_error(form::Error::validation(
+                            "The deadline to enter this event has passed.",
+                        ));
                     } else if flow.is_empty() {
                         if data.is_single_race() {
-                            form.context.push_error(form::Error::validation("Signups for this event are not handled by Hyrule Town Hall."));
+                            form.context.push_error(form::Error::validation(
+                                "Signups for this event are not handled by Hyrule Town Hall.",
+                            ));
                         }
                     } else {
                         for requirement in flow.iter_requirements() {
-                            requirement.check_form(&mut transaction, http_client, discord_ctx, &me, &data, &mut form.context, value, config).await?;
-                            if let Some(async_kind) = requirement.request_qualifier(&mut transaction, http_client, discord_ctx, &me, &data, config).await? {
+                            requirement
+                                .check_form(
+                                    &mut transaction,
+                                    http_client,
+                                    discord_ctx,
+                                    &me,
+                                    &data,
+                                    &mut form.context,
+                                    value,
+                                    config,
+                                )
+                                .await?;
+                            if let Some(async_kind) = requirement
+                                .request_qualifier(
+                                    &mut transaction,
+                                    http_client,
+                                    discord_ctx,
+                                    &me,
+                                    &data,
+                                    config,
+                                )
+                                .await?
+                            {
                                 request_qualifier = Some(async_kind);
                             }
                         }
                     }
                 } else {
-                    form.context.push_error(form::Error::validation("Signups for this event aren't open yet."));
+                    form.context.push_error(form::Error::validation(
+                        "Signups for this event aren't open yet.",
+                    ));
                 }
                 if sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM teams, team_members WHERE
                     id = team
@@ -1545,18 +2050,66 @@ pub(crate) async fn post(config: &State<Config>, pool: &State<PgPool>, http_clie
 
                     // Merge old-style boolean choices into custom_choices
                     let mut custom_choices = value.custom_choices.clone();
-                    if value.all_dungeons_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("all_dungeons")).or_insert(format!("yes")); }
-                    if value.flute_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("flute")).or_insert(format!("yes")); }
-                    if value.hard_settings_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("hard_settings")).or_insert(format!("yes")); }
-                    if value.hover_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("hovering")).or_insert(format!("yes")); }
-                    if value.inverted_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("inverted")).or_insert(format!("yes")); }
-                    if value.keydrop_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("keydrop")).or_insert(format!("yes")); }
-                    if value.lite_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("lite")).or_insert(format!("yes")); }
-                    if value.mirror_scroll_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("mirror_scroll")).or_insert(format!("yes")); }
-                    if value.mq_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("mq")).or_insert(format!("yes")); }
-                    if value.no_delay_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("no_delay")).or_insert(format!("yes")); }
-                    if value.pb_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("pseudoboots")).or_insert(format!("yes")); }
-                    if value.zw_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("zw")).or_insert(format!("yes")); }
+                    if value.all_dungeons_ok == Some(BoolRadio::Yes) {
+                        custom_choices
+                            .entry(format!("all_dungeons"))
+                            .or_insert(format!("yes"));
+                    }
+                    if value.flute_ok == Some(BoolRadio::Yes) {
+                        custom_choices
+                            .entry(format!("flute"))
+                            .or_insert(format!("yes"));
+                    }
+                    if value.hard_settings_ok == Some(BoolRadio::Yes) {
+                        custom_choices
+                            .entry(format!("hard_settings"))
+                            .or_insert(format!("yes"));
+                    }
+                    if value.hover_ok == Some(BoolRadio::Yes) {
+                        custom_choices
+                            .entry(format!("hovering"))
+                            .or_insert(format!("yes"));
+                    }
+                    if value.inverted_ok == Some(BoolRadio::Yes) {
+                        custom_choices
+                            .entry(format!("inverted"))
+                            .or_insert(format!("yes"));
+                    }
+                    if value.keydrop_ok == Some(BoolRadio::Yes) {
+                        custom_choices
+                            .entry(format!("keydrop"))
+                            .or_insert(format!("yes"));
+                    }
+                    if value.lite_ok == Some(BoolRadio::Yes) {
+                        custom_choices
+                            .entry(format!("lite"))
+                            .or_insert(format!("yes"));
+                    }
+                    if value.mirror_scroll_ok == Some(BoolRadio::Yes) {
+                        custom_choices
+                            .entry(format!("mirror_scroll"))
+                            .or_insert(format!("yes"));
+                    }
+                    if value.mq_ok == Some(BoolRadio::Yes) {
+                        custom_choices
+                            .entry(format!("mq"))
+                            .or_insert(format!("yes"));
+                    }
+                    if value.no_delay_ok == Some(BoolRadio::Yes) {
+                        custom_choices
+                            .entry(format!("no_delay"))
+                            .or_insert(format!("yes"));
+                    }
+                    if value.pb_ok == Some(BoolRadio::Yes) {
+                        custom_choices
+                            .entry(format!("pseudoboots"))
+                            .or_insert(format!("yes"));
+                    }
+                    if value.zw_ok == Some(BoolRadio::Yes) {
+                        custom_choices
+                            .entry(format!("zw"))
+                            .or_insert(format!("yes"));
+                    }
 
                     let id = if let Some(existing_id) = existing_resigned_team {
                         // Reactivate the existing resigned team
@@ -1593,7 +2146,9 @@ pub(crate) async fn post(config: &State<Config>, pool: &State<PgPool>, http_clie
                         // Only insert if not already requested for this team
                         sqlx::query!("INSERT INTO async_teams (team, kind, requested) VALUES ($1, $2, NOW()) ON CONFLICT DO NOTHING", id as _, async_kind as _).execute(&mut *transaction).await?;
                     }
-                    if let (Some(discord_user), Some(discord_guild)) = (me.discord.as_ref(), data.discord_guild) {
+                    if let (Some(discord_user), Some(discord_guild)) =
+                        (me.discord.as_ref(), data.discord_guild)
+                    {
                         let discord_ctx = discord_ctx.read().await;
                         if let Some(PgSnowflake(participant_role)) = sqlx::query_scalar!(r#"SELECT id AS "id: PgSnowflake<RoleId>" FROM discord_roles WHERE guild = $1 AND series = $2 AND event = $3"#, PgSnowflake(discord_guild) as _, series as _, event).fetch_optional(&mut *transaction).await? {
                             if let Ok(member) = discord_guild.member(&*discord_ctx, discord_user.id).await {
@@ -1615,7 +2170,11 @@ pub(crate) async fn post(config: &State<Config>, pool: &State<PgPool>, http_clie
                             }
                         }
                     }
-                    let challonge_info = if let MatchSource::Challonge { community, tournament } = data.match_source() {
+                    let challonge_info = if let MatchSource::Challonge {
+                        community,
+                        tournament,
+                    } = data.match_source()
+                    {
                         Some((community.map(str::to_owned), tournament.to_owned()))
                     } else {
                         None
@@ -1627,17 +2186,29 @@ pub(crate) async fn post(config: &State<Config>, pool: &State<PgPool>, http_clie
                                 let challonge_username = me.challonge_id.as_deref();
                                 let display_name = me.display_name();
                                 match challonge::import::create_participant(
-                                    http_client, config, community.as_deref(), tournament,
-                                    &display_name, challonge_username,
-                                ).await {
+                                    http_client,
+                                    config,
+                                    community.as_deref(),
+                                    tournament,
+                                    &display_name,
+                                    challonge_username,
+                                )
+                                .await
+                                {
                                     Ok(participant_id) => {
                                         sqlx::query!(
                                             "UPDATE teams SET challonge_id = $1 WHERE id = $2",
-                                            participant_id, id as _,
-                                        ).execute(&mut *transaction).await?;
+                                            participant_id,
+                                            id as _,
+                                        )
+                                        .execute(&mut *transaction)
+                                        .await?;
                                     }
                                     Err(e) => {
-                                        log::error!("Failed to create Challonge participant for {}: {e}", display_name);
+                                        log::error!(
+                                            "Failed to create Challonge participant for {}: {e}",
+                                            display_name
+                                        );
                                     }
                                 }
                             }
@@ -1648,13 +2219,28 @@ pub(crate) async fn post(config: &State<Config>, pool: &State<PgPool>, http_clie
                                 // enter event on start.gg with user ID
                                 // this is currently not possible to automate, see conversation ending at <https://discord.com/channels/339548254704369677/541015301618401301/1346621619787006083> for details
                                 // temporary workaround until this is automated:
-                                let startgg_id = me.startgg_id.as_ref().expect("checked by requirement");
+                                let startgg_id =
+                                    me.startgg_id.as_ref().expect("checked by requirement");
                                 let mut msg = MessageBuilder::default();
                                 msg.mention_user(&me);
                                 msg.push(" signed up for ");
                                 msg.push_safe(&data.display_name);
-                                let response = startgg::query_cached::<startgg::UserSlugQuery>(http_client, &config.startgg, startgg::user_slug_query::Variables { id: startgg_id.clone() }).await?;
-                                if let startgg::user_slug_query::ResponseData { user: Some(startgg::user_slug_query::UserSlugQueryUser { discriminator: Some(slug), .. }) } = response {
+                                let response = startgg::query_cached::<startgg::UserSlugQuery>(
+                                    http_client,
+                                    &config.startgg,
+                                    startgg::user_slug_query::Variables {
+                                        id: startgg_id.clone(),
+                                    },
+                                )
+                                .await?;
+                                if let startgg::user_slug_query::ResponseData {
+                                    user:
+                                        Some(startgg::user_slug_query::UserSlugQueryUser {
+                                            discriminator: Some(slug),
+                                            ..
+                                        }),
+                                } = response
+                                {
                                     msg.push(" with start.gg user slug ");
                                     msg.push_mono_safe(slug);
                                     msg.push(".");
@@ -1667,19 +2253,27 @@ pub(crate) async fn post(config: &State<Config>, pool: &State<PgPool>, http_clie
                                 }
                                 let built_msg = msg.build();
                                 if let Some(organizer_channel) = data.discord_organizer_channel {
-                                    if let Err(e) = organizer_channel.say(&*discord_ctx, &built_msg).await {
+                                    if let Err(e) =
+                                        organizer_channel.say(&*discord_ctx, &built_msg).await
+                                    {
                                         let dm_msg = MessageBuilder::default()
                                             .push("Failed to post to organizer channel (")
                                             .push_safe(e.to_string())
                                             .push("). Please handle manually: ")
                                             .push_safe(&built_msg)
                                             .build();
-                                        if let Ok(ch) = ADMIN_USER.create_dm_channel(&*discord_ctx).await {
+                                        if let Ok(ch) =
+                                            ADMIN_USER.create_dm_channel(&*discord_ctx).await
+                                        {
                                             let _ = ch.say(&*discord_ctx, dm_msg).await;
                                         }
                                     }
                                 } else {
-                                    ADMIN_USER.create_dm_channel(&*discord_ctx).await?.say(&*discord_ctx, built_msg).await?;
+                                    ADMIN_USER
+                                        .create_dm_channel(&*discord_ctx)
+                                        .await?
+                                        .say(&*discord_ctx, built_msg)
+                                        .await?;
                                 }
                             } else {
                                 // enter event on start.gg anonymously
@@ -1692,38 +2286,56 @@ pub(crate) async fn post(config: &State<Config>, pool: &State<PgPool>, http_clie
                                     .push(" without start.gg account.")
                                     .build();
                                 if let Some(organizer_channel) = data.discord_organizer_channel {
-                                    if let Err(e) = organizer_channel.say(&*discord_ctx, &msg).await {
+                                    if let Err(e) = organizer_channel.say(&*discord_ctx, &msg).await
+                                    {
                                         let dm_msg = MessageBuilder::default()
                                             .push("Failed to post to organizer channel (")
                                             .push_safe(e.to_string())
                                             .push("). Please handle manually: ")
                                             .push_safe(&msg)
                                             .build();
-                                        if let Ok(ch) = ADMIN_USER.create_dm_channel(&*discord_ctx).await {
+                                        if let Ok(ch) =
+                                            ADMIN_USER.create_dm_channel(&*discord_ctx).await
+                                        {
                                             let _ = ch.say(&*discord_ctx, dm_msg).await;
                                         }
                                     }
                                 } else {
-                                    ADMIN_USER.create_dm_channel(&*discord_ctx).await?.say(&*discord_ctx, msg).await?;
+                                    ADMIN_USER
+                                        .create_dm_channel(&*discord_ctx)
+                                        .await?
+                                        .say(&*discord_ctx, msg)
+                                        .await?;
                                 }
                             }
                         }
                     }
                     transaction.commit().await?;
-                    return Ok(RedirectOrContent::Redirect(Redirect::to(uri!(super::status(series, event)))))
+                    return Ok(RedirectOrContent::Redirect(Redirect::to(uri!(
+                        super::status(series, event)
+                    ))));
                 }
             }
             TeamConfig::Pictionary => {
                 let (my_role, teammate) = match (value.my_role, value.teammate) {
                     (Some(my_role), Some(teammate)) => {
-                        if sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM teams, team_members WHERE
+                        if sqlx::query_scalar!(
+                            r#"SELECT EXISTS (SELECT 1 FROM teams, team_members WHERE
                             id = team
                             AND series = $1
                             AND event = $2
                             AND member = $3
                             AND NOT resigned
                             AND EXISTS (SELECT 1 FROM team_members WHERE team = id AND member = $4)
-                        ) AS "exists!""#, series as _, event, me.id as _, teammate as _).fetch_one(&mut *transaction).await? {
+                        ) AS "exists!""#,
+                            series as _,
+                            event,
+                            me.id as _,
+                            teammate as _
+                        )
+                        .fetch_one(&mut *transaction)
+                        .await?
+                        {
                             form.context.push_error(form::Error::validation("A team with these members is already proposed for this race. Check your notifications to accept the invite, or ask your teammate to do so.")); //TODO linkify notifications? More specific message based on whether viewer has confirmed?
                         }
                         if sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM teams, team_members WHERE
@@ -1749,10 +2361,22 @@ pub(crate) async fn post(config: &State<Config>, pool: &State<PgPool>, http_clie
                             form.context.push_error(form::Error::validation("A racetime.gg account is required to enter as runner. Go to your profile and select 'Connect a racetime.gg account'.").with_name("my_role")); //TODO direct link?
                         }
                         if teammate == me.id {
-                            form.context.push_error(form::Error::validation("You cannot be your own teammate.").with_name("teammate"));
+                            form.context.push_error(
+                                form::Error::validation("You cannot be your own teammate.")
+                                    .with_name("teammate"),
+                            );
                         }
-                        if !sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM users WHERE id = $1) AS "exists!""#, teammate as _).fetch_one(&mut *transaction).await? {
-                            form.context.push_error(form::Error::validation("There is no user with this ID.").with_name("teammate"));
+                        if !sqlx::query_scalar!(
+                            r#"SELECT EXISTS (SELECT 1 FROM users WHERE id = $1) AS "exists!""#,
+                            teammate as _
+                        )
+                        .fetch_one(&mut *transaction)
+                        .await?
+                        {
+                            form.context.push_error(
+                                form::Error::validation("There is no user with this ID.")
+                                    .with_name("teammate"),
+                            );
                         }
                         if sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM teams, team_members WHERE
                             id = team
@@ -1768,16 +2392,26 @@ pub(crate) async fn post(config: &State<Config>, pool: &State<PgPool>, http_clie
                         (Some(my_role), Some(teammate))
                     }
                     (Some(_), None) => {
-                        form.context.push_error(form::Error::validation("This field is required.").with_name("teammate"));
+                        form.context.push_error(
+                            form::Error::validation("This field is required.")
+                                .with_name("teammate"),
+                        );
                         (None, None)
                     }
                     (None, Some(_)) => {
-                        form.context.push_error(form::Error::validation("This field is required.").with_name("my_role"));
+                        form.context.push_error(
+                            form::Error::validation("This field is required.").with_name("my_role"),
+                        );
                         (None, None)
                     }
                     (None, None) => {
-                        form.context.push_error(form::Error::validation("This field is required.").with_name("my_role"));
-                        form.context.push_error(form::Error::validation("This field is required.").with_name("teammate"));
+                        form.context.push_error(
+                            form::Error::validation("This field is required.").with_name("my_role"),
+                        );
+                        form.context.push_error(
+                            form::Error::validation("This field is required.")
+                                .with_name("teammate"),
+                        );
                         (None, None)
                     }
                 };
@@ -1785,18 +2419,66 @@ pub(crate) async fn post(config: &State<Config>, pool: &State<PgPool>, http_clie
                     let id = Id::<Teams>::new(&mut transaction).await?;
                     // Merge old-style boolean choices into custom_choices
                     let mut custom_choices = value.custom_choices.clone();
-                    if value.all_dungeons_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("all_dungeons")).or_insert(format!("yes")); }
-                    if value.flute_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("flute")).or_insert(format!("yes")); }
-                    if value.hard_settings_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("hard_settings")).or_insert(format!("yes")); }
-                    if value.hover_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("hovering")).or_insert(format!("yes")); }
-                    if value.inverted_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("inverted")).or_insert(format!("yes")); }
-                    if value.keydrop_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("keydrop")).or_insert(format!("yes")); }
-                    if value.lite_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("lite")).or_insert(format!("yes")); }
-                    if value.mirror_scroll_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("mirror_scroll")).or_insert(format!("yes")); }
-                    if value.mq_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("mq")).or_insert(format!("yes")); }
-                    if value.no_delay_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("no_delay")).or_insert(format!("yes")); }
-                    if value.pb_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("pseudoboots")).or_insert(format!("yes")); }
-                    if value.zw_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("zw")).or_insert(format!("yes")); }
+                    if value.all_dungeons_ok == Some(BoolRadio::Yes) {
+                        custom_choices
+                            .entry(format!("all_dungeons"))
+                            .or_insert(format!("yes"));
+                    }
+                    if value.flute_ok == Some(BoolRadio::Yes) {
+                        custom_choices
+                            .entry(format!("flute"))
+                            .or_insert(format!("yes"));
+                    }
+                    if value.hard_settings_ok == Some(BoolRadio::Yes) {
+                        custom_choices
+                            .entry(format!("hard_settings"))
+                            .or_insert(format!("yes"));
+                    }
+                    if value.hover_ok == Some(BoolRadio::Yes) {
+                        custom_choices
+                            .entry(format!("hovering"))
+                            .or_insert(format!("yes"));
+                    }
+                    if value.inverted_ok == Some(BoolRadio::Yes) {
+                        custom_choices
+                            .entry(format!("inverted"))
+                            .or_insert(format!("yes"));
+                    }
+                    if value.keydrop_ok == Some(BoolRadio::Yes) {
+                        custom_choices
+                            .entry(format!("keydrop"))
+                            .or_insert(format!("yes"));
+                    }
+                    if value.lite_ok == Some(BoolRadio::Yes) {
+                        custom_choices
+                            .entry(format!("lite"))
+                            .or_insert(format!("yes"));
+                    }
+                    if value.mirror_scroll_ok == Some(BoolRadio::Yes) {
+                        custom_choices
+                            .entry(format!("mirror_scroll"))
+                            .or_insert(format!("yes"));
+                    }
+                    if value.mq_ok == Some(BoolRadio::Yes) {
+                        custom_choices
+                            .entry(format!("mq"))
+                            .or_insert(format!("yes"));
+                    }
+                    if value.no_delay_ok == Some(BoolRadio::Yes) {
+                        custom_choices
+                            .entry(format!("no_delay"))
+                            .or_insert(format!("yes"));
+                    }
+                    if value.pb_ok == Some(BoolRadio::Yes) {
+                        custom_choices
+                            .entry(format!("pseudoboots"))
+                            .or_insert(format!("yes"));
+                    }
+                    if value.zw_ok == Some(BoolRadio::Yes) {
+                        custom_choices
+                            .entry(format!("zw"))
+                            .or_insert(format!("yes"));
+                    }
                     sqlx::query!(
                     "INSERT INTO teams (id, series, event, name, restream_consent, text_field, text_field2, yes_no, mw_impl, custom_choices) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
                         id as _,
@@ -1813,27 +2495,43 @@ pub(crate) async fn post(config: &State<Config>, pool: &State<PgPool>, http_clie
                     sqlx::query!("INSERT INTO team_members (team, member, status, role) VALUES ($1, $2, 'created', $3)", id as _, me.id as _, Role::from(my_role.expect("validated")) as _).execute(&mut *transaction).await?;
                     sqlx::query!("INSERT INTO team_members (team, member, status, role) VALUES ($1, $2, 'unconfirmed', $3)", id as _, teammate.expect("validated") as _, match my_role.expect("validated") { pic::Role::Sheikah => Role::Gerudo, pic::Role::Gerudo => Role::Sheikah } as _).execute(&mut *transaction).await?;
                     transaction.commit().await?;
-                    return Ok(RedirectOrContent::Redirect(Redirect::to(uri!(super::status(series, event)))))
+                    return Ok(RedirectOrContent::Redirect(Redirect::to(uri!(
+                        super::status(series, event)
+                    ))));
                 }
             }
             team_config => {
                 let racetime_team = if let Some(ref racetime_team) = value.racetime_team {
                     match me.racetime_user_data(http_client).await? {
-                        Some(Some(user)) => if user.teams.iter().any(|team| team.slug == *racetime_team) {
-                            let team = http_client.get(format!("https://{}/team/{racetime_team}/data", racetime_host()))
-                                .send().await?
-                                .detailed_error_for_status().await?
-                                .json_with_text_in_error::<mw::RaceTimeTeamData>().await?;
-                            let expected_size = team_config.roles().len();
-                            if team.members.len() != expected_size {
-                                form.context.push_error(form::Error::validation(format!("Teams for this event must have exactly {expected_size} members, but this team has {}", team.members.len())))
+                        Some(Some(user)) => {
+                            if user.teams.iter().any(|team| team.slug == *racetime_team) {
+                                let team = http_client
+                                    .get(format!(
+                                        "https://{}/team/{racetime_team}/data",
+                                        racetime_host()
+                                    ))
+                                    .send()
+                                    .await?
+                                    .detailed_error_for_status()
+                                    .await?
+                                    .json_with_text_in_error::<mw::RaceTimeTeamData>()
+                                    .await?;
+                                let expected_size = team_config.roles().len();
+                                if team.members.len() != expected_size {
+                                    form.context.push_error(form::Error::validation(format!("Teams for this event must have exactly {expected_size} members, but this team has {}", team.members.len())))
+                                }
+                                //TODO get each team member's Mido's House account for displaying in step 2
+                                Some(team)
+                            } else {
+                                form.context.push_error(
+                                    form::Error::validation(
+                                        "This racetime.gg team does not exist or you're not in it.",
+                                    )
+                                    .with_name("racetime_team"),
+                                );
+                                None
                             }
-                            //TODO get each team member's Mido's House account for displaying in step 2
-                            Some(team)
-                        } else {
-                            form.context.push_error(form::Error::validation("This racetime.gg team does not exist or you're not in it.").with_name("racetime_team"));
-                            None
-                        },
+                        }
                         Some(None) => {
                             form.context.push_error(form::Error::validation("Your racetime.gg profile is not public. Please connect a Twitch or Patreon account to your racetime.gg account or participate in a recorded race."));
                             None
@@ -1844,7 +2542,10 @@ pub(crate) async fn post(config: &State<Config>, pool: &State<PgPool>, http_clie
                         }
                     }
                 } else {
-                    form.context.push_error(form::Error::validation("This field is required.").with_name("racetime_team"));
+                    form.context.push_error(
+                        form::Error::validation("This field is required.")
+                            .with_name("racetime_team"),
+                    );
                     None
                 };
                 let (team_slug, team_name, users, roles, startgg_ids) = if value.step2 {
@@ -1858,10 +2559,16 @@ pub(crate) async fn post(config: &State<Config>, pool: &State<PgPool>, http_clie
                         };
                         let mut startgg_ids = Vec::default();
                         for member in &racetime_team.members {
-                            if let Some(user) = User::from_racetime(&mut *transaction, &member.id).await? {
+                            if let Some(user) =
+                                User::from_racetime(&mut *transaction, &member.id).await?
+                            {
                                 if let Some(ref discord) = user.discord {
                                     if let Some(discord_guild) = data.discord_guild {
-                                        if discord_guild.member(&*discord_ctx.read().await, discord.id).await.is_err() {
+                                        if discord_guild
+                                            .member(&*discord_ctx.read().await, discord.id)
+                                            .await
+                                            .is_err()
+                                        {
                                             //TODO only check if Requirement::DiscordGuild is present
                                             form.context.push_error(form::Error::validation("This user has not joined the tournament's Discord server.").with_name(format!("roles[{}]", member.id)));
                                         }
@@ -1889,7 +2596,10 @@ pub(crate) async fn post(config: &State<Config>, pool: &State<PgPool>, http_clie
                                 if let Some(&role) = value.roles.get(&member.id) {
                                     roles.push(role);
                                 } else {
-                                    form.context.push_error(form::Error::validation("This field is required.").with_name(format!("roles[{}]", member.id)));
+                                    form.context.push_error(
+                                        form::Error::validation("This field is required.")
+                                            .with_name(format!("roles[{}]", member.id)),
+                                    );
                                 }
                             }
                             if let Some(id) = value.startgg_id.get(&member.id) {
@@ -1933,31 +2643,55 @@ pub(crate) async fn post(config: &State<Config>, pool: &State<PgPool>, http_clie
                             for (member_id, role) in &value.roles {
                                 if role == required_role {
                                     if found {
-                                        form.context.push_error(form::Error::validation("Each team member must have a different role.").with_name(format!("roles[{member_id}]")));
+                                        form.context.push_error(
+                                            form::Error::validation(
+                                                "Each team member must have a different role.",
+                                            )
+                                            .with_name(format!("roles[{member_id}]")),
+                                        );
                                     } else {
                                         found = true;
                                     }
                                 }
                             }
                             if !found {
-                                form.context.push_error(form::Error::validation(format!("No team member is assigned as {label}.")));
+                                form.context.push_error(form::Error::validation(format!(
+                                    "No team member is assigned as {label}."
+                                )));
                             }
                         }
                         match team_config {
                             TeamConfig::CoOp => {
                                 if value.text_field.is_empty() {
-                                    form.context.push_error(form::Error::validation("This field is required.").with_name("text_field"));
+                                    form.context.push_error(
+                                        form::Error::validation("This field is required.")
+                                            .with_name("text_field"),
+                                    );
                                 }
                                 if value.text_field2.is_empty() {
-                                    form.context.push_error(form::Error::validation("This field is required.").with_name("text_field2"));
+                                    form.context.push_error(
+                                        form::Error::validation("This field is required.")
+                                            .with_name("text_field2"),
+                                    );
                                 }
                             }
-                            TeamConfig::Multiworld => if value.mw_impl.is_none() {
-                                form.context.push_error(form::Error::validation("This field is required.").with_name("mw_impl"));
-                            },
+                            TeamConfig::Multiworld => {
+                                if value.mw_impl.is_none() {
+                                    form.context.push_error(
+                                        form::Error::validation("This field is required.")
+                                            .with_name("mw_impl"),
+                                    );
+                                }
+                            }
                             _ => {}
                         }
-                        (racetime_team.slug.clone(), racetime_team.name.clone(), users, roles, startgg_ids)
+                        (
+                            racetime_team.slug.clone(),
+                            racetime_team.name.clone(),
+                            users,
+                            roles,
+                            startgg_ids,
+                        )
                     } else {
                         Default::default()
                     }
@@ -1969,18 +2703,66 @@ pub(crate) async fn post(config: &State<Config>, pool: &State<PgPool>, http_clie
                         let id = Id::<Teams>::new(&mut transaction).await?;
                         // Merge old-style boolean choices into custom_choices
                         let mut custom_choices = value.custom_choices.clone();
-                        if value.all_dungeons_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("all_dungeons")).or_insert(format!("yes")); }
-                        if value.flute_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("flute")).or_insert(format!("yes")); }
-                        if value.hard_settings_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("hard_settings")).or_insert(format!("yes")); }
-                        if value.hover_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("hovering")).or_insert(format!("yes")); }
-                        if value.inverted_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("inverted")).or_insert(format!("yes")); }
-                        if value.keydrop_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("keydrop")).or_insert(format!("yes")); }
-                        if value.lite_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("lite")).or_insert(format!("yes")); }
-                        if value.mirror_scroll_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("mirror_scroll")).or_insert(format!("yes")); }
-                        if value.mq_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("mq")).or_insert(format!("yes")); }
-                        if value.no_delay_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("no_delay")).or_insert(format!("yes")); }
-                        if value.pb_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("pseudoboots")).or_insert(format!("yes")); }
-                        if value.zw_ok == Some(BoolRadio::Yes) { custom_choices.entry(format!("zw")).or_insert(format!("yes")); }
+                        if value.all_dungeons_ok == Some(BoolRadio::Yes) {
+                            custom_choices
+                                .entry(format!("all_dungeons"))
+                                .or_insert(format!("yes"));
+                        }
+                        if value.flute_ok == Some(BoolRadio::Yes) {
+                            custom_choices
+                                .entry(format!("flute"))
+                                .or_insert(format!("yes"));
+                        }
+                        if value.hard_settings_ok == Some(BoolRadio::Yes) {
+                            custom_choices
+                                .entry(format!("hard_settings"))
+                                .or_insert(format!("yes"));
+                        }
+                        if value.hover_ok == Some(BoolRadio::Yes) {
+                            custom_choices
+                                .entry(format!("hovering"))
+                                .or_insert(format!("yes"));
+                        }
+                        if value.inverted_ok == Some(BoolRadio::Yes) {
+                            custom_choices
+                                .entry(format!("inverted"))
+                                .or_insert(format!("yes"));
+                        }
+                        if value.keydrop_ok == Some(BoolRadio::Yes) {
+                            custom_choices
+                                .entry(format!("keydrop"))
+                                .or_insert(format!("yes"));
+                        }
+                        if value.lite_ok == Some(BoolRadio::Yes) {
+                            custom_choices
+                                .entry(format!("lite"))
+                                .or_insert(format!("yes"));
+                        }
+                        if value.mirror_scroll_ok == Some(BoolRadio::Yes) {
+                            custom_choices
+                                .entry(format!("mirror_scroll"))
+                                .or_insert(format!("yes"));
+                        }
+                        if value.mq_ok == Some(BoolRadio::Yes) {
+                            custom_choices
+                                .entry(format!("mq"))
+                                .or_insert(format!("yes"));
+                        }
+                        if value.no_delay_ok == Some(BoolRadio::Yes) {
+                            custom_choices
+                                .entry(format!("no_delay"))
+                                .or_insert(format!("yes"));
+                        }
+                        if value.pb_ok == Some(BoolRadio::Yes) {
+                            custom_choices
+                                .entry(format!("pseudoboots"))
+                                .or_insert(format!("yes"));
+                        }
+                        if value.zw_ok == Some(BoolRadio::Yes) {
+                            custom_choices
+                                .entry(format!("zw"))
+                                .or_insert(format!("yes"));
+                        }
                         sqlx::query!(
                             "INSERT INTO teams (id, series, event, name, racetime_slug, restream_consent, text_field, text_field2, yes_no, mw_impl, custom_choices) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
                             id as _,
@@ -1995,25 +2777,66 @@ pub(crate) async fn post(config: &State<Config>, pool: &State<PgPool>, http_clie
                             value.mw_impl as _,
                         sqlx::types::Json(&custom_choices) as _,
                         ).execute(&mut *transaction).await?;
-                        for ((user, role), startgg_id) in users.into_iter().zip_eq(roles).zip_eq(startgg_ids) {
+                        for ((user, role), startgg_id) in
+                            users.into_iter().zip_eq(roles).zip_eq(startgg_ids)
+                        {
                             sqlx::query!(
                                 "INSERT INTO team_members (team, member, status, role, startgg_id) VALUES ($1, $2, $3, $4, $5)",
                                 id as _, user.id as _, if user == me { SignupStatus::Created } else { SignupStatus::Unconfirmed } as _, role as _, startgg_id,
                             ).execute(&mut *transaction).await?;
                         }
                         transaction.commit().await?;
-                        RedirectOrContent::Redirect(Redirect::to(uri!(super::status(series, event))))
+                        RedirectOrContent::Redirect(Redirect::to(uri!(super::status(
+                            series, event
+                        ))))
                     } else {
-                        RedirectOrContent::Content(enter_form_step2(transaction, Some(me), uri, http_client, csrf.as_ref(), data, mw::EnterFormStep2Defaults::Values { racetime_team: racetime_team.expect("validated") }).await?)
-                    })
+                        RedirectOrContent::Content(
+                            enter_form_step2(
+                                transaction,
+                                Some(me),
+                                uri,
+                                http_client,
+                                csrf.as_ref(),
+                                data,
+                                mw::EnterFormStep2Defaults::Values {
+                                    racetime_team: racetime_team.expect("validated"),
+                                },
+                            )
+                            .await?,
+                        )
+                    });
                 }
             }
         }
         if value.step2 {
-            return Ok(RedirectOrContent::Content(enter_form_step2(transaction, Some(me), uri, http_client, csrf.as_ref(), data, mw::EnterFormStep2Defaults::Context(form.context)).await?))
+            return Ok(RedirectOrContent::Content(
+                enter_form_step2(
+                    transaction,
+                    Some(me),
+                    uri,
+                    http_client,
+                    csrf.as_ref(),
+                    data,
+                    mw::EnterFormStep2Defaults::Context(form.context),
+                )
+                .await?,
+            ));
         }
     }
-    Ok(RedirectOrContent::Content(enter_form(transaction, http_client, discord_ctx, Some(me), uri, csrf.as_ref(), data, pic::EnterFormDefaults::Context(form.context), config).await?))
+    Ok(RedirectOrContent::Content(
+        enter_form(
+            transaction,
+            http_client,
+            discord_ctx,
+            Some(me),
+            uri,
+            csrf.as_ref(),
+            data,
+            pic::EnterFormDefaults::Context(form.context),
+            config,
+        )
+        .await?,
+    ))
 }
 
 #[cfg(test)]
@@ -2022,12 +2845,15 @@ mod tests {
 
     #[test]
     fn legacy_enter_flow_without_sections_still_deserializes() {
-        let flow: Flow = serde_json::from_str(r#"{
+        let flow: Flow = serde_json::from_str(
+            r#"{
             "requirements": [
                 {"type": "raceTime"},
                 {"type": "booleanChoice", "key": "hard_mode", "label": "Hard Mode"}
             ]
-        }"#).expect("legacy enter flow should deserialize");
+        }"#,
+        )
+        .expect("legacy enter flow should deserialize");
 
         assert!(flow.sections.is_empty());
         assert_eq!(flow.iter_requirements().count(), 2);
@@ -2050,19 +2876,36 @@ mod tests {
             ]
         }"#).expect("sectioned enter flow should deserialize");
 
-        let items = flow.display_items(|requirement| matches!(requirement, Requirement::BooleanChoice { .. } | Requirement::RadioChoice { .. }));
-        let labels = items.into_iter().map(|item| match item {
-            FlowDisplayItem::Section { section, depth } => format!("section:{depth}:{}", section.id),
-            FlowDisplayItem::Requirement(Requirement::BooleanChoice { key, .. } | Requirement::RadioChoice { key, .. }) => format!("requirement:{key}"),
-            FlowDisplayItem::Requirement(_) => unreachable!("display filter only includes choices"),
-        }).collect_vec();
+        let items = flow.display_items(|requirement| {
+            matches!(
+                requirement,
+                Requirement::BooleanChoice { .. } | Requirement::RadioChoice { .. }
+            )
+        });
+        let labels = items
+            .into_iter()
+            .map(|item| match item {
+                FlowDisplayItem::Section { section, depth } => {
+                    format!("section:{depth}:{}", section.id)
+                }
+                FlowDisplayItem::Requirement(
+                    Requirement::BooleanChoice { key, .. } | Requirement::RadioChoice { key, .. },
+                ) => format!("requirement:{key}"),
+                FlowDisplayItem::Requirement(_) => {
+                    unreachable!("display filter only includes choices")
+                }
+            })
+            .collect_vec();
 
-        assert_eq!(labels, [
-            "section:0:open",
-            "requirement:general",
-            "section:1:open-specific",
-            "requirement:specific",
-        ]);
+        assert_eq!(
+            labels,
+            [
+                "section:0:open",
+                "requirement:general",
+                "section:1:open-specific",
+                "requirement:specific",
+            ]
+        );
     }
 
     #[test]
@@ -2078,13 +2921,16 @@ mod tests {
 
     #[test]
     fn cyclic_section_hierarchy_is_rejected() {
-        let error = serde_json::from_str::<Flow>(r#"{
+        let error = serde_json::from_str::<Flow>(
+            r#"{
             "sections": [
                 {"id": "one", "label": "One", "parent": "two"},
                 {"id": "two", "label": "Two", "parent": "one"}
             ],
             "requirements": []
-        }"#).expect_err("cyclic section hierarchy should fail");
+        }"#,
+        )
+        .expect_err("cyclic section hierarchy should fail");
 
         assert!(error.to_string().contains("cycle"));
     }
