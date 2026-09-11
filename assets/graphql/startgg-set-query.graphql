@@ -1,6 +1,15 @@
 query SetQuery($setID: ID!) {
   set(id: $setID) {
     id
+    setGamesType
+    round
+    phaseGroup {
+      bracketType
+      rounds {
+        number
+        bestOf
+      }
+    }
     games {
       id
       orderNum

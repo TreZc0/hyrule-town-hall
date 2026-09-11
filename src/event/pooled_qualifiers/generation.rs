@@ -10,7 +10,7 @@ pub(crate) fn supported(kind: &SeedGenType) -> bool {
         | SeedGenType::AlttprDoorRando {
             source: AlttprDrSource::MutualChoices { config },
             ..
-        } => config.base_settings.is_object(),
+        } => config.baselines.is_none() && config.base_settings.is_object(),
         SeedGenType::AlttprDoorRando {
             source: AlttprDrSource::MysteryPool { weights_url },
             ..

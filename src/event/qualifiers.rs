@@ -7,6 +7,7 @@ use crate::{
 };
 
 pub(crate) mod ranks;
+mod pools;
 
 async fn qualifiers_form(
     mut transaction: Transaction<'_, Postgres>,
@@ -54,33 +55,6 @@ async fn qualifiers_form(
     .await?;
 
     #[derive(sqlx::FromRow)]
-    struct SeedRow {
-        mode_id: i64,
-        source: String,
-        pool_position: Option<i16>,
-        generation_state: String,
-        physical_seed_identity: Option<String>,
-        released_at: Option<DateTime<Utc>>,
-        generation_error: Option<String>,
-    }
-    #[derive(sqlx::FromRow)]
-    struct AttemptRow {
-        id: i64,
-        team_id: i64,
-        entrant_name: String,
-        mode_name: String,
-        source: String,
-        state: String,
-        counts_for_entrant: bool,
-        official_outcome: Option<String>,
-        official_time: Option<sqlx::postgres::types::PgInterval>,
-        vod: Option<String>,
-        retry_of: Option<i64>,
-        control_version: i64,
-        delivery_error: Option<String>,
-        correction_history: serde_json::Value,
-    }
-    #[derive(sqlx::FromRow)]
     struct LiveEntryRow {
         live_race_id: i64,
         mode_name: String,
@@ -101,16 +75,7 @@ async fn qualifiers_form(
         Vec::new()
     };
     let pooled_seeds = if pooled_config.is_some() {
-        sqlx::query_as::<_, SeedRow>(
-            r#"SELECT mode_id, source, pool_position,
-            generation_state, physical_seed_identity, released_at, generation_error
-            FROM qualifier_seeds WHERE series = $1 AND event = $2
-            ORDER BY mode_id, source, pool_position, live_race_id"#,
-        )
-        .bind(event.series)
-        .bind(&event.event)
-        .fetch_all(&mut *transaction)
-        .await?
+        pools::load_seeds(&mut transaction, event.series, &event.event).await?
     } else {
         Vec::new()
     };
@@ -120,24 +85,7 @@ async fn qualifiers_form(
         Vec::new()
     };
     let pooled_attempts = if pooled_config.is_some() {
-        sqlx::query_as::<_, AttemptRow>(
-            r#"SELECT attempt.id, attempt.team_id,
-                COALESCE(user_account.discord_display_name, user_account.racetime_display_name,
-                    'Team ' || attempt.team_id::TEXT) AS entrant_name,
-                mode.display_name AS mode_name, attempt.source, attempt.state,
-                attempt.counts_for_entrant, attempt.official_outcome,
-                attempt.official_time, attempt.vod, attempt.retry_of, attempt.control_version, attempt.delivery_error, attempt.correction_history
-            FROM qualifier_attempts attempt
-            JOIN qualifier_modes mode ON mode.id = attempt.mode_id
-            LEFT JOIN team_members member ON member.team = attempt.team_id
-            LEFT JOIN users user_account ON user_account.id = member.member
-            WHERE attempt.series = $1 AND attempt.event = $2
-            ORDER BY attempt.requested_at, attempt.id"#,
-        )
-        .bind(event.series)
-        .bind(&event.event)
-        .fetch_all(&mut *transaction)
-        .await?
+        pools::load_attempts(&mut transaction, event.series, &event.event).await?
     } else {
         Vec::new()
     };
@@ -287,44 +235,36 @@ async fn qualifiers_form(
                     }, Vec::new(), if is_new { "Add mode" } else { "Save mode" });
                 }
 
-                h3 : "Private Seed Pool";
-                p : "Seed identities and pool slots are organizer-only. Import a generated seed payload only after its build and settings have been verified.";
-                @for mode in pooled_modes.iter().filter(|mode| mode.enabled) {
+                h3 : "Qualifier Seed Pools";
+                p : "Seed assignments and results below are organizer-only and reflect the current data when this page is loaded. Assignment counts exclude void attempts; replaced attempts remain part of their original seed group and may still contribute to par. Import a seed only after verifying its build and settings.";
+                @for mode in &pooled_modes {
                     h4 : &mode.display_name;
-                    : full_form(uri!(post_pooled_generate(event.series, &*event.event)), csrf, html! {
-                        input(type = "hidden", name = "mode_id", value = mode.id);
-                        input(type = "hidden", name = "retry_failed", value = "false");
-                    }, Vec::new(), "Generate missing slots");
-                    : full_form(uri!(post_pooled_generate(event.series, &*event.event)), csrf, html! {
-                        input(type = "hidden", name = "mode_id", value = mode.id);
-                        label : "Slot";
-                        input(type = "number", name = "pool_position", min = "1", max = config.pool_seed_count, required? = true);
-                        input(type = "hidden", name = "retry_failed", value = "true");
-                    }, Vec::new(), "Generate slot / retry failed slot");
-                    table {
-                        thead { tr { th : "Slot"; th : "State"; th : "Identity"; th : "Released"; } }
-                        tbody {
-                            @for seed in pooled_seeds.iter().filter(|seed| seed.mode_id == mode.id && seed.source == "async_pool") {
-                                tr {
-                                    td : seed.pool_position;
-                                    td { : &seed.generation_state; @if let Some(error) = &seed.generation_error { p : error; } }
-                                    td : seed.physical_seed_identity.as_deref().unwrap_or("");
-                                    td : seed.released_at.map(|value| value.to_rfc3339()).unwrap_or_default();
-                                }
+                    @if mode.enabled {
+                        : full_form(uri!(post_pooled_generate(event.series, &*event.event)), csrf, html! {
+                            input(type = "hidden", name = "mode_id", value = mode.id);
+                            input(type = "hidden", name = "retry_failed", value = "false");
+                        }, Vec::new(), "Generate missing slots");
+                        : full_form(uri!(post_pooled_generate(event.series, &*event.event)), csrf, html! {
+                            input(type = "hidden", name = "mode_id", value = mode.id);
+                            label : "Slot";
+                            input(type = "number", name = "pool_position", min = "1", max = config.pool_seed_count, required? = true);
+                            input(type = "hidden", name = "retry_failed", value = "true");
+                        }, Vec::new(), "Generate slot / retry failed slot");
+                    } else { p : "Disabled mode — historical assignments remain available below."; }
+                    : pools::overview(config, mode.id, &pooled_seeds, &pooled_attempts, event.discord_guild.map(|guild| guild.get()));
+                    @if mode.enabled {
+                        : full_form(uri!(post_pooled_seed(event.series, &*event.event)), csrf, html! {
+                            input(type = "hidden", name = "mode_id", value = mode.id);
+                            label : "Pool slot";
+                            input(type = "number", min = "1", name = "pool_position");
+                            label : "Canonical seed data JSON";
+                            textarea(name = "seed_data", rows = "6", cols = "80");
+                            label {
+                                input(type = "checkbox", name = "attest_settings", required? = true);
+                                : "I verified that this seed uses this mode’s baseline settings and the configured deployed generator build.";
                             }
-                        }
+                        }, Vec::new(), "Import or replace unused seed");
                     }
-                    : full_form(uri!(post_pooled_seed(event.series, &*event.event)), csrf, html! {
-                        input(type = "hidden", name = "mode_id", value = mode.id);
-                        label : "Pool slot";
-                        input(type = "number", min = "1", name = "pool_position");
-                        label : "Canonical seed data JSON";
-                        textarea(name = "seed_data", rows = "6", cols = "80");
-                        label {
-                            input(type = "checkbox", name = "attest_settings", required? = true);
-                            : "I verified that this seed uses this mode’s baseline settings and the configured deployed generator build.";
-                        }
-                    }, Vec::new(), "Import or replace unused seed");
                 }
 
                 h3 : "Attempt Ledger";
@@ -332,13 +272,14 @@ async fn qualifiers_form(
                     p : "No attempts have been assigned.";
                 } else {
                     table {
-                        thead { tr { th : "ID"; th : "Entrant"; th : "Mode"; th : "Source"; th : "State"; th : "Outcome"; th : "Counted"; th : "Retry of"; th : "Review / history"; th : "VOD"; } }
+                        thead { tr { th : "ID"; th : "Entrant"; th : "Mode"; th : "Seed"; th : "Source"; th : "State"; th : "Outcome"; th : "Counted"; th : "Retry of"; th : "Review / history"; th : "VOD"; } }
                         tbody {
                             @for attempt in &pooled_attempts {
-                                tr {
+                                tr(id = format!("attempt-{}", attempt.id)) {
                                     td : attempt.id;
                                     td { : &attempt.entrant_name; : format!(" ({})", attempt.team_id); }
                                     td : &attempt.mode_name;
+                                    td { a(href = format!("#pool-seed-{}", attempt.seed_id)) : pools::seed_label(attempt.seed_id, &pooled_seeds); }
                                     td : &attempt.source;
                                     td : &attempt.state;
                                     td {
@@ -2813,6 +2754,29 @@ pub(crate) async fn post_edit_seeding_race(
 pub(crate) mod route_tests {
     use super::*;
 
+    pub(crate) async fn verify_pool_assignments(pool: &PgPool, series: &str, event: &str, original: i64, replacement: i64) {
+        let mut tx = pool.begin().await.unwrap();
+        let series: Series = series.parse().unwrap();
+        let seeds = pools::load_seeds(&mut tx, series, event).await.unwrap();
+        let attempts = pools::load_attempts(&mut tx, series, event).await.unwrap();
+        let original = attempts.iter().find(|attempt| attempt.id == original).unwrap();
+        let replacement = attempts.iter().find(|attempt| attempt.id == replacement).unwrap();
+        assert_ne!(original.seed_id, replacement.seed_id);
+        assert_eq!(original.superseded_by, Some(replacement.id));
+        assert_eq!(replacement.retry_of, Some(original.id));
+        assert!(!original.counts_for_entrant);
+        assert!(original.par_eligible);
+        assert!(replacement.counts_for_entrant);
+        let config = pooled_qualifiers::Config::load(&mut tx, series, event).await.unwrap().unwrap();
+        let seed = seeds.iter().find(|seed| seed.id == original.seed_id).unwrap();
+        let html = pools::overview(&config, seed.mode_id, &seeds, &attempts, Some(123)).0;
+        assert!(html.contains(&format!("#attempt-{}", replacement.id)));
+        assert!(html.contains(&format!("pool-seed-{}", original.seed_id)));
+        assert!(html.contains("1/5 finishes — par pending"));
+        assert!(html.contains("Private async thread"));
+        tx.rollback().await.unwrap();
+    }
+
     #[rocket::get("/test-token")]
     fn token(csrf: CsrfToken) -> String {
         csrf.authenticity_token()
@@ -2848,6 +2812,7 @@ pub(crate) mod route_tests {
                 "/",
                 rocket::routes![
                     token,
+                    get,
                     post_pooled_config,
                     post_pooled_mode,
                     post_pooled_seed,
@@ -2868,6 +2833,17 @@ pub(crate) mod route_tests {
             .await
             .unwrap();
         let base = format!("/event/{series}/{event}/qualifiers");
+        let private = client.get(&base).header(rocket::http::Header::new("x-test-user", staff.to_string())).dispatch().await;
+        assert_eq!(private.status(), Status::Ok);
+        let private = private.into_string().await.unwrap();
+        assert!(private.contains("Qualifier Seed Pools"));
+        assert!(private.contains("Awaiting verification"));
+        assert!(private.contains("Review result / history"));
+        let outsider_view = client.get(&base).header(rocket::http::Header::new("x-test-user", outsider.to_string())).dispatch().await;
+        assert_eq!(outsider_view.status(), Status::Forbidden);
+        let anonymous_view = client.get(&base).dispatch().await;
+        assert_ne!(anonymous_view.status(), Status::Ok);
+
         let mode_body = format!(
             "mode_id={mode}&position=2&slug=other&display_name=Renamed&seed_gen_type=owr&seed_config=%7B%22base_settings%22%3A%7B%7D%7D&generator_profile=default&enabled=true"
         );

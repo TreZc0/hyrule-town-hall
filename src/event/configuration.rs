@@ -74,14 +74,7 @@ fn required_string<'a>(config: &'a Value, field: &str) -> Result<&'a str, String
 }
 
 fn validate_choices(value: &Value) -> Result<(), String> {
-    let config: OwrEventConfig =
-        serde_json::from_value(value.clone()).map_err(|e| e.to_string())?;
-    if !config.base_settings.is_object() {
-        return Err("base_settings must be an object.".into());
-    }
-    if !config.base_placements.is_null() && !config.base_placements.is_object() {
-        return Err("base_placements must be an object.".into());
-    }
+    let config = OwrEventConfig::parse(value)?;
     if config.choices.is_null() {
         return Ok(());
     }
@@ -133,19 +126,67 @@ pub(crate) fn validate_draft(
     seed_config: Option<&Value>,
     game_count: Option<i16>,
 ) -> Result<(), String> {
-    let Some(kind) = kind else { return Ok(()) };
+    let named = if matches!(seed_kind, Some("owr" | "owr_tourney"))
+        || seed_kind == Some("alttpr_dr")
+            && seed_config
+                .and_then(|c| c.get("source"))
+                .and_then(Value::as_str)
+                == Some("mutual_choices")
+    {
+        seed_config
+            .filter(|c| c.get("baselines").is_some())
+            .map(OwrEventConfig::parse)
+            .transpose()?
+    } else {
+        None
+    };
+    let Some(kind) = kind else {
+        if named.as_ref().is_some_and(|c| c.default_baseline.is_none()) {
+            return Err("Named baselines need a preset draft or a default_baseline.".into());
+        }
+        return Ok(());
+    };
     let draft =
         draft::Kind::from_db(Some(kind), config).ok_or("Invalid draft kind or configuration.")?;
     draft.validate()?;
+    if let Some(named) = &named {
+        let options = match &draft {
+            draft::Kind::PickOnly { options, .. }
+            | draft::Kind::BanPick { options, .. }
+            | draft::Kind::BanOnly { options, .. } => options,
+            _ => return Err("Named baselines require a generic preset draft.".into()),
+        };
+        for option in options {
+            if !named
+                .baselines
+                .as_ref()
+                .unwrap()
+                .contains_key(&option.preset)
+            {
+                return Err(format!(
+                    "Draft preset {} does not name a configured baseline.",
+                    option.preset
+                ));
+            }
+            if option.display_name.chars().count() > 74 {
+                return Err(
+                    "Draft mode names must fit a Discord button (at most 74 characters).".into(),
+                );
+            }
+        }
+    }
     if draft.uses_button_draft() {
-        let consumes_preset = seed_kind == Some("alttpr_avianart")
+        let consumes_preset = named.is_some()
+            || seed_kind == Some("alttpr_avianart")
             || seed_kind == Some("alttpr_dr")
                 && seed_config
                     .and_then(|c| c.get("source"))
                     .and_then(Value::as_str)
                     .is_none_or(|s| s == "boothisman");
         if !consumes_preset {
-            return Err("Preset drafts require an Avianart or Boothisman seed generator.".into());
+            return Err(
+                "Preset drafts require named OWR/DR baselines, Avianart, or Boothisman.".into(),
+            );
         }
         if game_count.is_some_and(|count| {
             count <= 0

@@ -3540,6 +3540,9 @@ pub(crate) async fn create_race_post(
         ));
     }
     Ok(if let Some(ref value) = form.value {
+        if let Err(error) = racetime_bot::baselines::validate_match(&event, value.game_count) {
+            form.context.push_error(form::Error::validation(error).with_name("game_count"));
+        }
         let custom_title = value.custom_title.trim();
         if !value.multi_teams.is_empty() {
             if custom_title.is_empty() {

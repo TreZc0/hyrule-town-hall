@@ -156,10 +156,10 @@ pub(super) fn label(field: &str, title: &str) -> RawHtml<String> {
         ],
         "draft_kind" => &[
             "Selects the workflow used for pre-race bans or picks. None means there is no configured draft. Generic Ban/Pick, Ban Only and Pick Only use the options and turn order supplied by Draft Config JSON.",
-            "Choose a draft whose output can be used by the selected seed generator, and configure any default preset needed when no draft supplies one. Existing season-specific choices are predefined workflows. Pooled qualifier modes use baseline settings and do not run entrant drafts.",
+            "Preset drafts support Avianart, Boothisman and named OWR/Door Rando mutual-choice baselines. Draft preset keys must match the baselines map; configure default_baseline when a named event has no draft. Existing season-specific choices are predefined workflows. Pooled qualifier modes use baseline settings and do not run entrant drafts.",
         ],
         "draft_config" => &[
-            "Parameters for the selected generic draft: the available options, display names and preset identifiers, plus the turn order or starting side required by that workflow. Use valid JSON, with double-quoted property names and no comments.",
+            "Parameters for the selected generic draft: the available options, display names and preset identifiers, plus the turn order or starting side required by that workflow. A ban_pick draft with three options and two pick steps (high_seed, then low_seed) assigns the remaining option to game 3. Use the same draft for two-game RR and BO3: an RR match simply has no third game. Use valid JSON, with double-quoted property names and no comments.",
             "For example, a pick_only draft can use options [{\"display_name\":\"Open\",\"preset\":\"open\"}], who_starts \"high_seed\", picks_per_player 1 and unique true. Add enough distinct options for every pick when unique is true. Preset identifiers must be understood by your seed generator; display names are only labels.",
         ],
         "qualifier_mode" => &[
@@ -208,7 +208,7 @@ pub(super) fn label(field: &str, title: &str) -> RawHtml<String> {
         ],
         "startgg_double_rr" => &[
             "Enables the special handling for start.gg double round-robin stages represented as best-of-one sets. The import creates two game records for each matchup and uses the workflow that force-closes the start.gg set after both results are played.",
-            "Use it only when the external stage is intended to represent those two meetings. It is not a general best-of-two match setting and does not change a single-elimination or ordinary best-of-one stage into double round-robin.",
+            "start.gg has no native double-RR format. Enable this when one RR/BO1 set represents two meetings managed by this site. Only matching RR sets receive the special handling; elimination BO3 sets still finish at two wins, even with this event option enabled. Use it only when the external stage is intended to represent those two meetings. It is not a general best-of-two match setting and does not change a single-elimination or ordinary best-of-one stage into double round-robin.",
         ],
         "is_live_event" => &[
             "Means an in-person event. For scheduled races after the event starts, the workflow sends notifications instead of creating racetime rooms as it would for an online event.",
@@ -221,7 +221,7 @@ pub(super) fn label(field: &str, title: &str) -> RawHtml<String> {
         ],
         "seed_config" => &[
             "The JSON object consumed by the selected generator. Choose a matching example below, then replace the sample settings with your event's intended configuration. JSON requires double quotes and does not support comments or trailing commas.",
-            "For OWR and Door Rando mutual choices, base_settings is required; base_placements and start_inventory supplement it. choices maps signup/practice choice keys to labels and patches. Pooled qualifiers use the mode's baseline only. For Avianart use preset and optional practice_presets; for TWWR use permalink; for mystery generation use mystery_weights_url.",
+            "For OWR and Door Rando mutual choices, use either a single base_settings object or a baselines map of named configurations; base_placements and start_inventory supplement each baseline. choices maps signup/practice choice keys to labels and patches. Pooled qualifiers use the mode's baseline only. For Avianart use preset and optional practice_presets; for TWWR use permalink; for mystery generation use mystery_weights_url.",
             "The generator build is selected above, not by adding a branch or executable path to this object. Settings from another build may not be compatible. Generation and a patch test with your actual settings are the way to verify the combination.",
         ],
         "enter_flow_json" => &[
@@ -252,6 +252,23 @@ fn seed_choice_help() -> RawHtml<String> {
     html! {
         h4 : "Player choices and their effect on seeds";
         p : "These rules apply to OWR (both builds) and Door Rando with source mutual_choices. Enter Flow defines the question and allowed answers; Seed Config defines what an enabled answer changes. Connect them using exactly the same choice key. A choices entry is a patch object, not a true/false value or a list of answers.";
+        details {
+            summary : "Named baselines and a shared mode draft";
+            p : "Define baselines as an object keyed by stable identifiers such as mode_a. Each entry contains label, base_settings, optional base_placements and start_inventory. Each is a complete baseline: there is no inheritance from a root baseline. Put choices alongside baselines to apply the same player choices to whichever mode is picked.";
+            p : "Use either named baselines or a root baseline, not both. Keys must be 1–64 letters, digits, underscores or hyphens. Each draft option's preset must match a baseline key. With a draft, generation waits for the completed picks and uses the current game's selection; an invalid or missing selection never falls back to another mode.";
+            p : "For an event without a preset draft, set default_baseline to one of the configured keys. Practice offers a baseline dropdown and optional-choice checkboxes. Pooled qualifier modes still take a single explicit baseline in their own configuration, not a baselines collection.";
+            pre : serde_json::to_string_pretty(&json!({
+                "label": "mode",
+                "options": [
+                    {"display_name": "Mode A", "preset": "mode_a"},
+                    {"display_name": "Mode B", "preset": "mode_b"},
+                    {"display_name": "Mode C", "preset": "mode_c"}
+                ],
+                "order": [{"phase": "pick", "team": "high_seed"}, {"phase": "pick", "team": "low_seed"}]
+            })).expect("example JSON serializes");
+            p : "Put this object in Draft Config JSON and select Generic Ban/Pick. It uses stored qualifier ranks: higher seed picks game 1, lower seed picks game 2, and the remaining mode is the possible game 3. Create two games for double RR, or three for BO3. Keep round_modes unset, since fixed round modes disable drafting.";
+            p : "The selected baseline and final choice outcomes are saved with each generated seed and shown in Racetime and async delivery. Later edits do not change the description of an existing seed. Always + Random and Random + Random both remain one 50/50 decision for each game's seed; both async participants receive the same saved result.";
+        }
         details {
             summary : "Yes/No versus Never/Random/Always";
             p : "Use booleanChoice for Yes/No, or radioChoice for Never/Random/Always. Yes is equivalent to Always; No is equivalent to Never. Both use the same seed patch. The three-option question additionally lets a player consent to a random decision about whether that patch is applied.";

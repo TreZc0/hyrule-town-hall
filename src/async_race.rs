@@ -347,6 +347,12 @@ impl AsyncRaceManager {
         content.push(display_order.to_string());
         content.push(" of this round.");
 
+        if let Some(racetime_bot::seed_gen_type::SeedGenType::Owr { config, .. } | racetime_bot::seed_gen_type::SeedGenType::AlttprDoorRando { source: racetime_bot::seed_gen_type::AlttprDrSource::MutualChoices { config }, .. }) = event.seed_gen_type.as_ref() {
+            let baseline = race.seed.seed_data.as_ref().and_then(|data| data.get("seed_presentation")).and_then(|data| data.get("baseline_label")).and_then(|value| value.as_str()).map(|label| format!("Baseline: {label}"))
+                .or_else(|| config.pending_baseline(race, event.draft_kind_str.is_some()));
+            if let Some(baseline) = baseline { content.push_line(""); content.push(baseline); content.push_line(""); }
+        }
+
         if let Some(racetime_bot::seed_gen_type::SeedGenType::Owr { .. }) =
             event.seed_gen_type.as_ref()
         {
@@ -576,16 +582,7 @@ impl AsyncRaceManager {
             }
         }
 
-        if let Some(resolved_randoms) = race
-            .seed
-            .seed_data
-            .as_ref()
-            .and_then(|data| data.get("resolved_randoms"))
-            .and_then(|v| v.as_str())
-        {
-            content.push_line("");
-            content.push(format!("Final settings - {resolved_randoms}"));
-        }
+        let settings_summary = race.seed.seed_data.as_ref().and_then(|data| racetime_bot::baselines::seed_summary(data, true));
 
         let thread_id = match async_part {
             1 => {
@@ -618,6 +615,11 @@ impl AsyncRaceManager {
         if let Some(thread_id) = thread_id {
             let thread = ChannelId::new(thread_id as u64);
             thread.say(discord_ctx, content.build()).await?;
+            if let Some(summary) = settings_summary {
+                for chunk in racetime_bot::baselines::message_chunks(&summary) {
+                    thread.send_message(discord_ctx, CreateMessage::new().content(chunk).allowed_mentions(serenity::all::CreateAllowedMentions::default())).await?;
+                }
+            }
 
             match async_part {
                 1 => {
@@ -2186,13 +2188,6 @@ pub(crate) async fn handle_ready_qualifier(
     }
 
     if let Some(ref seed_data) = seed.seed_data {
-        if let Some(resolved_randoms) = seed_data
-            .get("resolved_randoms")
-            .and_then(|value| value.as_str())
-            .filter(|value| !value.is_empty())
-        {
-            seed_msg.push(format!("Final settings - {resolved_randoms}\n"));
-        }
         match seed::Files::from_seed_data(seed_data) {
             Some(seed::Files::AlttprDoorRando { uuid, is_owr }) => {
                 let prefix = if is_owr { "OR_" } else { "DR_" };
@@ -2275,6 +2270,12 @@ pub(crate) async fn handle_ready_qualifier(
             .label("START COUNTDOWN")
             .style(ButtonStyle::Success),
     ]);
+
+    if let Some(summary) = seed.seed_data.as_ref().and_then(|data| racetime_bot::baselines::seed_summary(data, true)) {
+        for chunk in racetime_bot::baselines::message_chunks(&summary) {
+            interaction.channel_id.send_message(ctx, CreateMessage::new().content(chunk).allowed_mentions(serenity::all::CreateAllowedMentions::default())).await?;
+        }
+    }
 
     interaction
         .channel_id

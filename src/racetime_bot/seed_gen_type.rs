@@ -17,9 +17,10 @@ pub(crate) struct PracticeOption {
 }
 
 /// Fully owned, JSON-configurable OWR event configuration stored in `events.seed_config`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[cfg_attr(unix, derive(Protocol))]
 pub(crate) struct OwrEventConfig {
+    #[serde(default)]
     pub(crate) base_settings: serde_json::Value,
     #[serde(default)]
     pub(crate) base_placements: serde_json::Value,
@@ -38,6 +39,24 @@ pub(crate) struct OwrEventConfig {
     ///   for async races (e.g. a rule that only makes sense for a live, streamed race).
     #[serde(default)]
     pub(crate) choices: serde_json::Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) baselines: Option<std::collections::BTreeMap<String, NamedBaseline>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) default_baseline: Option<String>,
+    /// Filled only by the selector, never accepted from event JSON.
+    #[serde(skip)]
+    pub(crate) selected_baseline: Option<(String, String)>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(unix, derive(Protocol))]
+pub(crate) struct NamedBaseline {
+    pub(crate) label: String,
+    pub(crate) base_settings: serde_json::Value,
+    #[serde(default)]
+    pub(crate) base_placements: serde_json::Value,
+    #[serde(default)]
+    pub(crate) start_inventory: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -128,19 +147,13 @@ impl SeedGenType {
                 let source = match source_str {
                     Some("boothisman") | None => AlttprDrSource::Boothisman,
                     Some("mutual_choices") => {
-                        let config =
-                            serde_json::from_value(seed_config.cloned().unwrap_or_default())
-                                .unwrap_or_else(|_| {
-                                    eprintln!(
-                                        "alttpr_dr/mutual_choices: missing or invalid seed_config"
-                                    );
-                                    OwrEventConfig {
-                                        base_settings: serde_json::json!({}),
-                                        base_placements: serde_json::Value::Null,
-                                        start_inventory: vec![],
-                                        choices: serde_json::Value::Null,
-                                    }
-                                });
+                        let config = match OwrEventConfig::parse(seed_config?) {
+                            Ok(config) => config,
+                            Err(error) => {
+                                eprintln!("alttpr_dr/mutual_choices: {error}");
+                                return None;
+                            }
+                        };
                         AlttprDrSource::MutualChoices { config }
                     }
                     Some("mystery_pool") => {
@@ -186,7 +199,7 @@ impl SeedGenType {
                 })
             }
             name @ ("owr" | "owr_tourney") => {
-                let config = seed_config.and_then(|c| serde_json::from_value(c.clone()).ok());
+                let config = seed_config.and_then(|c| OwrEventConfig::parse(c).ok());
                 if let Some(config) = config {
                     Some(Self::Owr {
                         build: if name == "owr_tourney" { OwrBuild::Tournament } else { OwrBuild::Regular },
@@ -227,7 +240,18 @@ impl SeedGenType {
         race: &Race,
         round_modes: Option<&HashMap<String, String>>,
         is_async: bool,
+        draft_required: bool,
     ) -> Option<String> {
+        if let Self::Owr { config, .. } | Self::AlttprDoorRando { source: AlttprDrSource::MutualChoices { config }, .. } = self {
+            if let Some(baseline) = config.pending_baseline(race, draft_required) {
+                let choices = super::owr_choices_for_race(db_pool, race).await;
+                let mut text = format!("{baseline}\nPending options: {}", super::owr_choices_description(&choices, config));
+                if let Some(rules) = super::alttpr_dr_player_rules_str_filtered(&choices, config, is_async) {
+                    text.push_str(&format!("\nPlayer rules: {rules}"));
+                }
+                return Some(text);
+            }
+        }
         match self {
             Self::AlttprDoorRando {
                 source: AlttprDrSource::Boothisman,

@@ -42,6 +42,7 @@ use {
 pub(crate) mod report;
 
 pub(crate) mod seed_gen_type;
+pub(crate) mod baselines;
 
 /// racetime 0.35 removed its own catch-all `Error`/`ResultExt`, since `RaceHandler` now has an
 /// associated `Error` type instead of a single crate-wide one. This reimplements the same
@@ -1315,8 +1316,14 @@ impl GlobalState {
     ) -> mpsc::Receiver<SeedRollUpdate> {
         let uuid = Uuid::new_v4();
         let (python, directory) = build.installation();
-        match build_dr_yaml_from_config(&config, &resolved, uuid) {
-            Ok(yaml) => self.roll_alttpr_dr_seed(yaml, uuid, python, directory, false, "OR_", resolved_randoms),
+        if config.baselines.is_some() {
+            return alttpr_dr_error_receiver(RollError::AlttprDe("Select a baseline before rolling.".into()));
+        }
+        match build_dr_yaml_with_report(&config, &resolved, uuid) {
+            Ok((yaml, report)) => {
+                let presentation = baselines::presentation(&config, &resolved, &report);
+                baselines::with_presentation(self.roll_alttpr_dr_seed(yaml, uuid, python, directory, false, "OR_", resolved_randoms), presentation)
+            },
             Err(error) => alttpr_dr_error_receiver(error.into()),
         }
     }
@@ -1336,8 +1343,11 @@ impl GlobalState {
         resolved_randoms: Option<String>,
     ) -> mpsc::Receiver<SeedRollUpdate> {
         let uuid = Uuid::new_v4();
-        match build_dr_yaml_from_config(&config, &resolved, uuid) {
-            Ok(yaml_content) => self.roll_alttpr_dr_seed(
+        if config.baselines.is_some() {
+            return alttpr_dr_error_receiver(RollError::AlttprDe("Select a baseline before rolling.".into()));
+        }
+        match build_dr_yaml_with_report(&config, &resolved, uuid) {
+            Ok((yaml_content, report)) => baselines::with_presentation(self.roll_alttpr_dr_seed(
                 yaml_content,
                 uuid,
                 ALTTPR_PYTHON,
@@ -1345,7 +1355,7 @@ impl GlobalState {
                 false,
                 "DR_",
                 resolved_randoms,
-            ),
+            ), baselines::presentation(&config, &resolved, &report)),
             Err(e) => alttpr_dr_error_receiver(e.into()),
         }
     }
@@ -1500,15 +1510,19 @@ impl GlobalState {
                 source: AlttprDrSource::MutualChoices { config },
                 ..
             } => {
+                let config = match config.for_race(&cal_event.race, event).await {
+                    Ok(config) => config,
+                    Err(error) => return alttpr_dr_error_receiver(RollError::AlttprDe(error)),
+                };
                 let choices = owr_choices_for_race(&self.db_pool, &cal_event.race).await;
                 let labels: Vec<(String, String)> = event
                     .choice_requirements()
                     .into_iter()
                     .map(|(key, label)| (key.to_owned(), label))
                     .collect();
-                let resolved = resolve_all_choices(&choices, config);
+                let resolved = resolve_all_choices(&choices, &config);
                 let resolved_randoms_str =
-                    reveal_resolved_randoms_str(&choices, &resolved, config, &labels);
+                    reveal_resolved_randoms_str(&choices, &resolved, &config, &labels);
                 self.roll_mutual_choices_dr_seed(config.clone(), resolved, resolved_randoms_str)
             }
             SeedGenType::AlttprDoorRando {
@@ -1532,15 +1546,19 @@ impl GlobalState {
                 }
             }
             SeedGenType::Owr { config, build } => {
+                let config = match config.for_race(&cal_event.race, event).await {
+                    Ok(config) => config,
+                    Err(error) => return alttpr_dr_error_receiver(RollError::AlttprDe(error)),
+                };
                 let choices = owr_choices_for_race(&self.db_pool, &cal_event.race).await;
                 let labels: Vec<(String, String)> = event
                     .choice_requirements()
                     .into_iter()
                     .map(|(key, label)| (key.to_owned(), label))
                     .collect();
-                let resolved = resolve_all_choices(&choices, config);
+                let resolved = resolve_all_choices(&choices, &config);
                 let resolved_randoms_str =
-                    reveal_resolved_randoms_str(&choices, &resolved, config, &labels);
+                    reveal_resolved_randoms_str(&choices, &resolved, &config, &labels);
                 self.roll_owr_seed(resolved, config.clone(), resolved_randoms_str, *build)
             }
             SeedGenType::TWWR { permalink } => {
@@ -1977,6 +1995,7 @@ pub(crate) fn start_practice_seed_roll(
                                     url: url.to_string(),
                                     seed_hash: seed.file_hash,
                                     selected_choices: selected_choices.clone(),
+                                    settings_summary: seed.seed_data.as_ref().and_then(|data| baselines::seed_summary(data, false)),
                                 },
                             )
                         }
@@ -2606,8 +2625,10 @@ impl SeedRollUpdate {
                     }
                 }
 
-                if let Some(resolved_randoms) = resolved_randoms {
-                    ctx.say(format!("Final settings - {resolved_randoms}")).await?;
+                let summary = seed.seed_data.as_ref().and_then(|data| baselines::seed_summary(data, false))
+                    .or_else(|| resolved_randoms.map(|s| format!("Final settings - {s}")));
+                if let Some(summary) = summary {
+                    for chunk in baselines::message_chunks(&summary) { ctx.say(chunk).await?; }
                 }
 
                 if let Some(VersionedBranch::Tww { identifier, github_url, .. }) = version {
@@ -3252,7 +3273,8 @@ pub(crate) fn format_choice_label(label: &str, value: ChoiceValue) -> Option<Str
 fn apply_json_object_patch(
     target: &mut serde_json::Map<String, serde_json::Value>,
     patch: &serde_json::Value,
-) {
+) -> Vec<String> {
+    let mut written = Vec::new();
     if let Some(fields) = patch.as_object() {
         for (k, v) in fields {
             if v.is_null() {
@@ -3260,8 +3282,10 @@ fn apply_json_object_patch(
             } else {
                 target.insert(k.clone(), v.clone());
             }
+            written.push(k.clone());
         }
     }
+    written
 }
 
 fn apply_start_inventory_patch(target: &mut Vec<String>, patch: &serde_json::Value) {
@@ -3279,27 +3303,35 @@ fn apply_owr_patch(
     placements: &mut serde_json::Map<String, serde_json::Value>,
     start_inventory: &mut Vec<String>,
     patch: &serde_json::Value,
-) {
-    let Some(patch_obj) = patch.as_object() else {
-        return;
+) -> Vec<(&'static str, String)> {
+    let mut written = Vec::new();
+    let Some(obj) = patch.as_object() else {
+        return written;
     };
-    let has_sections = patch_obj.contains_key("settings")
-        || patch_obj.contains_key("placements")
-        || patch_obj.contains_key("start_inventory");
-    if has_sections {
-        if let Some(p) = patch_obj.get("settings") {
-            apply_json_object_patch(settings, p);
+    if obj.contains_key("settings")
+        || obj.contains_key("placements")
+        || obj.contains_key("start_inventory")
+    {
+        if let Some(p) = obj.get("settings") {
+            written.extend(
+                apply_json_object_patch(settings, p)
+                    .into_iter()
+                    .map(|k| ("settings", k)),
+            );
         }
-        if let Some(p) = patch_obj.get("placements") {
-            apply_json_object_patch(placements, p);
+        if let Some(p) = obj.get("placements") {
+            written.extend(
+                apply_json_object_patch(placements, p)
+                    .into_iter()
+                    .map(|k| ("placements", k)),
+            );
         }
-        if let Some(p) = patch_obj.get("start_inventory") {
+        if let Some(p) = obj.get("start_inventory") {
             apply_start_inventory_patch(start_inventory, p);
         }
-        // `label` and `supercedes` are metadata, silently ignored
     } else {
-        // Legacy flat patch — treat non-metadata keys as settings
-        for (k, v) in patch_obj {
+        // Legacy flat patches retain exactly the same non-metadata setting behavior.
+        for (k, v) in obj {
             if matches!(
                 k.as_str(),
                 "label" | "priority" | "supercedes" | "value_labels" | "hidden_for_async"
@@ -3311,8 +3343,10 @@ fn apply_owr_patch(
             } else {
                 settings.insert(k.clone(), v.clone());
             }
+            written.push(("settings", k.clone()));
         }
     }
+    written
 }
 
 /// Resolves every choice key defined in `config.choices` to a concrete boolean, exactly once —
@@ -3323,6 +3357,14 @@ pub(crate) fn resolve_all_choices(
     choices: &HashMap<String, ChoiceValue>,
     config: &seed_gen_type::OwrEventConfig,
 ) -> HashMap<String, bool> {
+    resolve_all_choices_with(choices, config, rand::random)
+}
+
+fn resolve_all_choices_with(
+    choices: &HashMap<String, ChoiceValue>,
+    config: &seed_gen_type::OwrEventConfig,
+    mut random: impl FnMut() -> bool,
+) -> HashMap<String, bool> {
     let Some(patches) = config.choices.as_object() else {
         return HashMap::default();
     };
@@ -3331,7 +3373,11 @@ pub(crate) fn resolve_all_choices(
         .map(|key| {
             (
                 key.clone(),
-                choices.get(key).copied().unwrap_or_default().roll_enabled(),
+                match choices.get(key).copied().unwrap_or_default() {
+                    ChoiceValue::Always => true,
+                    ChoiceValue::Never => false,
+                    ChoiceValue::Random => random(),
+                },
             )
         })
         .collect()
@@ -3343,40 +3389,82 @@ fn apply_patches_with_supercedes(
     settings: &mut serde_json::Map<String, serde_json::Value>,
     placements: &mut serde_json::Map<String, serde_json::Value>,
     start_inventory: &mut Vec<String>,
-) {
+) -> baselines::PatchReport {
+    let mut report = baselines::PatchReport::default();
     let Some(patches) = patches_val.as_object() else {
-        return;
+        return report;
     };
-    let mut suppressed: HashSet<&str> = HashSet::default();
     for (key, patch) in patches {
-        if choice_entry_affects_seed(Some(patch)) && *resolved.get(key.as_str()).unwrap_or(&false) {
+        if choice_entry_affects_seed(Some(patch)) && *resolved.get(key).unwrap_or(&false) {
             if let Some(arr) = patch.get("supercedes").and_then(|v| v.as_array()) {
-                suppressed.extend(arr.iter().filter_map(|v| v.as_str()));
+                for other in arr.iter().filter_map(|v| v.as_str()) {
+                    report
+                        .suppressed
+                        .entry(other.to_owned())
+                        .or_default()
+                        .push(key.clone());
+                }
             }
         }
     }
-    for (key, patch) in patches
-        .iter()
-        .sorted_by(|(key_a, patch_a), (key_b, patch_b)| {
-            choice_entry_priority(Some(patch_a))
-                .cmp(&choice_entry_priority(Some(patch_b)))
-                .then_with(|| key_a.cmp(key_b))
-        })
-    {
+    let mut writes: std::collections::BTreeMap<
+        (&str, String),
+        Vec<(String, Option<serde_json::Value>)>,
+    > = std::collections::BTreeMap::new();
+    for (key, patch) in patches.iter().sorted_by(|(ka, pa), (kb, pb)| {
+        choice_entry_priority(Some(pa))
+            .cmp(&choice_entry_priority(Some(pb)))
+            .then_with(|| ka.cmp(kb))
+    }) {
         if choice_entry_affects_seed(Some(patch))
-            && !suppressed.contains(key.as_str())
-            && *resolved.get(key.as_str()).unwrap_or(&false)
+            && !report.suppressed.contains_key(key)
+            && *resolved.get(key).unwrap_or(&false)
         {
-            apply_owr_patch(settings, placements, start_inventory, patch);
+            let written = apply_owr_patch(settings, placements, start_inventory, patch);
+            for (section, field) in written {
+                let value = if section == "settings" {
+                    settings.get(&field)
+                } else {
+                    placements.get(&field)
+                }
+                .cloned();
+                writes
+                    .entry((section, field))
+                    .or_default()
+                    .push((key.clone(), value));
+            }
         }
     }
+    for ((_, field), history) in writes {
+        if let Some((final_owner, final_value)) = history.last() {
+            for (previous, value) in &history {
+                if value != final_value {
+                    report
+                        .overridden
+                        .entry(previous.clone())
+                        .or_default()
+                        .push((field.clone(), final_owner.clone()));
+                }
+            }
+        }
+    }
+    report
 }
 
+#[cfg(test)]
 fn build_dr_yaml_from_config(
     config: &seed_gen_type::OwrEventConfig,
     resolved: &HashMap<String, bool>,
     uuid: Uuid,
 ) -> Result<String, serde_yml::Error> {
+    build_dr_yaml_with_report(config, resolved, uuid).map(|(yaml, _)| yaml)
+}
+
+fn build_dr_yaml_with_report(
+    config: &seed_gen_type::OwrEventConfig,
+    resolved: &HashMap<String, bool>,
+    uuid: Uuid,
+) -> Result<(String, baselines::PatchReport), serde_yml::Error> {
     let mut settings = config
         .base_settings
         .as_object()
@@ -3388,7 +3476,7 @@ fn build_dr_yaml_from_config(
         .cloned()
         .unwrap_or_default();
     let mut start_inventory = config.start_inventory.clone();
-    apply_patches_with_supercedes(
+    let report = apply_patches_with_supercedes(
         resolved,
         &config.choices,
         &mut settings,
@@ -3443,7 +3531,10 @@ fn build_dr_yaml_from_config(
             serde_yml::Value::Mapping(inv_map),
         );
     }
-    serde_yml::to_string(&serde_yml::Value::Mapping(yaml_map))
+    Ok((
+        serde_yml::to_string(&serde_yml::Value::Mapping(yaml_map))?,
+        report,
+    ))
 }
 
 fn choice_entry<'a>(
@@ -3739,6 +3830,7 @@ mod configured_choice_tests {
                     "settings": {"goal": "completionist"}
                 }
             }),
+            ..Default::default()
         };
         let resolved = HashMap::from([
             ("all_dungeons".to_owned(), all_dungeons),
@@ -3799,6 +3891,7 @@ mod configured_choice_tests {
                     "value_labels": {"never": "stream delay(10m)"}
                 }
             }),
+            ..Default::default()
         };
         let choices = HashMap::new();
 
@@ -4722,12 +4815,15 @@ impl Handler {
                 } else {
                     ("a", format!("seed with {}", step.message))
                 };
-                let cal_event = self
+                let mut cal_event = self
                     .official_data
                     .as_ref()
                     .expect("completed official draft must have official_data")
                     .cal_event
                     .clone();
+                // Discord polling and retries refresh RaceState independently of the
+                // cached official race. Select this game's baseline from that draft.
+                cal_event.race.draft = Some(draft.clone());
                 if !self
                     .roll_configured_event_seed(
                         ctx,
@@ -5132,8 +5228,16 @@ impl Handler {
                 }
             })
             .expect("MutualChoices seed roll triggered for event without MutualChoices config");
+        let config = match config.for_race(&cal_event.race, &self.official_data.as_ref().unwrap().event).await {
+            Ok(config) => config,
+            Err(error) => {
+                self.roll_seed_inner(ctx, Some(delay_until), alttpr_dr_error_receiver(RollError::AlttprDe(error)), language, article, "seed".into(), false).await;
+                return;
+            }
+        };
         let choices = owr_choices_for_race(&ctx.global_state.db_pool, &cal_event.race).await;
         let seed_options_str = owr_choices_description(&choices, &config);
+        let seed_options_str = config.selected_baseline.as_ref().map_or(seed_options_str.clone(), |(_, label)| format!("{label}; {seed_options_str}"));
         let race_options_str = alttpr_dr_player_rules_str(&choices, &config);
         let labels: Vec<(String, String)> = self
             .official_data
@@ -5201,8 +5305,16 @@ impl Handler {
                 }
             })
             .expect("OWR seed roll triggered for event with no OWR seed config");
+        let config = match config.for_race(&cal_event.race, &self.official_data.as_ref().unwrap().event).await {
+            Ok(config) => config,
+            Err(error) => {
+                self.roll_seed_inner(ctx, Some(delay_until), alttpr_dr_error_receiver(RollError::AlttprDe(error)), language, article, "seed".into(), false).await;
+                return;
+            }
+        };
         let choices = owr_choices_for_race(&ctx.global_state.db_pool, &cal_event.race).await;
         let description = owr_choices_description(&choices, &config);
+        let description = config.selected_baseline.as_ref().map_or(description.clone(), |(_, label)| format!("{label}; {description}"));
         let labels: Vec<(String, String)> = self
             .official_data
             .as_ref()

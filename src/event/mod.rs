@@ -29,6 +29,7 @@ pub(crate) enum PracticeSeedResult {
         url: String,
         seed_hash: Option<[String; 5]>,
         selected_choices: Vec<String>,
+        settings_summary: Option<String>,
     },
     SeedLink {
         url: String,
@@ -5036,8 +5037,25 @@ pub(crate) struct PracticeSeedForm {
     csrf: String,
     mode: Option<String>,
     preset: Option<String>,
+    baseline: Option<String>,
     #[field(default = Vec::new())]
     choices: Vec<String>,
+}
+
+fn practice_baseline_field(config: &racetime_bot::seed_gen_type::OwrEventConfig) -> RawHtml<String> {
+    html! {
+        @if let Some(baselines) = &config.baselines {
+            p {
+                label(for = "baseline") : "Baseline";
+                select(id = "baseline", name = "baseline", required) {
+                    @if config.default_baseline.is_none() { option(value = "", selected, disabled) : "Choose a mode"; }
+                    @for (key, baseline) in baselines {
+                        option(value = key, selected? = config.default_baseline.as_ref() == Some(key)) : &baseline.label;
+                    }
+                }
+            }
+        }
+    }
 }
 
 #[rocket::get("/event/<series>/<event>/practice")]
@@ -5102,6 +5120,7 @@ pub(crate) async fn practice_seed(
                 form_uri,
                 csrf.as_ref(),
                 html! {
+                    : practice_baseline_field(config);
                     p : "Check any optional rules to include in your practice seed. Leave all unchecked for base settings.";
                     fieldset {
                         legend : "Options";
@@ -5118,7 +5137,7 @@ pub(crate) async fn practice_seed(
             )
         }
         Some(SeedGenType::AlttprDoorRando {
-            source: AlttprDrSource::MutualChoices { .. },
+            source: AlttprDrSource::MutualChoices { config },
             practice_choices,
             ..
         }) => {
@@ -5127,6 +5146,7 @@ pub(crate) async fn practice_seed(
                 form_uri,
                 csrf.as_ref(),
                 html! {
+                    : practice_baseline_field(config);
                     @if choices.is_empty() {
                         p : "Generate a practice seed with base settings.";
                     } else {
@@ -5256,7 +5276,7 @@ pub(crate) async fn practice_seed_post(
     let data = Data::new(&mut transaction, series, event)
         .await?
         .ok_or(StatusOrError::Status(Status::NotFound))?;
-    let seed_gen_type = data.seed_gen_type.clone();
+    let mut seed_gen_type = data.seed_gen_type.clone();
     let is_ootr = matches!(seed_gen_type, Some(SeedGenType::OoTR));
 
     let job_id = Uuid::new_v4();
@@ -5265,6 +5285,16 @@ pub(crate) async fn practice_seed_post(
         .write()
         .await
         .insert(job_id, PracticeSeedStatus::Generating);
+
+    if let Some(SeedGenType::Owr { config, .. } | SeedGenType::AlttprDoorRando { source: AlttprDrSource::MutualChoices { config }, .. }) = &mut seed_gen_type {
+        match config.select(form.baseline.as_deref()) {
+            Ok(selected) => *config = selected,
+            Err(error) => {
+                seeds.write().await.insert(job_id, PracticeSeedStatus::Error(error));
+                return Ok(Redirect::to(uri!(practice_seed_status(series, event, job_id.to_string()))));
+            }
+        }
+    }
 
     if is_ootr {
         let version = data
@@ -5488,6 +5518,7 @@ pub(crate) async fn practice_seed_status(
                 url,
                 seed_hash,
                 selected_choices,
+                settings_summary,
             })) => {
                 let mut transaction = pool.begin().await?;
                 let data = Data::new(&mut transaction, series, event)
@@ -5510,7 +5541,9 @@ pub(crate) async fn practice_seed_status(
                                 code : hash.join(" ");
                             }
                         }
-                        @if !selected_choices.is_empty() {
+                        @if let Some(summary) = settings_summary {
+                            @for line in summary.lines() { p : line; }
+                        } else if !selected_choices.is_empty() {
                             p {
                                 strong : "Selected Options: ";
                                 : selected_choices.join(", ");

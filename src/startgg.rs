@@ -51,6 +51,12 @@ pub(crate) enum Error {
     NoQueryMatch(event_sets_query::ResponseData),
 }
 
+/// HTH's opt-in conversion of one native RR/BO1 set to two local games.
+/// start.gg itself has no double-round-robin format.
+pub(crate) fn uses_double_rr(enabled: bool, set_games_type: Option<i64>, round_robin: bool, best_of: Option<i64>) -> bool {
+    enabled && set_games_type == Some(1) && round_robin && best_of == Some(1)
+}
+
 impl IsNetworkError for Error {
     fn is_network_error(&self) -> bool {
         match self {
@@ -353,10 +359,38 @@ where
     T::Variables: Clone + Eq + Hash + Send + Sync,
     T::ResponseData: Clone + Send + Sync,
 {
+    #[cfg(test)]
+    if let Ok(response) = MOCK_QUERIES.try_with(|mock| {
+        let mut mock = mock.borrow_mut();
+        let request = serde_json::to_value(T::build_query(variables.clone())).unwrap();
+        let (operation, response) = mock.responses.pop_front().expect("Unexpected start.gg request in mock scope");
+        assert_eq!(request["operationName"], operation);
+        mock.requests.push(request);
+        let response: graphql_client::Response<T::ResponseData> = serde_json::from_value(response).unwrap();
+        match (response.data, response.errors) {
+            (_, Some(errors)) if !errors.is_empty() => Err(Error::GraphQL(errors)),
+            (Some(data), _) => Ok(data),
+            _ => Err(Error::NoDataNoErrors),
+        }
+    }) {
+        return response;
+    }
     lock!(cache = CACHE; {
         let (ref mut next_request, _) = *cache;
         query_inner::<T>(http_client, auth_token, variables, next_request).await
     })
+}
+
+#[cfg(test)]
+#[derive(Default)]
+pub(crate) struct MockQueries {
+    pub(crate) responses: std::collections::VecDeque<(String, serde_json::Value)>,
+    pub(crate) requests: Vec<serde_json::Value>,
+}
+
+#[cfg(test)]
+tokio::task_local! {
+    pub(crate) static MOCK_QUERIES: std::cell::RefCell<MockQueries>;
 }
 
 pub(crate) async fn query_cached<T: GraphQLQuery + 'static>(
@@ -575,9 +609,8 @@ pub(crate) async fn races_to_import(
             ]),
             game: match set_games_type {
                 Some(1) => {
-                    if event.startgg_double_rr
-                        && best_of == Some(1)
-                        && bracket_type == Some(event_sets_query::BracketType::ROUND_ROBIN)
+                    if uses_double_rr(event.startgg_double_rr, set_games_type,
+                        bracket_type == Some(event_sets_query::BracketType::ROUND_ROBIN), best_of)
                     {
                         Some(2)
                     } else {

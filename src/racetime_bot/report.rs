@@ -128,7 +128,9 @@ async fn collect_completed_game_results(
     set_id: &startgg::ID,
     current_game: i16,
     current_winner_id: &startgg::ID,
-) -> Result<Vec<startgg::GameResult>, Error> {
+    double_rr_enabled: bool,
+    total_games: i16,
+) -> Result<(Vec<startgg::GameResult>, bool), Error> {
     let set_data = startgg_report_request::<startgg::SetQuery>(
         http_client,
         startgg_token,
@@ -140,6 +142,8 @@ async fn collect_completed_game_results(
     )
     .await?;
 
+    let is_double_rr = classify_report_set(&set_data, double_rr_enabled, total_games)
+        .map_err(|error| Error::Custom(format!("start.gg set {set_id}: {error}").into()))?;
     let mut results = Vec::new();
 
     if let Some(set) = set_data.set {
@@ -168,7 +172,210 @@ async fn collect_completed_game_results(
 
     results.sort_by_key(|r| r.game_num);
 
-    Ok(results)
+    Ok((results, is_double_rr))
+}
+
+fn classify_report_set(
+    data: &startgg::set_query::ResponseData,
+    enabled: bool,
+    total_games: i16,
+) -> Result<bool, String> {
+    if !enabled {
+        return Ok(false);
+    }
+    let set = data
+        .set
+        .as_ref()
+        .ok_or("Set format unavailable; result was not reported.")?;
+    let group = set
+        .phase_group
+        .as_ref()
+        .ok_or("Set phase group unavailable; result was not reported.")?;
+    let bracket = group
+        .bracket_type
+        .as_ref()
+        .ok_or("Set bracket type unavailable; result was not reported.")?;
+    if *bracket != startgg::set_query::BracketType::ROUND_ROBIN {
+        return Ok(false);
+    }
+    let set_type = set
+        .set_games_type
+        .ok_or("Set games type unavailable; result was not reported.")?;
+    if set_type == 2 {
+        return Ok(false);
+    }
+    if set_type != 1 {
+        return Err("Unknown set games type; result was not reported.".into());
+    }
+    let round = set
+        .round
+        .ok_or("Set round unavailable; result was not reported.")?;
+    let best_of = group
+        .rounds
+        .as_ref()
+        .and_then(|rounds| rounds.iter().flatten().find(|r| r.number == Some(round)))
+        .and_then(|r| r.best_of)
+        .ok_or("Round best-of format unavailable; result was not reported.")?;
+    let special = startgg::uses_double_rr(enabled, Some(set_type), true, Some(best_of));
+    if special && total_games != 2 {
+        return Err(
+            "Double-RR BO1 sets must have exactly two local games; check the imported match."
+                .into(),
+        );
+    }
+    Ok(special)
+}
+
+async fn report_startgg_games(
+    http_client: &reqwest::Client,
+    startgg_token: &str,
+    set: &startgg::ID,
+    game: i16,
+    winner_entrant_id: &startgg::ID,
+    double_rr_enabled: bool,
+    total_games: i16,
+) -> Result<bool, Error> {
+    let (completed_game_results, is_double_rr_set) = collect_completed_game_results(
+        http_client,
+        startgg_token,
+        set,
+        game,
+        winner_entrant_id,
+        double_rr_enabled,
+        total_games,
+    )
+    .await?;
+    let match_decided = if is_double_rr_set {
+        game as i16 == total_games
+    } else {
+        is_match_decided(&completed_game_results, total_games)
+    };
+    if match_decided {
+        if is_double_rr_set {
+            let score_data = startgg_report_request::<startgg::SetScoreQuery>(
+                http_client,
+                startgg_token,
+                set,
+                "double-round-robin first-game winner query",
+                startgg::set_score_query::Variables {
+                    set_id: set.clone(),
+                },
+            )
+            .await?;
+            let game1_winner_id = score_data
+                .set
+                .and_then(|s| s.slots)
+                .into_iter()
+                .flatten()
+                .flatten()
+                .find(|slot| slot.standing.as_ref().and_then(|st| st.placement) == Some(1))
+                .and_then(|slot| slot.entrant)
+                .and_then(|e| e.id)
+                .ok_or_else(|| {
+                    Error::Custom(
+                        "Double-RR first-game winner unavailable; result was not reported.".into(),
+                    )
+                })?;
+            let all_game_results = vec![
+                startgg::GameResult {
+                    game_num: 1,
+                    winner_entrant_id: game1_winner_id,
+                },
+                startgg::GameResult {
+                    game_num: 2,
+                    winner_entrant_id: winner_entrant_id.clone(),
+                },
+            ];
+            startgg_report_request::<startgg::ResetSetMutation>(
+                http_client,
+                startgg_token,
+                set,
+                "double-round-robin reset",
+                startgg::reset_set_mutation::Variables {
+                    set_id: set.clone(),
+                },
+            )
+            .await?;
+            let overall_winner_id = if is_match_decided(&all_game_results, total_games) {
+                Some(determine_overall_winner(&all_game_results))
+            } else {
+                None
+            };
+            startgg_report_request::<startgg::ReportBracketSetMutation>(
+                http_client,
+                startgg_token,
+                set,
+                "combined double-round-robin result report",
+                startgg::report_bracket_set_mutation::Variables {
+                    set_id: set.clone(),
+                    winner_id: overall_winner_id,
+                    game_data: Some(
+                        all_game_results
+                            .iter()
+                            .map(|gr| Some(gr.to_game_data_input()))
+                            .collect(),
+                    ),
+                },
+            )
+            .await?;
+        } else {
+            let overall_winner = determine_overall_winner(&completed_game_results);
+            startgg_report_request::<startgg::ReportBracketSetMutation>(
+                http_client,
+                startgg_token,
+                set,
+                "completed multi-game result report",
+                startgg::report_bracket_set_mutation::Variables {
+                    set_id: set.clone(),
+                    winner_id: Some(overall_winner),
+                    game_data: Some(
+                        completed_game_results
+                            .iter()
+                            .map(|gr| Some(gr.to_game_data_input()))
+                            .collect(),
+                    ),
+                },
+            )
+            .await?;
+        }
+    } else if is_double_rr_set {
+        startgg_report_request::<startgg::ReportBracketSetMutation>(
+            http_client,
+            startgg_token,
+            set,
+            "first double-round-robin game report",
+            startgg::report_bracket_set_mutation::Variables {
+                set_id: set.clone(),
+                winner_id: Some(winner_entrant_id.clone()),
+                game_data: Some(
+                    completed_game_results
+                        .iter()
+                        .map(|gr| Some(gr.to_game_data_input()))
+                        .collect(),
+                ),
+            },
+        )
+        .await?;
+    } else {
+        startgg_report_request::<startgg::ReportBracketSetMutation>(
+            http_client,
+            startgg_token,
+            set,
+            "partial multi-game result report",
+            startgg::report_bracket_set_mutation::Variables {
+                set_id: set.clone(),
+                winner_id: None,
+                game_data: Some(
+                    completed_game_results
+                        .iter()
+                        .map(|gr| Some(gr.to_game_data_input()))
+                        .collect(),
+                ),
+            },
+        )
+        .await?;
+    }
+    Ok(match_decided)
 }
 
 fn is_match_decided(game_results: &[startgg::GameResult], total_games: i16) -> bool {
@@ -846,149 +1053,23 @@ async fn report_external_and_init_draft<'a>(
             {
                 if let Some(game) = race.game {
                     let total_games = race.game_count(&mut transaction).await.to_racetime()?;
-                    let completed_game_results = collect_completed_game_results(
+                    if report_startgg_games(
                         &global_state.http_client,
                         &global_state.startgg_token,
                         set,
                         game,
                         winner_entrant_id,
+                        event.startgg_double_rr,
+                        total_games,
                     )
-                    .await
-                    .to_racetime()?;
-                    let match_decided = if event.startgg_double_rr {
-                        game as i16 == total_games
-                    } else {
-                        is_match_decided(&completed_game_results, total_games)
-                    };
-                    if match_decided {
-                        if event.startgg_double_rr {
-                            let score_data = startgg_report_request::<startgg::SetScoreQuery>(
-                                &global_state.http_client,
-                                &global_state.startgg_token,
-                                set,
-                                "double-round-robin first-game winner query",
-                                startgg::set_score_query::Variables {
-                                    set_id: set.clone(),
-                                },
-                            )
-                            .await?;
-                            let game1_winner_id = score_data
-                                .set
-                                .and_then(|s| s.slots)
-                                .into_iter()
-                                .flatten()
-                                .flatten()
-                                .find(|slot| {
-                                    slot.standing.as_ref().and_then(|st| st.placement) == Some(1)
-                                })
-                                .and_then(|slot| slot.entrant)
-                                .and_then(|e| e.id)
-                                .expect("double-RR set score query: no slot with placement=1");
-                            let all_game_results = vec![
-                                startgg::GameResult {
-                                    game_num: 1,
-                                    winner_entrant_id: game1_winner_id,
-                                },
-                                startgg::GameResult {
-                                    game_num: 2,
-                                    winner_entrant_id: winner_entrant_id.clone(),
-                                },
-                            ];
-                            startgg_report_request::<startgg::ResetSetMutation>(
-                                &global_state.http_client,
-                                &global_state.startgg_token,
-                                set,
-                                "double-round-robin reset",
-                                startgg::reset_set_mutation::Variables {
-                                    set_id: set.clone(),
-                                },
-                            )
-                            .await?;
-                            let overall_winner_id =
-                                if is_match_decided(&all_game_results, total_games) {
-                                    Some(determine_overall_winner(&all_game_results))
-                                } else {
-                                    None
-                                };
-                            startgg_report_request::<startgg::ReportBracketSetMutation>(
-                                &global_state.http_client,
-                                &global_state.startgg_token,
-                                set,
-                                "combined double-round-robin result report",
-                                startgg::report_bracket_set_mutation::Variables {
-                                    set_id: set.clone(),
-                                    winner_id: overall_winner_id,
-                                    game_data: Some(
-                                        all_game_results
-                                            .iter()
-                                            .map(|gr| Some(gr.to_game_data_input()))
-                                            .collect(),
-                                    ),
-                                },
-                            )
-                            .await?;
-                        } else {
-                            let overall_winner = determine_overall_winner(&completed_game_results);
-                            startgg_report_request::<startgg::ReportBracketSetMutation>(
-                                &global_state.http_client,
-                                &global_state.startgg_token,
-                                set,
-                                "completed multi-game result report",
-                                startgg::report_bracket_set_mutation::Variables {
-                                    set_id: set.clone(),
-                                    winner_id: Some(overall_winner),
-                                    game_data: Some(
-                                        completed_game_results
-                                            .iter()
-                                            .map(|gr| Some(gr.to_game_data_input()))
-                                            .collect(),
-                                    ),
-                                },
-                            )
-                            .await?;
-                        }
+                    .await?
+                    {
                         ignored_race_ids = race
                             .ignore_remaining_games(&mut transaction)
                             .await
                             .to_racetime()?;
                         series_decided = true;
                         standings_changed = true;
-                    } else if event.startgg_double_rr {
-                        startgg_report_request::<startgg::ReportBracketSetMutation>(
-                            &global_state.http_client,
-                            &global_state.startgg_token,
-                            set,
-                            "first double-round-robin game report",
-                            startgg::report_bracket_set_mutation::Variables {
-                                set_id: set.clone(),
-                                winner_id: Some(winner_entrant_id.clone()),
-                                game_data: Some(
-                                    completed_game_results
-                                        .iter()
-                                        .map(|gr| Some(gr.to_game_data_input()))
-                                        .collect(),
-                                ),
-                            },
-                        )
-                        .await?;
-                    } else {
-                        startgg_report_request::<startgg::ReportBracketSetMutation>(
-                            &global_state.http_client,
-                            &global_state.startgg_token,
-                            set,
-                            "partial multi-game result report",
-                            startgg::report_bracket_set_mutation::Variables {
-                                set_id: set.clone(),
-                                winner_id: None,
-                                game_data: Some(
-                                    completed_game_results
-                                        .iter()
-                                        .map(|gr| Some(gr.to_game_data_input()))
-                                        .collect(),
-                                ),
-                            },
-                        )
-                        .await?;
                     }
                 } else {
                     startgg_report_request::<startgg::ReportOneGameResultMutation>(
@@ -1150,6 +1231,188 @@ async fn record_live_end(
 #[cfg(test)]
 mod completion_tests {
     use super::*;
+
+    fn set_response(bracket: &str, best_of: i64, winners: &[&str]) -> serde_json::Value {
+        json!({"data": {"set": {"id": "1", "setGamesType": 1, "round": 1, "phaseGroup": {"bracketType": bracket, "rounds": [{"number": 1, "bestOf": best_of}]}, "games": winners.iter().enumerate().map(|(i, winner)| json!({"id": i.to_string(), "orderNum": i + 1, "winnerId": winner.parse::<i64>().unwrap()})).collect::<Vec<_>>()}}})
+    }
+
+    async fn exercise_report(
+        bracket: &str,
+        best_of: i64,
+        previous: &[&str],
+        current: &str,
+        enabled: bool,
+        total_games: i16,
+        expected_decided: bool,
+        expected_reset: bool,
+        expected_winner: Option<&str>,
+    ) {
+        let mut responses = std::collections::VecDeque::from([(
+            "SetQuery".into(),
+            set_response(bracket, best_of, previous),
+        )]);
+        if expected_reset {
+            responses.push_back(("SetScoreQuery".into(), json!({"data": {"set": {"slots": [{"entrant": {"id": previous[0]}, "standing": {"placement": 1}}]}}})));
+            responses.push_back((
+                "ResetSetMutation".into(),
+                json!({"data": {"resetSet": {"id": "1", "state": 1}}}),
+            ));
+        }
+        responses.push_back((
+            "ReportBracketSetMutation".into(),
+            json!({"data": {"reportBracketSet": [{"id": "1"}]}}),
+        ));
+        startgg::MOCK_QUERIES
+            .scope(
+                std::cell::RefCell::new(startgg::MockQueries {
+                    responses,
+                    requests: Vec::new(),
+                }),
+                async {
+                    let decided = report_startgg_games(
+                        &reqwest::Client::new(),
+                        "unused-test-token",
+                        &startgg::ID("1".into()),
+                        previous.len() as i16 + 1,
+                        &startgg::ID(current.into()),
+                        enabled,
+                        total_games,
+                    )
+                    .await
+                    .unwrap();
+                    assert_eq!(decided, expected_decided);
+                    startgg::MOCK_QUERIES.with(|mock| {
+                        let mock = mock.borrow();
+                        assert!(mock.responses.is_empty());
+                        let vars = &mock.requests.last().unwrap()["variables"];
+                        assert_eq!(
+                            vars["winnerID"],
+                            expected_winner.map_or(serde_json::Value::Null, |winner| json!(winner))
+                        );
+                        assert_eq!(
+                            vars["gameData"].as_array().unwrap().len(),
+                            previous.len() + 1
+                        );
+                    });
+                },
+            )
+            .await;
+    }
+
+    #[tokio::test]
+    async fn mixed_stage_reporting_uses_real_set_format_and_keeps_rr_behavior() {
+        exercise_report(
+            "ROUND_ROBIN",
+            1,
+            &[],
+            "10",
+            true,
+            2,
+            false,
+            false,
+            Some("10"),
+        )
+        .await;
+        exercise_report(
+            "ROUND_ROBIN",
+            1,
+            &["10"],
+            "10",
+            true,
+            2,
+            true,
+            true,
+            Some("10"),
+        )
+        .await;
+        exercise_report("ROUND_ROBIN", 1, &["10"], "20", true, 2, true, true, None).await;
+        for enabled in [false, true] {
+            exercise_report(
+                "SINGLE_ELIMINATION",
+                3,
+                &["10"],
+                "10",
+                enabled,
+                3,
+                true,
+                false,
+                Some("10"),
+            )
+            .await;
+            exercise_report(
+                "DOUBLE_ELIMINATION",
+                3,
+                &["10"],
+                "20",
+                enabled,
+                3,
+                false,
+                false,
+                None,
+            )
+            .await;
+            exercise_report(
+                "SINGLE_ELIMINATION",
+                3,
+                &["10", "20"],
+                "20",
+                enabled,
+                3,
+                true,
+                false,
+                Some("20"),
+            )
+            .await;
+        }
+        exercise_report(
+            "ROUND_ROBIN",
+            3,
+            &["10"],
+            "10",
+            true,
+            3,
+            true,
+            false,
+            Some("10"),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn unknown_rr_format_aborts_before_any_mutation() {
+        for value in [
+            json!({"data": {"set": null}}),
+            json!({"data": {"set": {"id": "1", "setGamesType": 1, "round": 1, "phaseGroup": {"bracketType": "ROUND_ROBIN", "rounds": null}, "games": []}}}),
+            json!({"errors": [{"message": "Invalid test request"}]}),
+        ] {
+            let responses = std::collections::VecDeque::from([("SetQuery".into(), value)]);
+            startgg::MOCK_QUERIES
+                .scope(
+                    std::cell::RefCell::new(startgg::MockQueries {
+                        responses,
+                        requests: Vec::new(),
+                    }),
+                    async {
+                        assert!(
+                            report_startgg_games(
+                                &reqwest::Client::new(),
+                                "unused-test-token",
+                                &startgg::ID("1".into()),
+                                2,
+                                &startgg::ID("10".into()),
+                                true,
+                                3
+                            )
+                            .await
+                            .is_err()
+                        );
+                        startgg::MOCK_QUERIES
+                            .with(|mock| assert_eq!(mock.borrow().requests.len(), 1));
+                    },
+                )
+                .await;
+        }
+    }
 
     #[tokio::test]
     #[ignore = "requires HTH_TEST_DATABASE_URL pointing to a migrated production-copy *_test database"]

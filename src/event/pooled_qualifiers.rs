@@ -649,7 +649,7 @@ struct SeedLoad {
     assigned: i64,
 }
 
-fn pg_interval_duration(value: &sqlx::postgres::types::PgInterval) -> chrono::Duration {
+pub(crate) fn pg_interval_duration(value: &sqlx::postgres::types::PgInterval) -> chrono::Duration {
     chrono::Duration::microseconds(value.microseconds)
         + chrono::Duration::days(i64::from(value.days))
         + chrono::Duration::days(i64::from(value.months) * 30)
@@ -703,7 +703,7 @@ async fn allocation_candidates(
         WHERE seed.mode_id = $1 AND seed.source = 'async_pool'
           AND seed.generation_state = 'ready' AND seed.retired_at IS NULL
           AND (seed.generation_claim IS NOT NULL OR seed.settings_attested_at IS NOT NULL)
-          AND seed.seed_data->>'type' = (SELECT CASE seed_gen_type WHEN 'owr' THEN 'alttpr_owr' ELSE seed_gen_type END FROM qualifier_modes WHERE id = $1)
+          AND seed.seed_data->>'type' = (SELECT CASE WHEN seed_gen_type IN ('owr', 'owr_tourney') THEN 'alttpr_owr' ELSE seed_gen_type END FROM qualifier_modes WHERE id = $1)
           AND seed.generator_profile = (SELECT generator_profile FROM qualifier_modes WHERE id = $1)
           AND seed.settings_fingerprint = (SELECT settings_fingerprint FROM qualifier_modes WHERE id = $1)
         GROUP BY seed.id ORDER BY seed.id"#,
@@ -1594,45 +1594,63 @@ pub(crate) struct Standing {
     pub(crate) average: Option<f64>,
 }
 
+/// Shared by entrant standings and the organizer's per-seed overview.
+pub(crate) fn seed_par(
+    config: &Config,
+    finishes: impl IntoIterator<Item = Duration>,
+) -> Option<f64> {
+    let mut finishes: Vec<_> = finishes.into_iter().collect();
+    finishes.sort_unstable();
+    let count = usize::try_from(config.par_finishers)
+        .ok()
+        .filter(|count| *count > 0)?;
+    if finishes.len() < count {
+        return None;
+    }
+    let seconds = finishes[..count]
+        .iter()
+        .map(Duration::as_secs_f64)
+        .sum::<f64>()
+        / count as f64;
+    (seconds > 0.0).then_some(seconds)
+}
+
+pub(crate) fn performance_score(config: &Config, outcome: Outcome, par: Option<f64>) -> ModeScore {
+    match outcome {
+        Outcome::Forfeit | Outcome::Dq | Outcome::Invalid => ModeScore::Score(0.0),
+        Outcome::Finished(time) => par.map_or(ModeScore::Pending, |par| {
+            ModeScore::Score(
+                (config.score_scale * (config.score_offset - time.as_secs_f64() / par))
+                    .clamp(config.score_minimum, config.score_maximum),
+            )
+        }),
+    }
+}
+
 pub(crate) fn score(config: &Config, performances: &[Performance]) -> Vec<TeamScore> {
-    let mut pars = HashMap::new();
-    for seed_id in performances
+    let pars: HashMap<_, _> = performances
         .iter()
         .map(|run| run.seed_id)
         .collect::<HashSet<_>>()
-    {
-        let mut finishes: Vec<_> = performances
-            .iter()
-            .filter(|run| run.seed_id == seed_id && run.par_eligible)
-            .filter_map(|run| match run.outcome {
-                Outcome::Finished(time) => Some(time),
-                _ => None,
-            })
-            .collect();
-        finishes.sort_unstable();
-        if finishes.len() >= config.par_finishers as usize {
-            let count = config.par_finishers as usize;
-            let seconds = finishes[..count]
+        .into_iter()
+        .map(|seed_id| {
+            let finishes = performances
                 .iter()
-                .map(Duration::as_secs_f64)
-                .sum::<f64>()
-                / count as f64;
-            if seconds > 0.0 {
-                pars.insert(seed_id, seconds);
-            }
-        }
-    }
+                .filter(|run| run.seed_id == seed_id && run.par_eligible)
+                .filter_map(|run| match run.outcome {
+                    Outcome::Finished(time) => Some(time),
+                    _ => None,
+                });
+            (seed_id, seed_par(config, finishes))
+        })
+        .collect();
     let mut teams: HashMap<i64, Vec<(i64, ModeScore)>> = HashMap::new();
     for run in performances.iter().filter(|run| run.counts_for_entrant) {
-        let mode_score = match run.outcome {
-            Outcome::Forfeit | Outcome::Dq | Outcome::Invalid => ModeScore::Score(0.0),
-            Outcome::Finished(time) => pars.get(&run.seed_id).map_or(ModeScore::Pending, |par| {
-                ModeScore::Score(
-                    (config.score_scale * (config.score_offset - time.as_secs_f64() / par))
-                        .clamp(config.score_minimum, config.score_maximum),
-                )
-            }),
-        };
+        let mode_score = performance_score(
+            config,
+            run.outcome,
+            pars.get(&run.seed_id).copied().flatten(),
+        );
         teams
             .entry(run.team_id)
             .or_default()
@@ -1960,10 +1978,10 @@ pub(crate) async fn readiness(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
-    fn config() -> Config {
+    pub(crate) fn config() -> Config {
         Config {
             series: "test".into(),
             event: "test".into(),
@@ -1999,7 +2017,7 @@ mod tests {
     }
 
     #[test]
-    fn physical_seed_par_and_three_mode_average_match_tournament_rules() {
+    fn physical_seed_par_and_three_mode_average_include_zero_results() {
         let mut runs = Vec::new();
         for (team, minutes) in [50, 55, 60, 65, 70].into_iter().enumerate() {
             runs.push(Performance {
@@ -2369,6 +2387,20 @@ mod tests {
 
         sqlx::query("UPDATE qualifier_seeds SET settings_attested_by=$3, settings_attested_at=NOW() WHERE series=$1 AND event=$2")
             .bind(series).bind(event).bind(entrants[0].1).execute(&pool).await.unwrap();
+        // Both OWR config names store the same physical payload type. A wrong
+        // payload type must still be excluded, even when the pool looks ready.
+        let mut allocation_tx = pool.begin().await.unwrap();
+        for generator in ["owr", "owr_tourney"] {
+            sqlx::query("UPDATE qualifier_modes SET seed_gen_type=$2 WHERE id=$1")
+                .bind(mode_id).bind(generator).execute(&mut *allocation_tx).await.unwrap();
+            let candidates = allocation_candidates(&mut allocation_tx, mode_id).await.unwrap();
+            assert_eq!(candidates.len(), 2, "allocation for {generator}");
+            assert!(candidates.iter().all(|seed| seed_ids.contains(&seed.id)));
+        }
+        sqlx::query("UPDATE qualifier_seeds SET seed_data=jsonb_set(seed_data, '{type}', '\"alttpr_dr\"') WHERE id=$1")
+            .bind(seed_ids[0]).execute(&mut *allocation_tx).await.unwrap();
+        assert_eq!(allocation_candidates(&mut allocation_tx, mode_id).await.unwrap().len(), 1);
+        allocation_tx.rollback().await.unwrap();
         let first = request_async(&pool, entrants[0].0, mode_id, entrants[0].1)
             .await
             .unwrap();
@@ -2438,6 +2470,7 @@ mod tests {
         .await
         .unwrap();
         assert!(!original_counts);
+        event::qualifiers::route_tests::verify_pool_assignments(&pool, series, event, first.id, replacement.id).await;
 
         let live_original_id: i64 = sqlx::query_scalar(
             r#"INSERT INTO qualifier_attempts

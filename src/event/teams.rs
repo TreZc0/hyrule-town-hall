@@ -225,13 +225,13 @@ pub(crate) struct SignupsMember {
 }
 
 /// Source of a qualifier score (live race or async).
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(crate) enum RoundSource {
     /// Live qualifier race, with the race number (1-indexed).
     Live(i64),
     /// Async qualifier, with the async kind.
     Async(AsyncKind),
-    PooledMode(i16),
+    PooledMode(String),
 }
 
 impl fmt::Display for RoundSource {
@@ -246,7 +246,7 @@ impl fmt::Display for RoundSource {
                 AsyncKind::Tiebreaker1 => write!(f, "Tiebreaker 1"),
                 AsyncKind::Tiebreaker2 => write!(f, "Tiebreaker 2"),
             },
-            RoundSource::PooledMode(position) => write!(f, "Mode {position}"),
+            RoundSource::PooledMode(name) => f.write_str(name),
         }
     }
 }
@@ -1043,7 +1043,7 @@ pub(crate) async fn signups_sorted(
                             .iter()
                             .map(|(_, s, src)| RoundScore {
                                 score: *s,
-                                source: *src,
+                                source: src.clone(),
                             })
                             .collect();
                         let mut scores: Vec<R64> =
@@ -1158,6 +1158,7 @@ pub(crate) async fn signups_sorted(
                 .ok_or_else(|| {
                     sqlx::Error::Protocol("pooled qualifier configuration is missing".into())
                 })?;
+            let modes = pooled_qualifiers::Mode::for_event(transaction, data.series, &data.event).await?;
             let standings: HashMap<_, _> = pooled_qualifiers::standings(transaction, &config)
                 .await?
                 .into_iter()
@@ -1212,28 +1213,39 @@ pub(crate) async fn signups_sorted(
                         data.qualifier_score_hiding,
                         QualifierScoreHiding::FullPointsCounts | QualifierScoreHiding::FullComplete
                     );
-                let round_scores = standing
-                    .into_iter()
-                    .flat_map(|standing| &standing.mode_scores)
-                    .map(|(position, score, is_async)| RoundScore {
-                        source: RoundSource::PooledMode(*position),
-                        score: r64(
-                            if pooled_qualifiers::hide_score(
-                                data.qualifier_score_hiding,
-                                config
-                                    .results_release_at
-                                    .is_some_and(|release| release <= Utc::now()),
-                                is_organizer,
-                                *is_async,
-                            ) {
-                                -1.0
-                            } else {
-                                match score {
-                                    pooled_qualifiers::ModeScore::Pending => -1.0,
-                                    pooled_qualifiers::ModeScore::Score(score) => *score,
-                                }
-                            },
-                        ),
+                let round_scores = modes
+                    .iter()
+                    .filter(|mode| mode.enabled)
+                    .map(|mode| {
+                        let (_, score, is_async) = standing
+                            .and_then(|standing| {
+                                standing
+                                    .mode_scores
+                                    .iter()
+                                    .find(|(position, _, _)| *position == mode.position)
+                            })
+                            .copied()
+                            .unwrap_or((mode.position, pooled_qualifiers::ModeScore::Pending, true));
+                        RoundScore {
+                            source: RoundSource::PooledMode(mode.display_name.clone()),
+                            score: r64(
+                                if pooled_qualifiers::hide_score(
+                                    data.qualifier_score_hiding,
+                                    config
+                                        .results_release_at
+                                        .is_some_and(|release| release <= Utc::now()),
+                                    is_organizer,
+                                    is_async,
+                                ) {
+                                    -1.0
+                                } else {
+                                    match score {
+                                        pooled_qualifiers::ModeScore::Pending => -1.0,
+                                        pooled_qualifiers::ModeScore::Score(score) => score,
+                                    }
+                                },
+                            ),
+                        }
                     })
                     .collect();
                 signups.push(SignupsTeam {
@@ -2418,27 +2430,7 @@ pub(crate) async fn list(
                                             }
                                         }
                                     }
-                                    td(style = "text-align: right;") {
-                                        @if hide_points || score < r64(0.0) {
-                                            : "—";
-                                        } else {
-                                            details(class = "round-breakdown") {
-                                                summary : format!("{score:.2}");
-                                                div(class = "round-scores") {
-                                                    @for round_score in round_scores.iter().take(required_modes) {
-                                                        div(style = "font-size: 0.85em;") {
-                                                            : format!("{}: ", round_score.source);
-                                                            @if round_score.score < r64(0.0) {
-                                                                : "(pending)";
-                                                            } else {
-                                                                : format!("{:.2}", round_score.score);
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
+                                    : pooled_score_cell(score, &round_scores, required_modes, hide_points);
                                 }
                                 (QualifierKind::Score(QualifierScoreKind::Standard | QualifierScoreKind::Sgl2025Online), Qualification::Multiple { num_entered, num_finished, num_forfeited, score, .. }) => { //TODO determine based on enter flow
                                     td(style = "text-align: right;") : num_entered;
@@ -2758,4 +2750,81 @@ pub(crate) async fn get(
         event,
     )
     .await
+}
+
+
+fn pooled_score_cell(
+    score: R64,
+    round_scores: &[RoundScore],
+    required_modes: usize,
+    hide_points: bool,
+) -> RawHtml<String> {
+    html! {
+                                    td(style = "text-align: right;") {
+                                        @if hide_points {
+                                            : "—";
+                                        } else {
+                                            details(class = "round-breakdown") {
+                                                summary {
+                                                    @if score < r64(0.0) { : "—"; }
+                                                    else { : format!("{score:.2}"); }
+                                                }
+                                                div(class = "round-scores") {
+                                                    @for round_score in round_scores.iter().take(required_modes) {
+                                                        div(style = "font-size: 0.85em;") {
+                                                            : format!("{}: ", round_score.source);
+                                                            @if round_score.score < r64(0.0) {
+                                                                : "(pending)";
+                                                            } else {
+                                                                : format!("{:.2}", round_score.score);
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+    }
+}
+
+#[cfg(test)]
+mod pooled_presentation_tests {
+    use super::*;
+
+    #[test]
+    fn named_breakdowns_show_averages_and_partial_results_without_leaking_hidden_scores() {
+        let mut scores = vec![
+            RoundScore {
+                source: RoundSource::PooledMode("Mode <A>".into()),
+                score: r64(98.0),
+            },
+            RoundScore {
+                source: RoundSource::PooledMode("Enemizer".into()),
+                score: r64(91.0),
+            },
+            RoundScore {
+                source: RoundSource::PooledMode("Crosskeys".into()),
+                score: r64(96.0),
+            },
+        ];
+        let html = pooled_score_cell(r64(95.0), &scores, 3, false).0;
+        assert!(html.contains("95.00"));
+        assert!(html.contains("Mode &lt;A&gt;"));
+        assert!(html.contains("Enemizer: "));
+        assert!(html.contains("96.00"));
+        assert!(!html.contains("Mode 1"));
+        let hidden = pooled_score_cell(r64(95.0), &scores, 3, true).0;
+        assert!(!hidden.contains("95.00"));
+        assert!(!hidden.contains("98.00"));
+        assert!(!hidden.contains("<details"));
+        scores[2].score = r64(-1.0);
+        let partial = pooled_score_cell(r64(-1.0), &scores, 3, false).0;
+        assert!(partial.contains("98.00"));
+        assert!(partial.contains("Crosskeys: (pending)"));
+        assert!(!partial.contains("95.00"));
+        if let Ok(path) = std::env::var("HTH_POOL_BROWSER_FIXTURE") {
+            let css = include_str!("../../assets/static/common.css");
+            std::fs::write(format!("{path}.totals"), format!("<!doctype html><html><head><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><style>{css}</style></head><body><main><h1>Qualifier averages</h1><table><tbody><tr id=\"complete\">{html}</tr><tr id=\"pending\">{partial}</tr><tr id=\"hidden\">{hidden}</tr></tbody></table></main></body></html>")).unwrap();
+        }
+    }
 }

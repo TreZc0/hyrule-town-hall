@@ -1708,7 +1708,7 @@ async fn post_button_draft_step(
                 .await?;
         }
         draft::StepKind::Done(_) => {
-            channel_id.say(ctx, step.message).await?;
+            for chunk in racetime_bot::baselines::message_chunks(&step.message) { channel_id.say(ctx, chunk).await?; }
             // seed roll is triggered automatically by the racetime room handler via race_data() polling
         }
         _ => {}
@@ -1722,7 +1722,7 @@ async fn draft_action(
     action: draft::Action,
     step_msg_id: Option<MessageId>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let Some((_event, mut race, draft_kind, mut msg_ctx)) =
+    let Some((event, mut race, draft_kind, mut msg_ctx)) =
         check_draft_permissions(ctx, interaction).await?
     else {
         return Ok(());
@@ -1735,13 +1735,14 @@ async fn draft_action(
         .await?
     {
         Ok(apply_response) => {
-            let step = race
+            let mut step = race
                 .draft
                 .as_ref()
                 .unwrap()
                 .next_step(&draft_kind, race.game, &mut msg_ctx)
                 .await?;
             let mut transaction = msg_ctx.into_transaction();
+            racetime_bot::baselines::format_draft_step(&event, &race, &mut step, &mut transaction).await?;
             sqlx::query!(
                 "UPDATE races SET draft_state = $1 WHERE id = $2",
                 Json(race.draft.as_ref().unwrap()) as _,
@@ -4230,15 +4231,15 @@ pub(crate) fn configure_builder(
                                             team: team.unwrap_or_else(Team::dummy),
                                             transaction, guild_id, command_ids,
                                         };
-                                        let response_content = MessageBuilder::default()
-                                            //TODO include scheduling status, both for regular races and for asyncs
-                                            .push(draft.next_step(&draft_kind, race.game, &mut msg_ctx).await?.message)
-                                            .build();
+                                        let mut step = draft.next_step(&draft_kind, race.game, &mut msg_ctx).await?;
+                                        let mut transaction = msg_ctx.into_transaction();
+                                        racetime_bot::baselines::format_draft_step(&event, &race, &mut step, &mut transaction).await?;
+                                        let response_content = MessageBuilder::default().push(step.message).build();
                                         interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
                                             .ephemeral(true)
                                             .content(response_content)
                                         )).await?;
-                                        msg_ctx.into_transaction().commit().await?;
+                                        transaction.commit().await?;
                                     } else {
                                         interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
                                             .ephemeral(true)
@@ -4506,13 +4507,15 @@ pub(crate) fn configure_builder(
                                 team: Team::dummy(),
                                 transaction, guild_id,
                             };
-                            let step = race.draft.as_ref().expect("draft_start for race without draft state").next_step(&draft_kind, race.game, &mut msg_ctx).await?;
+                            let mut step = race.draft.as_ref().expect("draft_start for race without draft state").next_step(&draft_kind, race.game, &mut msg_ctx).await?;
                             interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
                                 CreateInteractionResponseMessage::new()
                                     .content("Any participant may click **Start Draft** to start the draft.")
                                     .components(vec![])
                             )).await?;
-                            msg_ctx.into_transaction().commit().await?;
+                            let mut transaction = msg_ctx.into_transaction();
+                            racetime_bot::baselines::format_draft_step(&event, &race, &mut step, &mut transaction).await?;
+                            transaction.commit().await?;
                             post_button_draft_step(ctx, interaction.channel_id(), step).await?;
                         }
                     } else if let Some(preset) = custom_id.strip_prefix("draft_ban_preview_") {
@@ -6070,6 +6073,7 @@ pub(crate) async fn create_scheduling_thread<'a>(
     game_count: i16,
 ) -> Result<Transaction<'a, Postgres>, Error> {
     let event = race.event(&mut transaction).await?;
+    racetime_bot::baselines::validate_match(&event, game_count).map_err(sqlx::Error::Protocol)?;
     let (Some(guild_id), Some(scheduling_channel)) =
         (event.discord_guild, event.discord_scheduling_channel)
     else {
@@ -6327,7 +6331,7 @@ pub(crate) async fn create_scheduling_thread<'a>(
         let is_async =
             event.automated_asyncs || matches!(race.schedule, RaceSchedule::Async { .. });
         if let Some(display_str) = sgt
-            .scheduling_thread_str(&db_pool, race, event.round_modes.as_ref(), is_async)
+            .scheduling_thread_str(&db_pool, race, event.round_modes.as_ref(), is_async, event.draft_kind_str.is_some())
             .await
         {
             content.push_line("");
@@ -6428,20 +6432,7 @@ pub(crate) async fn handle_race(
 
     let is_second_part = cal_event.race.seed.files().is_some();
 
-    // For the second part, the seed (and any resolved randoms) was already rolled and persisted
-    // during the first part; read it back from the already-loaded seed data instead of re-rolling.
-    let mut resolved_randoms = if is_second_part {
-        cal_event
-            .race
-            .seed
-            .seed_data
-            .as_ref()
-            .and_then(|data| data.get("resolved_randoms"))
-            .and_then(|v| v.as_str())
-            .map(str::to_owned)
-    } else {
-        None
-    };
+    let mut seed_presentation_data = cal_event.race.seed.seed_data.clone();
 
     if !is_second_part {
         let discord_data = discord_ctx.data.read().await;
@@ -6457,15 +6448,14 @@ pub(crate) async fn handle_race(
             .await;
 
         // Loop until we get an update saying the seed data is done rolling.
-        let seed = loop {
+        let (seed, resolved_randoms) = loop {
             match updates.recv().await {
                 Some(racetime_bot::SeedRollUpdate::Done {
                     seed,
                     resolved_randoms: seed_resolved_randoms,
                     ..
                 }) => {
-                    resolved_randoms = seed_resolved_randoms;
-                    break seed;
+                    break (seed, seed_resolved_randoms);
                 }
                 Some(racetime_bot::SeedRollUpdate::Error(e)) => return Err(e.into()),
                 None => return Err(racetime_bot::RollError::ChannelClosed.into()),
@@ -6478,6 +6468,7 @@ pub(crate) async fn handle_race(
             if let Some(ref resolved_randoms) = resolved_randoms {
                 seed_data_json["resolved_randoms"] = serde_json::json!(resolved_randoms);
             }
+            seed_presentation_data = Some(seed_data_json.clone());
             sqlx::query!(
                 "UPDATE races SET seed_data = $1 WHERE id = $2",
                 seed_data_json,
@@ -6505,14 +6496,15 @@ pub(crate) async fn handle_race(
             content.push(". A Seed has been generated and will be distributed to the runner as soon as they hit the READY button. Please work with them in their async channel in case of issues.");
         }
 
-        if let Some(ref resolved_randoms) = resolved_randoms {
-            content.push_line("");
-            content.push(format!("Final settings - {resolved_randoms}"));
-        }
-
         let msg = content.build();
         if let Some(channel) = event.discord_organizer_channel {
             channel.say(&discord_ctx, msg).await?;
+            if let Some(summary) = seed_presentation_data.as_ref().and_then(|data| racetime_bot::baselines::seed_summary(data, true)) {
+                for chunk in racetime_bot::baselines::message_chunks(&summary) {
+                    channel.send_message(&discord_ctx, CreateMessage::new().content(chunk).allowed_mentions(CreateAllowedMentions::default())).await?;
+                }
+            }
+
         }
     }
 

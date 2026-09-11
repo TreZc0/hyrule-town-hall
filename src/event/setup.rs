@@ -39,6 +39,14 @@ fn seed_config_help() -> RawHtml<String> {
                     "base_settings": {"shuffle": "crossed"}, "base_placements": {}, "start_inventory": [],
                     "choices": {"flute": {"label": "Starting activated flute", "settings": {"flute_mode": "active"}, "start_inventory": ["Ocarina (Activated)"]}}
                 })),
+                ("OWR — named baselines with shared choices", "Structure example, not approved tournament settings: replace all three baselines with your intended full configurations. Select owr or owr_tourney and use matching preset keys in a generic draft. For alttpr_dr add source: mutual_choices. Without a draft, add default_baseline naming one entry.", json!({
+                    "baselines": {
+                        "mode_a": {"label": "Mode A", "base_settings": {"goal": "crystals"}, "base_placements": {}, "start_inventory": []},
+                        "mode_b": {"label": "Mode B", "base_settings": {"goal": "dungeons"}, "base_placements": {}, "start_inventory": []},
+                        "mode_c": {"label": "Mode C", "base_settings": {"goal": "completionist"}, "base_placements": {}, "start_inventory": []}
+                    },
+                    "choices": {"flute": {"label": "Starting activated flute", "settings": {"flute_mode": "active"}, "start_inventory": ["Ocarina (Activated)"]}}
+                })),
                 ("ALTTPR Door Rando — boothisman presets", "Select alttpr_dr. Presets come from a race draft or round mode; practice_modes defines the practice dropdown. This source is not supported for pooled qualifiers.", json!({
                     "source": "boothisman", "practice_modes": [{"value": "open", "label": "Open"}, {"value": "crosskeys", "label": "Crosskeys"}],
                     "practice_choices": [{"value": "pots", "label": "Pottery Shuffle"}]
@@ -1523,6 +1531,11 @@ pub(crate) async fn post(
                 qualifier_score_kind.as_deref(),
                 &mut form.context,
             );
+            if event_data.round_modes.is_some() && draft_kind.is_some()
+                && seed_config_json.as_ref().is_some_and(|c| c.get("baselines").is_some())
+            {
+                form.context.push_error(form::Error::validation("Remove round_modes to use a named-baseline draft.").with_name("draft_config"));
+            }
             for (field, result) in [
                 (
                     "seed_config",
@@ -2885,6 +2898,27 @@ async fn save_score_config(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn named_baseline_practice_and_help_render_safely() {
+        let config = racetime_bot::seed_gen_type::OwrEventConfig::parse(&json!({
+            "baselines": {
+                "a": {"label": "Mode A", "base_settings": {}},
+                "b": {"label": "Mode B", "base_settings": {}},
+                "c": {"label": "Mode <C>", "base_settings": {}}
+            }
+        })).unwrap();
+        let selector = super::super::practice_baseline_field(&config).0;
+        assert!(selector.contains("Mode &lt;C&gt;"));
+        assert!(selector.contains("required"));
+        let help = help::label("seed_config", "Seed Config JSON").0;
+        assert!(help.contains("Named baselines and a shared mode draft"));
+        if let Ok(path) = std::env::var("HTH_TEST_BROWSER_FIXTURE") {
+            let styles = std::fs::read_to_string("assets/static/common.css").unwrap();
+            let script = std::fs::read_to_string("assets/static/setting-help.js").unwrap();
+            std::fs::write(path, format!("<!doctype html><html><head><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><style>{styles}</style></head><body><form>{selector}{help}<textarea id=\"seed_config\" name=\"seed_config\">unchanged</textarea><button type=\"submit\">Generate Practice Seed</button></form><script>{script}</script></body></html>")).unwrap();
+        }
+    }
 
     #[tokio::test]
     #[ignore = "requires HTH_TEST_DATABASE_URL pointing to a migrated production-copy *_test database"]
