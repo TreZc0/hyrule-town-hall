@@ -44,12 +44,19 @@ pub(crate) struct Snapshot {
     preferences: HashMap<String, ChoiceValue>,
     pub(crate) resolved: HashMap<String, bool>,
     timing: Timing,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    selected_baseline: Option<(String, String)>,
 }
 
 impl Snapshot {
     fn validate(&self, teams: &[i64], config: &OwrEventConfig) -> sqlx::Result<()> {
-        if self.teams != teams || self.definitions != config.choices {
+        if self.teams != teams || &self.definitions != config.choice_definitions() {
             return Err(sqlx::Error::Protocol("Participants or choice definitions changed after this race's choices were resolved. Restore them or create a replacement race; saved outcomes cannot be rerolled.".into()));
+        }
+        if let (Some((saved, _)), Some((selected, _))) = (&self.selected_baseline, &config.selected_baseline) {
+            if saved != selected {
+                return Err(sqlx::Error::Protocol("The baseline changed after this race's seed settings were selected. Restore the draft or create a replacement race.".into()));
+            }
         }
         Ok(())
     }
@@ -71,9 +78,42 @@ impl Snapshot {
     }
 
     pub(crate) fn display(&self, is_async: bool) -> String {
+        if let Some((key, label)) = &self.selected_baseline {
+            return format!("Choices resolved at {}:\nBaseline: {label}\n{}", self.timing.label(), self.baseline_summary(is_async, Some(key)));
+        }
+        let scopes: std::collections::BTreeSet<_> = self.definitions.as_object().into_iter()
+            .flat_map(|choices| choices.values())
+            .filter_map(|entry| entry.get("baselines").and_then(serde_json::Value::as_array))
+            .flatten().filter_map(serde_json::Value::as_str).collect();
+        if !scopes.is_empty() {
+            // Decisions can be published before the draft. Describe their conditional scope,
+            // never claim that patches for every mode apply to one seed.
+            let mut parts = vec![format!("Choices resolved at {} (mode selection pending):", self.timing.label())];
+            for key in scopes {
+                parts.push(format!("If {key} is selected:\n{}", self.baseline_summary(is_async, Some(key))));
+            }
+            return parts.join("\n");
+        }
+        format!("Choices resolved at {}:\n{}", self.timing.label(), self.baseline_summary(is_async, None))
+    }
+
+    pub(crate) fn display_for_config(&self, is_async: bool, config: &OwrEventConfig) -> String {
+        let mut snapshot = self.clone();
+        if snapshot.selected_baseline.is_none() {
+            snapshot.selected_baseline = config.selected_baseline.clone();
+        }
+        let display = snapshot.display(is_async);
+        if snapshot.selected_baseline.is_none() && config.baselines.is_some() {
+            format!("Baseline: awaiting mode draft\n{display}")
+        } else {
+            display
+        }
+    }
+
+    fn baseline_summary(&self, is_async: bool, baseline: Option<&str>) -> String {
         let config = OwrEventConfig {
-            choices: self.definitions.clone(),
-            selected_baseline: Some((String::new(), String::new())),
+            choices: baseline.map_or_else(|| self.definitions.clone(), |key| OwrEventConfig::choices_for_baseline(&self.definitions, key)),
+            selected_baseline: Some((baseline.unwrap_or_default().to_owned(), String::new())),
             ..OwrEventConfig::default()
         };
         let report = super::apply_patches_with_supercedes(
@@ -90,11 +130,7 @@ impl Snapshot {
         } else {
             "settings_summary"
         };
-        format!(
-            "Choices resolved at {}:\n{}",
-            self.timing.label(),
-            presentation[key].as_str().unwrap_or_default()
-        )
+        presentation[key].as_str().unwrap_or_default().to_owned()
     }
 
     pub(crate) fn reveal(
@@ -148,8 +184,14 @@ pub(crate) async fn ensure(
                 .into(),
         ));
     }
-    if let Some(snapshot) = read(&mut **transaction, race.id).await? {
+    if let Some(mut snapshot) = read(&mut **transaction, race.id).await? {
         snapshot.validate(&teams, config)?;
+        if snapshot.selected_baseline.is_none() && config.selected_baseline.is_some() {
+            snapshot.selected_baseline = config.selected_baseline.clone();
+            sqlx::query("UPDATE races SET resolved_settings = jsonb_set(resolved_settings, '{selected_baseline}', $2) WHERE id = $1")
+                .bind(i64::from(race.id)).bind(Json(&snapshot.selected_baseline))
+                .execute(&mut **transaction).await?;
+        }
         return Ok(Some(snapshot));
     }
     if stage < config.choice_resolution
@@ -184,12 +226,17 @@ pub(crate) async fn ensure(
         ));
     }
     let preferences = super::resolve_choice_values(&rows);
+    let all_choices = OwrEventConfig {
+        choices: config.choice_definitions().clone(),
+        ..OwrEventConfig::default()
+    };
     let snapshot = Snapshot {
         teams,
-        definitions: config.choices.clone(),
-        resolved: super::resolve_all_choices(&preferences, config),
+        definitions: all_choices.choices.clone(),
+        resolved: super::resolve_all_choices(&preferences, &all_choices),
         preferences,
         timing: stage,
+        selected_baseline: config.selected_baseline.clone(),
     };
     sqlx::query("UPDATE races SET resolved_settings = $2 WHERE id = $1")
         .bind(i64::from(race.id))

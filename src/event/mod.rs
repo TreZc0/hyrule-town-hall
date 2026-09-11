@@ -5052,6 +5052,7 @@ pub(crate) struct PracticeSeedForm {
 fn practice_baseline_field(config: &racetime_bot::seed_gen_type::OwrEventConfig) -> RawHtml<String> {
     html! {
         @if let Some(baselines) = &config.baselines {
+            script(src = static_url!("practice-seed.js")) {}
             p {
                 label(for = "baseline") : "Baseline";
                 select(id = "baseline", name = "baseline", required) {
@@ -5130,7 +5131,7 @@ pub(crate) async fn practice_seed(
                     fieldset {
                         legend : "Options";
                         @for (key, label) in &choices {
-                            div {
+                            div(data_baselines = config.choices.get(key).and_then(|entry| entry.get("baselines")).map_or(String::new(), |scopes| scopes.to_string())) {
                                 input(type="checkbox", id=key, name="choices", value=key);
                                 label(for=key) : label;
                             }
@@ -5159,7 +5160,7 @@ pub(crate) async fn practice_seed(
                         fieldset {
                             legend : "Options";
                             @for opt in &choices {
-                                div {
+                                div(data_baselines = config.choices.get(&opt.value).and_then(|entry| entry.get("baselines")).map_or(String::new(), |scopes| scopes.to_string())) {
                                     input(type="checkbox", id=opt.value.as_str(), name="choices", value=opt.value.as_str());
                                     label(for=opt.value.as_str()) : opt.label.as_str();
                                 }

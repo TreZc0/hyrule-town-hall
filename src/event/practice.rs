@@ -145,7 +145,17 @@ pub(super) fn validate_form(
     form: &mut PracticeSeedForm,
 ) -> Result<(), Status> {
     let allowed_choices: Vec<String> = match generator {
-        SeedGenType::Owr { config, .. } => racetime_bot::owr_choice_keys(config),
+        SeedGenType::Owr { config, .. } => {
+            let selected = config.select(form.baseline.as_deref()).map_err(|_| Status::UnprocessableEntity)?;
+            racetime_bot::owr_choice_keys(&selected)
+        },
+        SeedGenType::AlttprDoorRando {
+            source: AlttprDrSource::MutualChoices { config }, practice_choices, ..
+        } => {
+            let selected = config.select(form.baseline.as_deref()).map_err(|_| Status::UnprocessableEntity)?;
+            practice_choices.iter().filter(|option| config.baselines.is_none() || selected.choices.get(&option.value).is_some())
+                .map(|option| option.value.clone()).collect()
+        },
         SeedGenType::AlttprDoorRando {
             practice_choices, ..
         } => practice_choices
@@ -353,6 +363,25 @@ mod tests {
                 validate_form(&generator, &mut form),
                 Err(Status::UnprocessableEntity)
             );
+        }
+    }
+
+    #[test]
+    fn practice_rejects_options_from_another_baseline() {
+        for name in ["owr", "owr_tourney", "alttpr_dr"] {
+            let value = json!({"source": "mutual_choices", "baselines": {
+                "a": {"label": "A", "base_settings": {}}, "b": {"label": "B", "base_settings": {}}
+            }, "choices": {"a_only": {"baselines": ["a"], "settings": {"goal": "dungeons"}}, "shared": {"settings": {"common": true}}},
+                "practice_choices": [{"label": "A only", "value": "a_only"}, {"label": "Shared", "value": "shared"}]});
+            let generator = SeedGenType::from_db(Some(name), Some(&value)).unwrap();
+            let mut form = form();
+            form.baseline = Some("a".into());
+            form.choices = vec!["a_only".into(), "shared".into()];
+            validate_form(&generator, &mut form).unwrap();
+            form.baseline = Some("b".into());
+            assert_eq!(validate_form(&generator, &mut form), Err(Status::UnprocessableEntity));
+            form.choices = vec!["shared".into()];
+            validate_form(&generator, &mut form).unwrap();
         }
     }
 

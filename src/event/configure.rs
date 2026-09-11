@@ -4893,6 +4893,7 @@ async fn enter_flow_form(
             html! {
                 h2 : "Configure Enter Flow";
                 p : "Define what participants must fulfill to sign up for this event.";
+                : super::setup::guides::enter_flow();
 
                 h3 : "Sign-up deadline";
                 : full_form(uri!(enter_flow_set_closes(event.series, &*event.event)), csrf, html! {
@@ -6069,6 +6070,7 @@ async fn enter_flow_edit_form(
             span(class = "settings-link", data_tooltip = tooltip) : "[?]";
         }
         p { a(href = &back_link.to_string()) : "← Back to enter flow"; }
+        : super::setup::guides::enter_flow();
         : full_form(uri!(enter_flow_edit_post(event.series, &*event.event, idx)), csrf, fields, errors, "Save");
     };
     Ok(page(

@@ -209,7 +209,39 @@ impl OwrEventConfig {
             }
             Self::check_base(&config.base_settings, &config.base_placements)?;
         }
+        if let Some(choices) = config.choices.as_object() {
+            for (key, entry) in choices {
+                if let Some(scopes) = entry.get("baselines") {
+                    let scopes: Vec<String> = serde_json::from_value(scopes.clone())
+                        .map_err(|_| format!("Choice {key}: baselines must be an array of baseline keys."))?;
+                    let Some(baselines) = &config.baselines else {
+                        return Err(format!("Choice {key}: baseline restrictions require named baselines."));
+                    };
+                    let unique: HashSet<_> = scopes.iter().collect();
+                    if scopes.is_empty() || unique.len() != scopes.len()
+                        || scopes.iter().any(|scope| !baselines.contains_key(scope))
+                    {
+                        return Err(format!("Choice {key}: baselines must contain unique, existing baseline keys."));
+                    }
+                }
+            }
+        }
         Ok(config)
+    }
+
+    pub(crate) fn choice_definitions(&self) -> &serde_json::Value {
+        self.all_choices.as_ref().unwrap_or(&self.choices)
+    }
+
+    pub(crate) fn choices_for_baseline(definitions: &serde_json::Value, key: &str) -> serde_json::Value {
+        let Some(choices) = definitions.as_object() else {
+            return definitions.clone();
+        };
+        serde_json::Value::Object(choices.iter().filter(|(_, entry)| {
+            entry.get("baselines").is_none_or(|scopes| {
+                scopes.as_array().is_some_and(|scopes| scopes.iter().any(|scope| scope.as_str() == Some(key)))
+            })
+        }).map(|(key, entry)| (key.clone(), entry.clone())).collect())
     }
 
     fn check_base(
@@ -240,7 +272,8 @@ impl OwrEventConfig {
             base_settings: baseline.base_settings.clone(),
             base_placements: baseline.base_placements.clone(),
             start_inventory: baseline.start_inventory.clone(),
-            choices: self.choices.clone(),
+            choices: Self::choices_for_baseline(self.choice_definitions(), key),
+            all_choices: Some(self.choice_definitions().clone()),
             choice_resolution: self.choice_resolution,
             selected_baseline: Some((key.to_owned(), baseline.label.clone())),
             ..Self::default()
@@ -320,6 +353,14 @@ impl OwrEventConfig {
     /// Read-only description: never resolves random choices or guesses a pending draft's mode.
     pub(crate) fn pending_baseline(&self, race: &Race, draft_required: bool) -> Option<String> {
         let baselines = self.baselines.as_ref()?;
+        let key = self.pending_baseline_key(race, draft_required);
+        Some(match key.and_then(|key| baselines.get(key)) {
+            Some(base) => format!("Baseline: {}", base.label),
+            None => "Baseline: awaiting mode draft".into(),
+        })
+    }
+
+    fn pending_baseline_key<'a>(&'a self, race: &'a Race, draft_required: bool) -> Option<&'a str> {
         let key = match &race.draft {
             Some(state) => state
                 .settings
@@ -328,10 +369,12 @@ impl OwrEventConfig {
             None if !draft_required => self.default_baseline.as_deref(),
             None => None,
         };
-        Some(match key.and_then(|key| baselines.get(key)) {
-            Some(base) => format!("Baseline: {}", base.label),
-            None => "Baseline: awaiting mode draft".into(),
-        })
+        key
+    }
+
+    pub(crate) fn for_display(&self, race: &Race, draft_required: bool) -> Self {
+        self.pending_baseline_key(race, draft_required)
+            .and_then(|key| self.select(Some(key)).ok()).unwrap_or_else(|| self.clone())
     }
 
     pub(crate) fn draft_summary(&self, state: &Draft, actual_games: i16) -> Option<String> {

@@ -46,6 +46,7 @@ fn saved_outcomes_preserve_random_reveal_and_async_rule_filtering() {
         .into(),
         resolved: [("option".into(), false), ("delay".into(), true)].into(),
         timing: Timing::RaceCreation,
+        selected_baseline: None,
     };
     let restored: Snapshot =
         serde_json::from_value(serde_json::to_value(&snapshot).unwrap()).unwrap();
@@ -78,6 +79,7 @@ fn display_identifies_suppressed_patches() {
         preferences: HashMap::new(),
         resolved: [("option".into(), true), ("stronger".into(), true)].into(),
         timing: Timing::RaceCreation,
+        selected_baseline: None,
     };
     assert!(
         snapshot
@@ -214,6 +216,34 @@ async fn database_timing_retries_concurrency_and_per_game_storage() {
         for_seed(&pool, &game4, &config)
     );
     assert_eq!(a.unwrap().unwrap().resolved, b.unwrap().unwrap().resolved);
+    // Resolve before drafting, then select a mode without rerolling or invalidating
+    // the original full definitions. The unused mode must disappear from delivery.
+    let mut named = fixture(Timing::RaceCreation);
+    named.baselines = Some(serde_json::from_value(json!({
+        "a": {"label": "Mode A", "base_settings": {}},
+        "b": {"label": "Mode B", "base_settings": {}}
+    })).unwrap());
+    named.choices["option"]["baselines"] = json!(["a"]);
+    named.choices["delay"]["baselines"] = json!(["b"]);
+    sqlx::query("INSERT INTO races (id, team1, team2) VALUES (6, 1, 2)").execute(&pool).await.unwrap();
+    let game6 = race(6);
+    let mut tx = pool.begin().await.unwrap();
+    let before_draft = ensure(&mut tx, &game6, &named, Timing::RaceCreation).await.unwrap().unwrap();
+    tx.commit().await.unwrap();
+    assert!(before_draft.display(false).contains("If a is selected:"));
+    assert!(before_draft.display(false).contains("If b is selected:"));
+    sqlx::query("UPDATE races SET resolved_settings = jsonb_set(resolved_settings, '{announced}', 'true') WHERE id = 6").execute(&pool).await.unwrap();
+    let selected = named.select(Some("a")).unwrap();
+    let after_draft = for_seed(&pool, &game6, &selected).await.unwrap().unwrap();
+    assert_eq!(after_draft.resolved, before_draft.resolved);
+    assert_eq!(after_draft.definitions, named.choices);
+    assert!(after_draft.display(false).contains("Baseline: Mode A"));
+    assert!(!after_draft.display(false).contains("delay"));
+    assert!(!after_draft.display(false).contains("If b"));
+    assert!(sqlx::query_scalar::<_, bool>("SELECT (resolved_settings->>'announced')::boolean FROM races WHERE id = 6").fetch_one(&pool).await.unwrap());
+    assert_eq!(read(&pool, game6.id).await.unwrap().unwrap().selected_baseline, after_draft.selected_baseline);
+    assert_eq!(for_seed(&pool, &game6, &selected).await.unwrap().unwrap().resolved, before_draft.resolved);
+    assert!(for_seed(&pool, &game6, &named.select(Some("b")).unwrap()).await.is_err());
     let original = read(&pool, game4.id).await.unwrap().unwrap();
     sqlx::query("UPDATE teams SET custom_choices = '{}'::jsonb")
         .execute(&pool)

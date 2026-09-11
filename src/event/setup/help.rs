@@ -225,7 +225,7 @@ pub(super) fn label(field: &str, title: &str) -> RawHtml<String> {
             "The generator build is selected above, not by adding a branch or executable path to this object. Settings from another build may not be compatible. Generation and a patch test with your actual settings are the way to verify the combination.",
         ],
         "enter_flow_json" => &[
-            "Defines the on-site registration steps and requirements. Each entry has a type and its required fields, such as a rules acknowledgement, external registration confirmation, Discord membership requirement, team step or player choice.",
+            "Defines the on-site registration steps and requirements. Each entry has a type and its required fields, such as a rules acknowledgement, external registration instruction, Discord membership requirement or player choice.",
             "Use the documented examples below for the exact object shape. booleanChoice and radioChoice store answers by key; generator choice patches must use the same key to affect seeds. A display label alone does not connect an answer to a seed setting.",
             "Signup requirements and qualification scoring are separate. Configure Qualification method and any qualifier windows explicitly rather than relying on a signup step's name to control the event. Preview the full signup flow with a test entrant before opening registration.",
         ],
@@ -248,13 +248,14 @@ pub(super) fn label(field: &str, title: &str) -> RawHtml<String> {
     })
 }
 
-fn seed_choice_help() -> RawHtml<String> {
+pub(super) fn seed_choice_help() -> RawHtml<String> {
     html! {
         h4 : "Player choices and their effect on seeds";
         p : "These rules apply to OWR (both builds) and Door Rando with source mutual_choices. Enter Flow defines the question and allowed answers; Seed Config defines what an enabled answer changes. Connect them using exactly the same choice key. A choices entry is a patch object, not a true/false value or a list of answers.";
         details {
             summary : "Named baselines and a shared mode draft";
-            p : "Define baselines as an object keyed by stable identifiers such as mode_a. Each entry contains label, base_settings, optional base_placements and start_inventory. Each is a complete baseline: there is no inheritance from a root baseline. Put choices alongside baselines to apply the same player choices to whichever mode is picked.";
+            p : "Define baselines as an object keyed by stable identifiers such as mode_a. Each entry contains label, base_settings, optional base_placements and start_inventory. Each is a complete baseline: there is no inheritance from a root baseline. Put choices alongside baselines. By default a choice applies to every mode. Add baselines: [\"mode_a\"] inside a choice to restrict it to that mode, or list several mode keys. The list must be non-empty and reference existing baselines. Other modes ignore that patch, including its starting items and suppression rules.";
+            p : "The signup form can collect all mode preferences. Practice shows only options for its selected baseline; seed generation and final room summaries use the same restriction. Choices resolved before the draft remain saved, but only the selected mode's applicable choices affect its seed. Omit the per-choice baselines field for shared options and existing single-baseline events.";
             p : "Use either named baselines or a root baseline, not both. Keys must be 1–64 letters, digits, underscores or hyphens. Each draft option's preset must match a baseline key. With a draft, generation waits for the completed picks and uses the current game's selection; an invalid or missing selection never falls back to another mode.";
             p : "For an event without a preset draft, set default_baseline to one of the configured keys. Practice offers a baseline dropdown and optional-choice checkboxes. Pooled qualifier modes still take a single explicit baseline in their own configuration, not a baselines collection.";
             pre : serde_json::to_string_pretty(&json!({

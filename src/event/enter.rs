@@ -51,7 +51,7 @@ enum DeserializeRegex {}
 
 impl<'de> DeserializeAs<'de, Regex> for DeserializeRegex {
     fn deserialize_as<D: Deserializer<'de>>(deserializer: D) -> Result<Regex, D::Error> {
-        Regex::new(<&str>::deserialize(deserializer)?).map_err(|e| D::Error::custom(e.to_string()))
+        Regex::new(&String::deserialize(deserializer)?).map_err(|e| D::Error::custom(e.to_string()))
     }
 }
 

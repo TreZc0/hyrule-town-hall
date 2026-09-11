@@ -26,6 +26,77 @@ fn draft_config() -> serde_json::Value {
 }
 
 #[test]
+fn scoped_choices_validate_references_and_keep_shared_choices() {
+    let mut value = fixture();
+    value["choices"]["option"]["baselines"] = json!(["a", "c"]);
+    let config = OwrEventConfig::parse(&value).unwrap();
+    assert!(config.select(Some("a")).unwrap().choices.get("option").is_some());
+    assert!(config.select(Some("c")).unwrap().choices.get("option").is_some());
+    let b = config.select(Some("b")).unwrap();
+    assert!(b.choices.get("option").is_none());
+    assert!(b.choices.get("delay").is_some());
+    assert_eq!(b.choice_definitions(), &value["choices"]);
+    for scopes in [json!([]), json!(null), json!("a"), json!(["missing"]), json!(["a", "a"]), json!([1])] {
+        value["choices"]["option"]["baselines"] = scopes;
+        assert!(configuration::validate_seed(Some("owr_tourney"), Some(&value)).is_err());
+        assert!(SeedGenType::from_db(Some("owr_tourney"), Some(&value)).is_none());
+    }
+    assert!(OwrEventConfig::parse(&json!({"base_settings": {}, "choices": {"option": {"baselines": ["a"], "settings": {}}}})).is_err());
+    assert!(!racetime_bot::choice_entry_affects_seed(Some(&json!({"label": "Rule", "baselines": ["a"]}))));
+}
+
+#[test]
+fn scoped_choices_isolate_settings_inventory_placements_and_summaries() {
+    let mut value = fixture();
+    value["choices"] = json!({"shared": {"settings": {"common": true}}});
+    for mode in ["a", "b", "c"] {
+        value["choices"][format!("{mode}_settings")] = json!({"label": format!("{mode} settings"), "baselines": [mode], "settings": {"goal": format!("{mode}_goal")}, "placements": {"location": mode}});
+        value["choices"][format!("{mode}_item")] = json!({"label": format!("{mode} item"), "baselines": [mode], "start_inventory": [format!("{mode}_item")]});
+    }
+    let config = OwrEventConfig::parse(&value).unwrap();
+    let keys = ["a_settings", "a_item", "b_settings", "b_item", "c_settings", "c_item"];
+    for (index, mode) in ["a", "b", "c"].into_iter().enumerate() {
+        let selected = config.select(Some(mode)).unwrap();
+        let base = &config.baselines.as_ref().unwrap()[mode];
+        for mask in 0..64 {
+            let mut resolved: HashMap<String, bool> = keys.iter().enumerate().map(|(n, key)| ((*key).to_owned(), mask & (1 << n) != 0)).collect();
+            resolved.insert("shared".into(), true);
+            let settings_on = mask & (1 << (index * 2)) != 0;
+            let item_on = mask & (1 << (index * 2 + 1)) != 0;
+            let (yaml, report) = racetime_bot::build_dr_yaml_with_report(&selected, &resolved, Uuid::nil()).unwrap();
+            let actual: serde_json::Value = serde_yml::from_str(&yaml).unwrap();
+            let mut expected = base.base_settings.clone();
+            expected["common"] = json!(true);
+            if settings_on { expected["goal"] = json!(format!("{mode}_goal")); }
+            assert_eq!(actual["settings"]["1"], expected, "{mode}, mask {mask}");
+            let expected_placements = if settings_on { json!({"location": mode}) } else { base.base_placements.clone() };
+            assert_eq!(actual["placements"].get("1").cloned().unwrap_or(json!({})), expected_placements);
+            let mut inventory = base.start_inventory.clone();
+            if item_on { inventory.push(format!("{mode}_item")); }
+            assert_eq!(actual["start_inventory"].get("1").cloned().unwrap_or(json!([])), json!(inventory));
+            let display = presentation(&selected, &resolved, &report).unwrap();
+            let randoms = keys.iter().map(|key| ((*key).to_owned(), ChoiceValue::Random)).collect();
+            let reveal = racetime_bot::reveal_resolved_randoms_str(&randoms, &resolved, &selected, &[]).unwrap();
+            for other in ["a", "b", "c"] {
+                for suffix in ["settings", "item"] {
+                    let label = format!("{other} {suffix}");
+                    assert_eq!(display["settings_summary"].as_str().unwrap().contains(&label), other == mode);
+                    assert_eq!(display["async_settings_summary"].as_str().unwrap().contains(&label), other == mode);
+                    assert_eq!(reveal.contains(&label), other == mode);
+                }
+            }
+        }
+    }
+    // An inactive mode's suppressor must not disable a shared option in another mode.
+    value["choices"]["a_settings"]["supercedes"] = json!(["shared"]);
+    let selected = OwrEventConfig::parse(&value).unwrap().select(Some("b")).unwrap();
+    let resolved = [("a_settings".into(), true), ("shared".into(), true)].into();
+    let (yaml, _) = racetime_bot::build_dr_yaml_with_report(&selected, &resolved, Uuid::nil()).unwrap();
+    let actual: serde_json::Value = serde_yml::from_str(&yaml).unwrap();
+    assert_eq!(actual["settings"]["1"]["common"], true);
+}
+
+#[test]
 fn configuration_references_defaults_and_legacy_formats() {
     let config = fixture();
     for generator in ["owr", "owr_tourney", "alttpr_dr"] {

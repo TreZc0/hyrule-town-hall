@@ -39,8 +39,14 @@ pub(crate) struct OwrEventConfig {
     /// - `supercedes`: list of choice keys whose patches are suppressed when this choice is enabled.
     /// - `hidden_for_async`: if `true`, this choice is omitted from the scheduling thread display
     ///   for async races (e.g. a rule that only makes sense for a live, streamed race).
+    /// - `baselines`: optional non-empty list of named baseline keys where this choice applies.
+    ///   Omitted means shared by every baseline.
     #[serde(default)]
     pub(crate) choices: serde_json::Value,
+    /// Unfiltered definitions retained after selecting a baseline, so saved race choices
+    /// remain compatible with decisions made before the mode draft was completed.
+    #[serde(skip)]
+    pub(crate) all_choices: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) baselines: Option<std::collections::BTreeMap<String, NamedBaseline>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -245,14 +251,14 @@ impl SeedGenType {
         draft_required: bool,
     ) -> Option<String> {
         if let Self::Owr { config, .. } | Self::AlttprDoorRando { source: AlttprDrSource::MutualChoices { config }, .. } = self {
+            let display_config = config.for_display(race, draft_required);
             if let Some(snapshot) = super::choice_resolution::read(db_pool, race.id).await.ok().flatten() {
-                let prefix = config.pending_baseline(race, draft_required).map(|baseline| format!("{baseline}\n")).unwrap_or_default();
-                return Some(format!("{prefix}{}", snapshot.display(is_async)));
+                return Some(snapshot.display_for_config(is_async, &display_config));
             }
             if let Some(baseline) = config.pending_baseline(race, draft_required) {
                 let choices = super::owr_choices_for_race(db_pool, race).await;
-                let mut text = format!("{baseline}\nPending options: {}", super::owr_choices_description(&choices, config));
-                if let Some(rules) = super::alttpr_dr_player_rules_str_filtered(&choices, config, is_async) {
+                let mut text = format!("{baseline}\nPending options: {}", super::owr_choices_description(&choices, &display_config));
+                if let Some(rules) = super::alttpr_dr_player_rules_str_filtered(&choices, &display_config, is_async) {
                     text.push_str(&format!("\nPlayer rules: {rules}"));
                 }
                 return Some(text);
@@ -351,9 +357,6 @@ impl SeedGenType {
         race: &Race,
         labels: &[(&str, String)],
     ) -> Option<String> {
-        if let Some(snapshot) = super::choice_resolution::read(&mut *executor, race.id).await.ok().flatten() {
-            return Some(snapshot.display(false));
-        }
         let config = match self {
             Self::AlttprDoorRando {
                 source: AlttprDrSource::MutualChoices { config },
@@ -362,6 +365,10 @@ impl SeedGenType {
             | Self::Owr { config, .. } => config,
             _ => return None,
         };
+        let config = config.for_display(race, race.draft.is_some());
+        if let Some(snapshot) = super::choice_resolution::read(&mut *executor, race.id).await.ok().flatten() {
+            return Some(snapshot.display_for_config(false, &config));
+        }
         let team_ids = race.teams().map(|t| t.id).collect_vec();
         if team_ids.len() < 2 {
             return None;
@@ -375,13 +382,13 @@ impl SeedGenType {
         .ok()?;
 
         let resolved = super::resolve_choice_values(rows.iter().map(|row| &row.custom_choices));
-        let seed_settings = super::owr_choices_description_with_labels(&resolved, config, labels);
+        let seed_settings = super::owr_choices_description_with_labels(&resolved, &config, labels);
         match self {
             Self::AlttprDoorRando {
                 source: AlttprDrSource::MutualChoices { .. },
                 ..
             } => {
-                if let Some(player_rules) = super::alttpr_dr_player_rules_str(&resolved, config) {
+                if let Some(player_rules) = super::alttpr_dr_player_rules_str(&resolved, &config) {
                     Some(format!(
                         "Seed Settings: {seed_settings}\nRace Rules: {player_rules}"
                     ))

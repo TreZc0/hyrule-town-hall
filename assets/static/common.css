@@ -1361,3 +1361,28 @@ p.error {
 .setting-help-body details { margin-block: 0.7rem; }
 .setting-help-body summary { cursor: pointer; font-weight: 600; }
 .setting-help-body .help { margin-left: 0; font-style: normal; }
+
+/* Shared, keyboard-accessible references beside the event configuration editors. */
+.configuration-guide {
+    margin-block: 1rem;
+    padding: 0.8rem 1rem;
+    border: 1px solid currentColor;
+    border-radius: 0.4rem;
+    max-width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+    overflow-wrap: anywhere;
+}
+.configuration-guide summary { cursor: pointer; font-weight: 600; }
+.configuration-guide summary:focus-visible { outline: 2px solid currentColor; outline-offset: 3px; }
+.configuration-guide details { margin-block: 0.8rem; }
+.configuration-guide dt { margin-top: 0.8rem; font-weight: 600; }
+.configuration-guide dd { margin: 0.3rem 0 0.8rem 1rem; }
+.configuration-guide pre {
+    max-width: 100%;
+    overflow-x: auto;
+    padding: 0.5rem;
+    font-size: 0.85rem;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}

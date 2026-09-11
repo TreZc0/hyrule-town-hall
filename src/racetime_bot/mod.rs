@@ -3334,7 +3334,7 @@ fn apply_owr_patch(
         for (k, v) in obj {
             if matches!(
                 k.as_str(),
-                "label" | "priority" | "supercedes" | "value_labels" | "hidden_for_async"
+                "label" | "priority" | "supercedes" | "value_labels" | "hidden_for_async" | "baselines"
             ) {
                 continue;
             }
@@ -3597,7 +3597,7 @@ fn choice_entry_affects_seed(entry: Option<&serde_json::Value>) -> bool {
     obj.keys().any(|key| {
         !matches!(
             key.as_str(),
-            "label" | "priority" | "supercedes" | "value_labels" | "hidden_for_async"
+            "label" | "priority" | "supercedes" | "value_labels" | "hidden_for_async" | "baselines"
         )
     })
 }
@@ -6073,7 +6073,8 @@ impl RaceHandler<GlobalState> for Handler {
                 let event = cal_event.race.event(&mut transaction).await.to_racetime()?;
                 if let Some(config) = event.seed_gen_type.as_ref().and_then(choice_resolution::config) {
                     if let Some(snapshot) = choice_resolution::ensure(&mut transaction, &cal_event.race, config, choice_resolution::Timing::RoomOpening).await.to_racetime()? {
-                        pending_sends.push(PendingSend::Say(snapshot.display(!matches!(cal_event.kind, cal::EventKind::Normal))));
+                        let display_config = config.for_display(&cal_event.race, event.draft_kind_str.is_some());
+                        pending_sends.push(PendingSend::Say(snapshot.display_for_config(!matches!(cal_event.kind, cal::EventKind::Normal), &display_config)));
                     }
                 }
                 let mut entrants = Vec::default();
@@ -8153,7 +8154,11 @@ pub(crate) async fn create_room(
                         }
                     };
                     let info_user = if let Some(snapshot) = choice_resolution::read(&mut **transaction, cal_event.race.id).await.to_racetime()? {
-                        format!("{info_user}\n{}", snapshot.display(!matches!(cal_event.kind, cal::EventKind::Normal)))
+                        let is_async = !matches!(cal_event.kind, cal::EventKind::Normal);
+                        let summary = event.seed_gen_type.as_ref().and_then(choice_resolution::config)
+                            .map(|config| snapshot.display_for_config(is_async, &config.for_display(&cal_event.race, event.draft_kind_str.is_some())))
+                            .unwrap_or_else(|| snapshot.display(is_async));
+                        format!("{info_user}\n{summary}")
                     } else {
                         info_user
                     };
