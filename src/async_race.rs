@@ -3186,10 +3186,13 @@ pub(crate) async fn handle_org_forfeit_yes(
             )
             .await?;
 
-            crate::discord_bot::finalize_async_if_complete(ctx, &mut transaction, *race_id, &race)
-                .await?;
+            let ignored_race_ids = crate::discord_bot::finalize_async_if_complete(
+                ctx, &mut transaction, *race_id, &race,
+            )
+            .await?;
 
             transaction.commit().await?;
+            crate::discord_bot::refresh_ignored_async_games(ctx, ignored_race_ids).await;
             clear_message_with_button(ctx, interaction.channel_id, &run.button_id("org_forfeit"))
                 .await;
             interaction

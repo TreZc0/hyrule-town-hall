@@ -378,6 +378,55 @@ async fn report_startgg_games(
     Ok(match_decided)
 }
 
+/// Shared by live races and Discord async results. Only a decided set may retire
+/// its remaining local games or refresh standings.
+pub(crate) async fn report_startgg_result(
+    transaction: &mut Transaction<'_, Postgres>,
+    http_client: &reqwest::Client,
+    startgg_token: &str,
+    race: &Race,
+    winner_entrant_id: &startgg::ID,
+    double_rr_enabled: bool,
+) -> Result<(bool, Vec<Id<Races>>), Error> {
+    let cal::Source::StartGG { set, .. } = &race.source else {
+        return Err(Error::Custom("Race has no start.gg set".into()));
+    };
+    if let Some(game) = race.game {
+        let total_games = race.game_count(transaction).await.to_racetime()?;
+        let decided = report_startgg_games(
+            http_client,
+            startgg_token,
+            set,
+            game,
+            winner_entrant_id,
+            double_rr_enabled,
+            total_games,
+        )
+        .await?;
+        let ignored = if decided {
+            race.ignore_remaining_games(transaction)
+                .await
+                .to_racetime()?
+        } else {
+            Vec::new()
+        };
+        Ok((decided, ignored))
+    } else {
+        startgg_report_request::<startgg::ReportOneGameResultMutation>(
+            http_client,
+            startgg_token,
+            set,
+            "single-game result report",
+            startgg::report_one_game_result_mutation::Variables {
+                set_id: set.clone(),
+                winner_entrant_id: winner_entrant_id.clone(),
+            },
+        )
+        .await?;
+        Ok((true, Vec::new()))
+    }
+}
+
 fn is_match_decided(game_results: &[startgg::GameResult], total_games: i16) -> bool {
     let games_to_win = (total_games / 2) + 1;
 
@@ -1045,46 +1094,22 @@ async fn report_external_and_init_draft<'a>(
                     .to_racetime()?;
             }
         }
-        cal::Source::StartGG { ref set, .. } => {
+        cal::Source::StartGG { .. } => {
             if let Entrant::MidosHouseTeam(Team {
                 startgg_id: Some(winner_entrant_id),
                 ..
             }) = &winner
             {
-                if let Some(game) = race.game {
-                    let total_games = race.game_count(&mut transaction).await.to_racetime()?;
-                    if report_startgg_games(
-                        &global_state.http_client,
-                        &global_state.startgg_token,
-                        set,
-                        game,
-                        winner_entrant_id,
-                        event.startgg_double_rr,
-                        total_games,
-                    )
-                    .await?
-                    {
-                        ignored_race_ids = race
-                            .ignore_remaining_games(&mut transaction)
-                            .await
-                            .to_racetime()?;
-                        series_decided = true;
-                        standings_changed = true;
-                    }
-                } else {
-                    startgg_report_request::<startgg::ReportOneGameResultMutation>(
-                        &global_state.http_client,
-                        &global_state.startgg_token,
-                        set,
-                        "single-game result report",
-                        startgg::report_one_game_result_mutation::Variables {
-                            set_id: set.clone(),
-                            winner_entrant_id: winner_entrant_id.clone(),
-                        },
-                    )
-                    .await?;
-                    standings_changed = true;
-                }
+                (standings_changed, ignored_race_ids) = report_startgg_result(
+                    &mut transaction,
+                    &global_state.http_client,
+                    &global_state.startgg_token,
+                    race,
+                    winner_entrant_id,
+                    event.startgg_double_rr,
+                )
+                .await?;
+                series_decided = standings_changed && race.game.is_some();
             } else if let Some(organizer_channel) = event.discord_organizer_channel {
                 let mut msg = MessageBuilder::default();
                 msg.push("failed to report race result to start.gg: <");
@@ -1327,6 +1352,18 @@ mod completion_tests {
         .await;
         exercise_report("ROUND_ROBIN", 1, &["10"], "20", true, 2, true, true, None).await;
         for enabled in [false, true] {
+            exercise_report(
+                "SINGLE_ELIMINATION",
+                3,
+                &[],
+                "10",
+                enabled,
+                3,
+                false,
+                false,
+                None,
+            )
+            .await;
             exercise_report(
                 "SINGLE_ELIMINATION",
                 3,

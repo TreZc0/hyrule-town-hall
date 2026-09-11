@@ -20,6 +20,9 @@ use {
     },
 };
 
+#[cfg(test)]
+mod async_reporting_tests;
+
 pub(crate) const ADMIN_USER: UserId = UserId::new(82783364175630336); // TreZ
 const BUTTONS_PER_PAGE: usize = 25;
 
@@ -4646,8 +4649,9 @@ pub(crate) fn configure_builder(
                                     let m = (total_seconds % 3600) / 60;
                                     let s = total_seconds % 60;
 
-                                    finalize_async_if_complete(ctx, &mut transaction, race_id, &race).await?;
+                                    let ignored_race_ids = finalize_async_if_complete(ctx, &mut transaction, race_id, &race).await?;
                                     transaction.commit().await?;
+                                    refresh_ignored_async_games(ctx, ignored_race_ids).await;
 
                                     interaction.edit_response(ctx, EditInteractionResponse::new()
                                         .content(format!("Override confirmed. Time recorded for {} half: {:02}:{:02}:{:02}", ordinal, h, m, s))
@@ -4689,8 +4693,9 @@ pub(crate) fn configure_builder(
                                 let display_order = get_display_order(&race, async_part);
                                 let ordinal = match display_order { 1 => "1st", 2 => "2nd", 3 => "3rd", n => &format!("{}th", n) };
 
-                                finalize_async_if_complete(ctx, &mut transaction, race_id, &race).await?;
+                                let ignored_race_ids = finalize_async_if_complete(ctx, &mut transaction, race_id, &race).await?;
                                 transaction.commit().await?;
+                                refresh_ignored_async_games(ctx, ignored_race_ids).await;
 
                                 interaction.edit_response(ctx, EditInteractionResponse::new()
                                     .content(format!("Override confirmed. Forfeit recorded for {} half.", ordinal))
@@ -5849,9 +5854,10 @@ pub(crate) fn configure_builder(
                                     Some(pg_interval), user.id, link_str.as_deref(),
                                 ).await?;
 
-                                finalize_async_if_complete(ctx, &mut transaction, race_id, &race).await?;
+                                let ignored_race_ids = finalize_async_if_complete(ctx, &mut transaction, race_id, &race).await?;
 
                                 transaction.commit().await?;
+                                refresh_ignored_async_games(ctx, ignored_race_ids).await;
                                 Ok(())
                             }.await;
 
@@ -5917,6 +5923,8 @@ pub(crate) fn configure_builder(
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum Error {
+    #[error(transparent)]
+    StartggReport(#[from] racetime_bot::Error),
     #[error(transparent)]
     SeedRoll(#[from] racetime_bot::RollError),
     #[error(transparent)]
@@ -6596,151 +6604,62 @@ pub(crate) async fn forfeit_async_command(
     handle_async_command(ctx, interaction, true).await
 }
 
-// Helper function for external reporting (start.gg, challonge, etc.)
+// Use the same game aggregation and completion rules as live racetime results.
 async fn report_async_race_to_external_platforms(
-    ctx: &DiscordCtx,
+    transaction: &mut Transaction<'_, Postgres>,
+    http_client: &reqwest::Client,
+    startgg_token: &str,
+    challonge_api_key: &str,
     race: &Race,
-    async_times: &[(i32, Option<PgInterval>)],
-    results: &[(i32, Duration)],
-) -> Result<(), Error> {
-    // --- Begin external reporting code ---
-    let cal_event = cal::Event {
-        race: race.clone(),
-        kind: cal::EventKind::Normal,
-    };
-    let (db_pool, http_client, startgg_token, challonge_api_key) = {
-        let discord_data = ctx.data.read().await;
-        (
-            discord_data
-                .get::<DbPool>()
-                .expect("database connection pool missing from Discord context")
-                .clone(),
-            discord_data
-                .get::<HttpClient>()
-                .expect("HTTP client missing from Discord context")
-                .clone(),
-            discord_data
-                .get::<StartggToken>()
-                .expect("start.gg token missing from Discord context")
-                .clone(),
-            discord_data
-                .get::<ChallongeApiKey>()
-                .expect("Challonge API key missing from Discord context")
-                .clone(),
+    event: &event::Data<'_>,
+    winner_team: &Team,
+) -> Result<Vec<Id<Races>>, Error> {
+    let mut ignored_race_ids = Vec::new();
+    if let cal::Source::StartGG {
+        event: ref event_slug,
+        ..
+    } = race.source
+    {
+        let winner_id = winner_team.startgg_id.as_ref().ok_or_else(|| {
+            racetime_bot::Error::Custom(
+                "Cannot report async result: winner has no start.gg entrant ID".into(),
+            )
+        })?;
+        let (decided, ignored) = racetime_bot::report::report_startgg_result(
+            transaction,
+            http_client,
+            startgg_token,
+            race,
+            winner_id,
+            event.startgg_double_rr,
         )
-    };
-    // Report to start.gg if applicable
-    if let Ok(Some(startgg_set_url)) = cal_event.race.startgg_set_url() {
-        let mut total_times: Vec<(i32, Option<Duration>)> = results
-            .iter()
-            .map(|(part, time)| (*part, Some(*time)))
-            .collect();
-        for (async_part, finish_time) in async_times {
-            if finish_time.is_none() {
-                total_times.push((*async_part, None));
-            }
+        .await?;
+        ignored_race_ids = ignored;
+        if decided && event.swiss_standings {
+            startgg::refresh_swiss_standings(
+                http_client.clone(),
+                event_slug.clone(),
+                startgg_token.to_owned(),
+            )
+            .await;
         }
-        total_times.sort_by(|a, b| match (a.1, b.1) {
-            (Some(a_time), Some(b_time)) => a_time.cmp(&b_time),
-            (Some(_), None) => Less,
-            (None, Some(_)) => Greater,
-            (None, None) => Equal,
-        });
-        if let Some((winner_part, _)) = total_times.first() {
-            let winner_team = match winner_part {
-                1 => race.teams().next(),
-                2 => race.teams().nth(1),
-                3 => race.teams().nth(2),
-                _ => None,
-            };
-            if let Some(winner_team) = winner_team {
-                if let Some(startgg_id) = &winner_team.startgg_id {
-                    let set_id = if let Some(set_id) = startgg_set_url
-                        .path_segments()
-                        .and_then(|segments| segments.last())
-                        .and_then(|last| last.parse::<u64>().ok())
-                    {
-                        startgg::ID(set_id.to_string())
-                    } else {
-                        startgg::ID(startgg_set_url.to_string())
-                    };
-                    match startgg::query_uncached::<startgg::ReportOneGameResultMutation>(
-                        &http_client,
-                        &startgg_token,
-                        startgg::report_one_game_result_mutation::Variables {
-                            set_id,
-                            winner_entrant_id: startgg_id.clone(),
-                        },
-                    )
-                    .await
-                    {
-                        Ok(_) => {
-                            let mut transaction = db_pool.begin().await?;
-                            let event = race.event(&mut transaction).await?;
-                            if event.swiss_standings {
-                                if let cal::Source::StartGG { ref event, .. } = race.source {
-                                    startgg::refresh_swiss_standings(
-                                        http_client.clone(),
-                                        event.clone(),
-                                        startgg_token.clone(),
-                                    )
-                                    .await;
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            eprintln!("Failed to report async race result to start.gg: {:?}", e);
-                        }
-                    }
-                }
+    }
+    if let cal::Source::Challonge { ref id } = race.source {
+        if let Some(ref winner_id) = winner_team.challonge_id {
+            if let Err(e) = challonge::report::report_result(
+                http_client,
+                challonge_api_key,
+                id,
+                winner_id,
+                &[(1, 0)],
+            )
+            .await
+            {
+                log::error!("Failed to report async race result to Challonge: {e:?}");
             }
         }
     }
-    // Report to challonge if applicable
-    if let cal::Source::Challonge { ref id } = cal_event.race.source {
-        let mut total_times: Vec<(i32, Option<Duration>)> = results
-            .iter()
-            .map(|(part, time)| (*part, Some(*time)))
-            .collect();
-        for (async_part, finish_time) in async_times {
-            if finish_time.is_none() {
-                total_times.push((*async_part, None));
-            }
-        }
-        total_times.sort_by(|a, b| match (a.1, b.1) {
-            (Some(a_time), Some(b_time)) => a_time.cmp(&b_time),
-            (Some(_), None) => Less,
-            (None, Some(_)) => Greater,
-            (None, None) => Equal,
-        });
-        if let Some((winner_part, _)) = total_times.first() {
-            let winner_team = match winner_part {
-                1 => race.teams().next(),
-                2 => race.teams().nth(1),
-                3 => race.teams().nth(2),
-                _ => None,
-            };
-            if let Some(winner_team) = winner_team {
-                if let Some(ref winner_id) = winner_team.challonge_id {
-                    match challonge::report::report_result(
-                        &http_client,
-                        &challonge_api_key,
-                        id,
-                        winner_id,
-                        &[(1, 0)],
-                    )
-                    .await
-                    {
-                        Ok(()) => {}
-                        Err(e) => {
-                            log::error!("Failed to report async race result to Challonge: {e:?}")
-                        }
-                    }
-                }
-            }
-        }
-    }
-    Ok(())
+    Ok(ignored_race_ids)
 }
 
 fn get_display_order(race: &Race, async_part: i32) -> i32 {
@@ -7201,35 +7120,6 @@ async fn handle_async_command(
         )
         .execute(&mut *transaction)
         .await?;
-
-        let display_order = get_display_order(&race, async_part as i32);
-        let ordinal = match display_order {
-            1 => "1st",
-            2 => "2nd",
-            3 => "3rd",
-            n => &format!("{}th", n),
-        };
-        interaction
-            .edit_response(
-                ctx,
-                EditInteractionResponse::new().content(format!(
-                    "Forfeit recorded for {} half of this async.",
-                    ordinal
-                )),
-            )
-            .await?;
-        async_race::clear_message_with_button(
-            ctx,
-            interaction.channel_id,
-            &bracket_run.button_id("org_forfeit"),
-        )
-        .await;
-        async_race::clear_message_with_button(
-            ctx,
-            interaction.channel_id,
-            &bracket_run.button_id("org_result"),
-        )
-        .await;
     } else {
         sqlx::query!(
             r#"
@@ -7249,42 +7139,59 @@ async fn handle_async_command(
         )
         .execute(&mut *transaction)
         .await?;
+    }
 
-        let display_order = get_display_order(&race, async_part as i32);
-        let ordinal = match display_order {
-            1 => "1st",
-            2 => "2nd",
-            3 => "3rd",
-            n => &format!("{}th", n),
-        };
-        interaction
-            .edit_response(
-                ctx,
-                EditInteractionResponse::new().content(format!(
-                    "Time recorded for {} half of this async: {}",
-                    ordinal,
-                    time_str.unwrap()
-                )),
-            )
-            .await?;
-        async_race::clear_message_with_button(
-            ctx,
-            interaction.channel_id,
-            &bracket_run.button_id("org_result"),
+    let ignored_race_ids =
+        finalize_async_if_complete(ctx, &mut transaction, race_id, &race).await?;
+    transaction.commit().await?;
+    refresh_ignored_async_games(ctx, ignored_race_ids).await;
+    let display_order = get_display_order(&race, async_part as i32);
+    let ordinal = match display_order {
+        1 => "1st",
+        2 => "2nd",
+        3 => "3rd",
+        n => &format!("{n}th"),
+    };
+    let message = if is_forfeit {
+        format!("Forfeit recorded for {ordinal} half of this async.")
+    } else {
+        format!(
+            "Time recorded for {ordinal} half of this async: {}",
+            time_str.unwrap()
         )
-        .await;
+    };
+    interaction
+        .edit_response(ctx, EditInteractionResponse::new().content(message))
+        .await?;
+    for action in ["org_result", "org_forfeit"] {
         async_race::clear_message_with_button(
             ctx,
             interaction.channel_id,
-            &bracket_run.button_id("org_forfeit"),
+            &bracket_run.button_id(action),
         )
         .await;
     }
-
-    finalize_async_if_complete(ctx, &mut transaction, race_id, &race).await?;
-
-    transaction.commit().await?;
     Ok(())
+}
+
+/// Refresh volunteer posts only after the transaction retiring unused games commits.
+pub(crate) async fn refresh_ignored_async_games(ctx: &DiscordCtx, ids: Vec<Id<Races>>) {
+    if ids.is_empty() {
+        return;
+    }
+    let pool = ctx
+        .data
+        .read()
+        .await
+        .get::<DbPool>()
+        .expect("database connection pool missing from Discord context")
+        .clone();
+    for id in ids {
+        if let Err(error) = volunteer_requests::update_volunteer_post_for_race(&pool, ctx, id).await
+        {
+            log::error!("Failed to update volunteer post for unused async game {id}: {error}");
+        }
+    }
 }
 
 pub(crate) async fn finalize_async_if_complete(
@@ -7292,7 +7199,7 @@ pub(crate) async fn finalize_async_if_complete(
     transaction: &mut Transaction<'_, Postgres>,
     race_id: i64,
     race: &Race,
-) -> Result<(), Error> {
+) -> Result<Vec<Id<Races>>, Error> {
     let async_times = sqlx::query!(
         r#"
         SELECT async_part, finish_time, link FROM async_times
@@ -7306,7 +7213,7 @@ pub(crate) async fn finalize_async_if_complete(
 
     let expected_parts = race.teams().count();
     if async_times.len() < expected_parts {
-        return Ok(());
+        return Ok(Vec::new());
     }
 
     // All parts are complete, finalize the race
@@ -7382,7 +7289,7 @@ pub(crate) async fn finalize_async_if_complete(
                     .execute(&mut **transaction)
                     .await?
                 }
-                _ => return Ok(()),
+                _ => return Ok(Vec::new()),
             };
         }
     }
@@ -7453,6 +7360,31 @@ pub(crate) async fn finalize_async_if_complete(
         .next()
         .ok_or_else(|| Error::Sql(sqlx::Error::RowNotFound))?;
 
+    let (http_client, startgg_token, challonge_api_key) = {
+        let data = ctx.data.read().await;
+        (
+            data.get::<HttpClient>()
+                .expect("HTTP client missing from Discord context")
+                .clone(),
+            data.get::<StartggToken>()
+                .expect("start.gg token missing from Discord context")
+                .clone(),
+            data.get::<ChallongeApiKey>()
+                .expect("Challonge API key missing from Discord context")
+                .clone(),
+        )
+    };
+    let ignored_race_ids = report_async_race_to_external_platforms(
+        transaction,
+        &http_client,
+        &startgg_token,
+        &challonge_api_key,
+        race,
+        &event,
+        winner_team,
+    )
+    .await?;
+
     let mut content = MessageBuilder::default();
     content.push("Async results for ");
 
@@ -7463,6 +7395,10 @@ pub(crate) async fn finalize_async_if_complete(
     if let Some(round) = &race.round {
         content.push_safe(round.clone());
         content.push(' ');
+    }
+
+    if let Some(game) = race.game {
+        content.push(format!("game {game} "));
     }
 
     content.mention_user(&winner_player);
@@ -7526,20 +7462,13 @@ pub(crate) async fn finalize_async_if_complete(
         content.push(links_content.build());
     }
 
-    if let Some(results_channel) = event.discord_race_results_channel {
-        results_channel.say(ctx, content.build()).await?;
+    // A Discord delivery failure must not roll back a result already accepted
+    // by start.gg.
+    for channel in [event.discord_race_results_channel, race.scheduling_thread].into_iter().flatten() {
+        if let Err(error) = channel.say(ctx, content.build()).await {
+            log::error!("Failed to announce async result for race {race_id} in {channel}: {error}");
+        }
     }
-
-    if let Some(scheduling_thread) = race.scheduling_thread {
-        scheduling_thread.say(ctx, content.build()).await?;
-    }
-
-    let async_times_parsed: Vec<(i32, Option<PgInterval>)> = async_times
-        .iter()
-        .map(|at| (at.async_part, at.finish_time.clone()))
-        .collect();
-
-    report_async_race_to_external_platforms(ctx, race, &async_times_parsed, &results).await?;
 
     // Mark the race itself complete only after every async result has been
     // confirmed and successfully reported. `team3`, rather than `async_start3`,
@@ -7562,7 +7491,7 @@ pub(crate) async fn finalize_async_if_complete(
     .execute(&mut **transaction)
     .await?;
 
-    Ok(())
+    Ok(ignored_race_ids)
 }
 
 fn parse_hms(s: &str) -> Option<(i64, PgInterval)> {
