@@ -568,10 +568,14 @@ impl AsyncRaceManager {
                     }
                 }
             }
-            _ => {
+            files => {
                 content.push("Your seed is ready! Please use this URL: ");
                 content.push(&seed_url);
-                if let Some(file_hash) = race.seed.file_hash.as_ref() {
+                let file_hash = race.seed.file_hash.as_ref().or_else(|| match &files {
+                    Some(seed::Files::AvianartSeed { seed_hash, .. }) => seed_hash.as_ref(),
+                    _ => None,
+                });
+                if let Some(file_hash) = file_hash {
                     content.push_line("");
                     content.push("The hash for this seed is: ");
                     content.push(format!(
