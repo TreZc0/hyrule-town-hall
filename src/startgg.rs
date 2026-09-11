@@ -5,7 +5,7 @@ use {
     typemap_rev::TypeMap,
 };
 
-/// From https://dev.start.gg/docs/rate-limits:
+/// From https://developer.start.gg/docs/rate-limits/:
 ///
 /// > You may not average more than 80 requests per 60 seconds.
 const RATE_LIMIT: Duration = Duration::from_millis(60_000 / 80);
@@ -17,13 +17,6 @@ static SWISS_STANDINGS_CACHE: LazyLock<Mutex<HashMap<String, Vec<SwissStanding>>
 /// Whether another refresh was requested while the current refresh for an event was running.
 static SWISS_STANDINGS_REFRESHES: LazyLock<Mutex<HashMap<String, bool>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
-
-pub(crate) async fn invalidate_cache() {
-    lock!(cache = CACHE; {
-        let (_, ref mut entries) = *cache;
-        *entries = TypeMap::default();
-    })
-}
 
 struct QueryCache<T: GraphQLQuery> {
     _phantom: PhantomData<T>,
@@ -49,6 +42,8 @@ pub(crate) enum Error {
     NoDataNoErrors,
     #[error("no match on query, got {0:?}")]
     NoQueryMatch(event_sets_query::ResponseData),
+    #[error("start.gg returned a match without an ID or slots")]
+    MalformedSet,
 }
 
 /// HTH's opt-in conversion of one native RR/BO1 set to two local games.
@@ -67,7 +62,7 @@ impl IsNetworkError for Error {
                     message == "An unknown error has occurred"
                 })
             }
-            Self::NoDataNoErrors | Self::NoQueryMatch(_) => false,
+            Self::NoDataNoErrors | Self::NoQueryMatch(_) | Self::MalformedSet => false,
         }
     }
 }
@@ -327,6 +322,9 @@ where
     T::ResponseData: Clone + Send + Sync,
 {
     sleep_until(*next_request).await;
+    // Space request starts, allowing response time to count toward the interval. Reserve the
+    // slot before sending so failed requests also respect the global rate limit.
+    *next_request = Instant::now() + RATE_LIMIT;
     let graphql_client::Response {
         data,
         errors,
@@ -341,7 +339,6 @@ where
         .await?
         .json_with_text_in_error::<graphql_client::Response<T::ResponseData>>()
         .await?;
-    *next_request = Instant::now() + RATE_LIMIT;
     match (data, errors) {
         (Some(_), Some(errors)) if !errors.is_empty() => Err(Error::GraphQL(errors)),
         (Some(data), _) => Ok(data),
@@ -420,6 +417,15 @@ where
             }
         })
     })
+}
+
+/// Refresh only this event's bracket; keep unrelated queries and other events warm.
+pub(crate) async fn invalidate_event_sets(event_slug: &str) {
+    lock!(cache = CACHE; {
+        let (_, ref mut entries) = *cache;
+        entries.entry::<QueryCache<EventSetsQuery>>().or_default()
+            .retain(|variables, _| variables.event_slug != event_slug);
+    });
 }
 
 /// Loads every page of a start.gg event into the query cache.
@@ -514,6 +520,7 @@ pub(crate) async fn races_to_import(
     config: &Config,
     event: &event::Data<'_>,
     event_slug: &str,
+    progress: Option<&tokio::sync::watch::Sender<String>>,
 ) -> Result<(Vec<Race>, Vec<(ID, ImportSkipReason)>), cal::Error> {
     async fn process_set(
         transaction: &mut Transaction<'_, Postgres>,
@@ -670,6 +677,8 @@ pub(crate) async fn races_to_import(
         event: &event::Data<'_>,
         event_slug: &str,
         existing_sets: &HashSet<ID>,
+        teams: &mut HashMap<ID, Team>,
+        progress: Option<&tokio::sync::watch::Sender<String>>,
         page: i64,
         races: &mut Vec<Race>,
         skips: &mut Vec<(ID, ImportSkipReason)>,
@@ -699,6 +708,11 @@ pub(crate) async fn races_to_import(
         else {
             return Err(Error::NoQueryMatch(response).into());
         };
+        if let Some(progress) = progress {
+            progress.send_replace(format!(
+                "Matching teams and preparing races from start.gg page {page} of {total_pages}…"
+            ));
+        }
         for set in sets.into_iter().filter_map(identity) {
             let event_sets_query::EventSetsQueryEventSetsNodes {
                 id: Some(id),
@@ -710,7 +724,7 @@ pub(crate) async fn races_to_import(
                 round,
             } = set
             else {
-                panic!("unexpected set format")
+                return Err(Error::MalformedSet.into());
             };
             if id.0.starts_with("preview") {
                 skips.push((id, ImportSkipReason::Preview));
@@ -731,12 +745,23 @@ pub(crate) async fn races_to_import(
                 }),
             ] = *slots
             {
-                let team1 = Team::from_startgg(&mut *transaction, team1)
-                    .await?
-                    .ok_or_else(|| cal::Error::UnknownTeamStartGG(team1.clone()))?;
-                let team2 = Team::from_startgg(&mut *transaction, team2)
-                    .await?
-                    .ok_or_else(|| cal::Error::UnknownTeamStartGG(team2.clone()))?;
+                // Entrants recur across rounds. Resolve each linked team once per import.
+                async fn team_for_entrant(
+                    transaction: &mut Transaction<'_, Postgres>,
+                    teams: &mut HashMap<ID, Team>,
+                    entrant: &ID,
+                ) -> Result<Team, cal::Error> {
+                    if let Some(team) = teams.get(entrant) {
+                        return Ok(team.clone());
+                    }
+                    let team = Team::from_startgg(transaction, entrant)
+                        .await?
+                        .ok_or_else(|| cal::Error::UnknownTeamStartGG(entrant.clone()))?;
+                    teams.insert(entrant.clone(), team.clone());
+                    Ok(team)
+                }
+                let team1 = team_for_entrant(transaction, teams, team1).await?;
+                let team2 = team_for_entrant(transaction, teams, team2).await?;
                 let best_of = phase_group
                     .as_ref()
                     .and_then(
@@ -820,8 +845,14 @@ pub(crate) async fn races_to_import(
     .await?
     .into_iter()
     .collect::<HashSet<_>>();
+    let mut teams = HashMap::new();
     let mut races = Vec::default();
     let mut skips = Vec::default();
+    if let Some(progress) = progress {
+        progress.send_replace(
+            "Fetching start.gg page 1 (including any API rate-limit wait)…".to_owned(),
+        );
+    }
     let total_pages = process_page(
         &mut *transaction,
         http_client,
@@ -829,12 +860,17 @@ pub(crate) async fn races_to_import(
         event,
         event_slug,
         &existing_sets,
+        &mut teams,
+        progress,
         1,
         &mut races,
         &mut skips,
     )
     .await?;
     for page in 2..=total_pages {
+        if let Some(progress) = progress {
+            progress.send_replace(format!("Fetching start.gg page {page} of {total_pages} (including any API rate-limit wait)…"));
+        }
         process_page(
             &mut *transaction,
             http_client,
@@ -842,6 +878,8 @@ pub(crate) async fn races_to_import(
             event,
             event_slug,
             &existing_sets,
+            &mut teams,
+            progress,
             page,
             &mut races,
             &mut skips,
@@ -1325,6 +1363,41 @@ pub(crate) async fn swiss_standings(
 #[cfg(test)]
 mod tests {
     use super::{HashMap, SwissRecord, apply_swiss_set};
+
+    #[tokio::test]
+    async fn refreshing_event_preserves_other_cached_brackets_and_rate_limit() {
+        use super::*;
+        let target = event_sets_query::Variables {
+            event_slug: "test/import-target".to_owned(),
+            page: 1,
+        };
+        let target_page2 = event_sets_query::Variables {
+            page: 2,
+            ..target.clone()
+        };
+        let other = event_sets_query::Variables {
+            event_slug: "test/import-other".to_owned(),
+            page: 1,
+        };
+        let reserved = Instant::now() + RATE_LIMIT;
+        lock!(cache = CACHE; {
+            let (ref mut next_request, ref mut entries) = *cache;
+            *next_request = reserved;
+            let pages = entries.entry::<QueryCache<EventSetsQuery>>().or_default();
+            for variables in [&target, &target_page2, &other] {
+                pages.insert(variables.clone(), (Instant::now(), event_sets_query::ResponseData { event: None }));
+            }
+        });
+        invalidate_event_sets(&target.event_slug).await;
+        lock!(cache = CACHE; {
+            let (ref next_request, ref mut entries) = *cache;
+            assert_eq!(*next_request, reserved);
+            let pages = entries.entry::<QueryCache<EventSetsQuery>>().or_default();
+            assert!(!pages.contains_key(&target));
+            assert!(!pages.contains_key(&target_page2));
+            assert!(pages.remove(&other).is_some());
+        });
+    }
 
     fn records() -> HashMap<String, SwissRecord> {
         ["entrant1", "entrant2"]

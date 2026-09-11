@@ -1834,6 +1834,9 @@ async fn sync_startgg_participant_ids(
                         response_data
                     );
                 }
+                startgg::Error::MalformedSet => {
+                    log::error!("StartGG returned a malformed match for event '{event_slug}'");
+                }
             }
             format!("Failed to fetch entrants from StartGG: {}", e)
         })?;

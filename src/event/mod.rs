@@ -1508,6 +1508,7 @@ pub(crate) async fn races(
     pool: &State<PgPool>,
     http_client: &State<reqwest::Client>,
     me: Option<User>,
+    csrf: Option<CsrfToken>,
     uri: Origin<'_>,
     series: Series,
     event: &str,
@@ -1687,7 +1688,9 @@ pub(crate) async fn races(
                     MatchSource::League => {}
                     MatchSource::StartGG(_) => {
                         @if !data.auto_import {
-                            a(class = "button", href = uri!(crate::cal::import_races(series, event))) : "Import";
+                            @let (errors, button) = button_form(uri!(crate::cal::import_races_post(series, event)), csrf.as_ref(), Vec::new(), "Import");
+                            : errors;
+                            : button;
                         }
                         a(class = "button", href = uri!(crate::cal::create_race(series, event, _))) : "New Race";
                     }
