@@ -226,6 +226,51 @@ pub(crate) fn section_heading(section: &Section, depth: usize) -> RawHtml<String
     }
 }
 
+fn choice_help_insertion_index(items: &[FlowDisplayItem<'_>]) -> Option<usize> {
+    let first_choice = items.iter().position(|item| {
+        matches!(
+            item,
+            FlowDisplayItem::Requirement(
+                Requirement::BooleanChoice { .. } | Requirement::RadioChoice { .. }
+            )
+        )
+    })?;
+    Some(
+        items[..first_choice]
+            .iter()
+            .rposition(|item| matches!(item, FlowDisplayItem::Section { .. }))
+            .unwrap_or(first_choice),
+    )
+}
+
+fn choice_help(has_boolean_choices: bool, has_radio_choices: bool) -> RawHtml<String> {
+    html! {
+        aside(class = "enter-choice-help") {
+            h4 : "How these choices work";
+            p : "Choose one answer for each option. Your answers are combined with the other participants’ answers for each match.";
+            @if has_radio_choices {
+                p {
+                    strong : "Never";
+                    : " vetoes an option. ";
+                    strong : "Random";
+                    : " allows a 50/50 decision if nobody vetoes it. ";
+                    strong : "Always";
+                    : " requests the option, but only applies it if everyone agrees; another participant’s Random or Never takes precedence.";
+                }
+            }
+            @if has_boolean_choices {
+                p {
+                    strong : "Yes";
+                    : " allows an option when everyone agrees. ";
+                    strong : "No";
+                    : " vetoes it for the match.";
+                }
+            }
+            p : "Event rules determine which options apply when choices conflict or depend on the selected mode.";
+        }
+    }
+}
+
 /// Requirements to enter an event
 #[serde_as]
 #[derive(Debug, Clone, Deserialize)]
@@ -1630,11 +1675,15 @@ pub(crate) async fn enter_form(
                         } else if let Some(ref me) = me {
                             let mut can_submit = true;
                             let mut request_qualifier = false;
-                            let mut requirements_display = Vec::with_capacity(flow.iter_requirements().count() + flow.sections.len());
+                            let display_items = flow.display_items(|_| true);
+                            let choice_help_index = choice_help_insertion_index(&display_items);
+                            let mut requirements_display = Vec::with_capacity(display_items.len() + usize::from(choice_help_index.is_some()));
                             let has_boolean_choices = flow.iter_requirements().any(|requirement| matches!(requirement, Requirement::BooleanChoice { .. }));
                             let has_radio_choices = flow.iter_requirements().any(|requirement| matches!(requirement, Requirement::RadioChoice { .. }));
-                            let mut explained_choices = false;
-                            for item in flow.display_items(|_| true) {
+                            for (i, item) in display_items.into_iter().enumerate() {
+                                if choice_help_index == Some(i) {
+                                    requirements_display.push(RequirementDisplay::Content(choice_help(has_boolean_choices, has_radio_choices)));
+                                }
                                 match item {
                                     FlowDisplayItem::Section { section, depth } => requirements_display.push(RequirementDisplay::Content(section_heading(section, depth))),
                                     FlowDisplayItem::Requirement(requirement) => {
@@ -1643,34 +1692,6 @@ pub(crate) async fn enter_form(
                                         if status.blocks_submit { can_submit = false }
                                         if requirement.request_qualifier(&mut transaction, http_client, discord_ctx, me, &data, config).await?.is_some() { request_qualifier = true }
                                         let is_choice = matches!(requirement, Requirement::BooleanChoice { .. } | Requirement::RadioChoice { .. });
-                                        if is_choice && !explained_choices {
-                                            requirements_display.push(RequirementDisplay::Content(html! {
-                                                aside(class = "enter-choice-help") {
-                                                    h4 : "How these choices work";
-                                                    p : "Choose one answer for each option. Your answers are combined with the other participants’ answers for each match.";
-                                                    @if has_radio_choices {
-                                                        p {
-                                                            strong : "Never";
-                                                            : " vetoes an option. ";
-                                                            strong : "Random";
-                                                            : " allows a 50/50 decision if nobody vetoes it. ";
-                                                            strong : "Always";
-                                                            : " requests the option, but only applies it if everyone agrees; another participant’s Random or Never takes precedence.";
-                                                        }
-                                                    }
-                                                    @if has_boolean_choices {
-                                                        p {
-                                                            strong : "Yes";
-                                                            : " allows an option when everyone agrees. ";
-                                                            strong : "No";
-                                                            : " vetoes it for the match.";
-                                                        }
-                                                    }
-                                                    p : "Event rules determine which options apply when choices conflict or depend on the selected mode.";
-                                                }
-                                            }));
-                                            explained_choices = true;
-                                        }
                                         requirements_display.push(RequirementDisplay::Requirement { is_choice, is_checked, html_content: status.html_content });
                                     }
                                 }
@@ -2922,6 +2943,92 @@ mod tests {
                 "section:1:open-specific",
                 "requirement:specific",
             ]
+        );
+    }
+
+    #[test]
+    fn choice_help_precedes_the_section_containing_the_first_choice() {
+        let flow: Flow = serde_json::from_str(
+            r#"{
+                "sections": [
+                    {"id": "accounts", "label": "Accounts"},
+                    {"id": "options", "label": "Options"}
+                ],
+                "requirements": [
+                    {"type": "raceTime", "section": "accounts"},
+                    {"type": "discord", "section": "options"},
+                    {"type": "booleanChoice", "key": "hard_mode", "label": "Hard Mode", "section": "options"}
+                ]
+            }"#,
+        )
+        .expect("sectioned enter flow should deserialize");
+        let items = flow.display_items(|_| true);
+
+        assert_eq!(choice_help_insertion_index(&items), Some(2));
+        assert!(matches!(
+            items[2],
+            FlowDisplayItem::Section {
+                section: Section { id, .. },
+                ..
+            } if id == "options"
+        ));
+    }
+
+    #[test]
+    fn choice_help_keeps_its_inline_position_for_unsectioned_choices() {
+        let flow: Flow = serde_json::from_str(
+            r#"{
+                "requirements": [
+                    {"type": "raceTime"},
+                    {"type": "booleanChoice", "key": "hard_mode", "label": "Hard Mode"}
+                ]
+            }"#,
+        )
+        .expect("legacy enter flow should deserialize");
+        let items = flow.display_items(|_| true);
+
+        assert_eq!(choice_help_insertion_index(&items), Some(1));
+        assert!(matches!(
+            items[1],
+            FlowDisplayItem::Requirement(Requirement::BooleanChoice { .. })
+        ));
+    }
+
+    #[test]
+    fn choice_help_precedes_a_nested_choice_section() {
+        let flow: Flow = serde_json::from_str(
+            r#"{
+                "sections": [
+                    {"id": "entry", "label": "Entry"},
+                    {"id": "options", "label": "Options", "parent": "entry"}
+                ],
+                "requirements": [
+                    {"type": "raceTime", "section": "entry"},
+                    {"type": "radioChoice", "key": "mode", "label": "Mode", "section": "options"}
+                ]
+            }"#,
+        )
+        .expect("nested enter flow should deserialize");
+        let items = flow.display_items(|_| true);
+
+        assert_eq!(choice_help_insertion_index(&items), Some(2));
+        assert!(matches!(
+            items[2],
+            FlowDisplayItem::Section {
+                section: Section { id, .. },
+                depth: 1,
+            } if id == "options"
+        ));
+    }
+
+    #[test]
+    fn choice_help_is_omitted_without_custom_choices() {
+        let flow: Flow = serde_json::from_str(r#"{"requirements": [{"type": "raceTime"}]}"#)
+            .expect("enter flow should deserialize");
+
+        assert_eq!(
+            choice_help_insertion_index(&flow.display_items(|_| true)),
+            None
         );
     }
 
