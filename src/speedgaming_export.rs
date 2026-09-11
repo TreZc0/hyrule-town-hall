@@ -1,5 +1,7 @@
 //! Per-language SpeedGaming schedule and volunteer exports.
 
+pub(crate) mod lifecycle;
+
 use {
     crate::{
         cal::{Entrant, Entrants, Race, RaceSchedule},
@@ -27,6 +29,7 @@ pub(crate) const LEGACY_IMPORT_ENABLED: bool = false;
 
 pub(crate) static SYNC_LOCK: LazyLock<tokio::sync::Mutex<()>> =
     LazyLock::new(|| tokio::sync::Mutex::new(()));
+pub(crate) static SYNC_NOTIFY: tokio::sync::Notify = tokio::sync::Notify::const_new();
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum Error {
@@ -63,6 +66,12 @@ pub(crate) enum Error {
     MissingDiscordUsername,
     #[error("team does not have exactly one racing member")]
     InvalidTeam,
+    #[error("SpeedGaming credentials are missing or invalid in the server config")]
+    Credentials,
+    #[error("SpeedGaming needs manual attention: {0}")]
+    Attention(String),
+    #[error("Local race changed while preparing synchronization")]
+    Superseded,
 }
 
 impl IsNetworkError for Error {
@@ -375,11 +384,15 @@ fn csrf_cookie(response: &reqwest::Response) -> Result<String, Error> {
 }
 
 async fn get_form(
-    http_client: &reqwest::Client,
+    _http_client: &reqwest::Client,
     url: &str,
     expect_episode_id: bool,
 ) -> Result<FormState, Error> {
+    let http_client = lifecycle::client()?;
     let response = http_client.get(url).send().await?.error_for_status()?;
+    if response.status().is_redirection() {
+        return Err(Error::Credentials);
+    }
     let cookie = csrf_cookie(&response)?;
     let html = response.text().await?;
     let csrf = input_value(&html, "csrfmiddlewaretoken")?;
@@ -565,16 +578,17 @@ async fn build_match_submission(
         slug: export.slug.clone(),
         runner1,
         runner2,
-        start: start + TimeDelta::minutes(export.delay_minutes.into()),
+        start: lifecycle::minute_precision(start + TimeDelta::minutes(export.delay_minutes.into())),
         note: race_note(race),
     })
 }
 
 async fn submit_match(
-    http_client: &reqwest::Client,
+    _http_client: &reqwest::Client,
     submission: &MatchSubmission,
 ) -> Result<i64, Error> {
-    let url = format!("{BASE_URL}/{}/submit/", submission.slug);
+    let http_client = lifecycle::client()?;
+    let url = format!("{BASE_URL}/{}/submit/?autoapprove", submission.slug);
     let form = get_form(http_client, &url, false).await?;
     let discord_username = submission
         .runner1
@@ -585,6 +599,7 @@ async fn submit_match(
     let fields = [
         ("csrfmiddlewaretoken", form.csrf),
         ("eventslug", submission.slug.clone()),
+        ("autoapprove", "1".to_owned()),
         ("person1id", "0".to_owned()),
         ("discordtag1", discord_username.to_owned()),
         ("displayname1", submission.runner1.display_name.clone()),
@@ -604,6 +619,8 @@ async fn submit_match(
     let response = http_client
         .post(&url)
         .header(COOKIE, form.cookie)
+        .header(ORIGIN, BASE_URL)
+        .header(REFERER, &url)
         .form(&fields)
         .send()
         .await
@@ -617,7 +634,9 @@ async fn submit_match(
         .await
         .map_err(|error| Error::AmbiguousSubmission(error.to_string()))?;
     if !html.contains("Match Submission Confirmed") {
-        return Err(Error::Rejected("match"));
+        return Err(Error::AmbiguousSubmission(
+            "Match response contained no confirmation".into(),
+        ));
     }
     confirmation_episode_id(&html)
 }
@@ -670,17 +689,28 @@ async fn claim_race_export(
     if enabled != Some(true) {
         return Ok(false);
     }
-    Ok(sqlx::query_scalar!(r#"
+    if sqlx::query_scalar::<_, bool>(
+        "SELECT COALESCE(state='failed' AND last_attempt_at>NOW()-INTERVAL '5 minutes',FALSE) FROM speedgaming_race_exports WHERE race_id=$1 AND export_id=$2",
+    )
+    .bind(i64::from(race_id))
+    .bind(export_id)
+    .fetch_optional(&mut **transaction)
+    .await?
+    .unwrap_or(false)
+    {
+        return Ok(false);
+    }
+    Ok(sqlx::query_scalar::<_, bool>(r#"
         INSERT INTO speedgaming_race_exports (race_id, export_id, state, attempt_count, last_attempt_at)
         VALUES ($1, $2, 'in_progress', 1, NOW())
         ON CONFLICT (race_id, export_id) DO UPDATE SET
             state = 'in_progress', attempt_count = speedgaming_race_exports.attempt_count + 1,
-            last_attempt_at = NOW(), last_error = NULL
-        WHERE speedgaming_race_exports.state IN ('pending', 'failed')
-           OR (speedgaming_race_exports.state = 'ambiguous'
-               AND speedgaming_race_exports.last_error LIKE '%403 Forbidden%')
+            last_attempt_at = NOW(), last_error = NULL, operation='create', exported_at=NULL
+        WHERE speedgaming_race_exports.episode_id IS NULL AND
+            (speedgaming_race_exports.state IN ('pending', 'failed') OR
+             (speedgaming_race_exports.operation='delete' AND speedgaming_race_exports.state='succeeded'))
         RETURNING true AS "claimed!"
-    "#, race_id as _, export_id)
+    "#).bind(i64::from(race_id)).bind(export_id)
     .fetch_optional(&mut **transaction)
     .await?
     .unwrap_or(false))
@@ -735,6 +765,15 @@ async fn sync_races_for_export(
     for race_id in race_ids {
         let (submission, claimed) = {
             let mut transaction = pool.begin().await?;
+            // Keep preparation and the durable submission record atomic with local edits/deletion.
+            if sqlx::query_scalar::<_, i64>("SELECT id FROM races WHERE id=$1 FOR UPDATE")
+                .bind(i64::from(race_id))
+                .fetch_optional(&mut *transaction)
+                .await?
+                .is_none()
+            {
+                continue;
+            }
             let race = Race::from_id(&mut transaction, http_client, race_id).await?;
             if !should_export_race(&mut transaction, &race, export).await? {
                 transaction.rollback().await?;
@@ -747,6 +786,10 @@ async fn sync_races_for_export(
                 build_match_submission(&mut transaction, http_client, &race, export, &event_data)
                     .await;
             let claimed = claim_race_export(&mut transaction, race_id, export.id).await?;
+            if claimed && let Ok(ref submission) = submission {
+                lifecycle::prepare_create(&mut transaction, &race, export, submission.start)
+                    .await?;
+            }
             transaction.commit().await?;
             (submission, claimed)
         };
@@ -788,30 +831,44 @@ async fn claim_volunteer_export(
     if enabled != Some(true) {
         return Ok(false);
     }
-    Ok(sqlx::query_scalar!(r#"
-        INSERT INTO speedgaming_volunteer_exports (signup_id, export_id, state, attempt_count, last_attempt_at)
-        VALUES ($1, $2, 'in_progress', 1, NOW())
+    Ok(sqlx::query_scalar::<_, bool>(
+        r#"
+        INSERT INTO speedgaming_volunteer_exports
+            (signup_id,export_id,state,attempt_count,last_attempt_at,episode_id,role)
+        SELECT s.id,$2,'in_progress',1,NOW(),re.episode_id,rt.name
+        FROM signups s JOIN role_bindings rb ON rb.id=s.role_binding_id
+        JOIN role_types rt ON rt.id=rb.role_type_id JOIN users u ON u.id=s.user_id
+        JOIN races r ON r.id=s.race_id
+        JOIN speedgaming_race_exports re ON re.race_id=s.race_id AND re.export_id=$2
+        WHERE s.id=$1 AND s.status IN ('pending','confirmed') AND re.state='succeeded'
+          AND re.operation<>'delete' AND NOT r.ignored AND r.start>NOW()
         ON CONFLICT (signup_id, export_id) DO UPDATE SET
             state = 'in_progress', attempt_count = speedgaming_volunteer_exports.attempt_count + 1,
-            last_attempt_at = NOW(), last_error = NULL
-        WHERE speedgaming_volunteer_exports.state IN ('pending', 'failed')
-           OR (speedgaming_volunteer_exports.state = 'ambiguous'
-               AND speedgaming_volunteer_exports.last_error LIKE '%403 Forbidden%')
+            last_attempt_at = NOW(), last_error = NULL, submitted_at=NULL,
+            episode_id=EXCLUDED.episode_id,role=EXCLUDED.role,remote_id=NULL
+        WHERE speedgaming_volunteer_exports.state='pending'
+           OR (speedgaming_volunteer_exports.state='failed' AND
+               speedgaming_volunteer_exports.last_attempt_at<NOW()-INTERVAL '5 minutes')
+           OR speedgaming_volunteer_exports.episode_id IS DISTINCT FROM EXCLUDED.episode_id
         RETURNING true AS "claimed!"
-    "#, signup_id as _, export_id)
+    "#,
+    )
+    .bind(i64::from(signup_id) as i32)
+    .bind(export_id)
     .fetch_optional(&mut **transaction)
     .await?
     .unwrap_or(false))
 }
 
 async fn submit_volunteer(
-    http_client: &reqwest::Client,
+    _http_client: &reqwest::Client,
     episode_id: i64,
     language: Language,
     role_type_name: &str,
     discord_username: &str,
     display_name: &str,
 ) -> Result<(), Error> {
+    let http_client = lifecycle::client()?;
     let (path, success_marker) = match role_type_name {
         "Commentary" => ("commentator", "Commentator Signup Submitted"),
         "Tracking" => ("tracker", "Tracker Signup Submitted"),
@@ -849,7 +906,9 @@ async fn submit_volunteer(
         .await
         .map_err(|error| Error::AmbiguousSubmission(error.to_string()))?;
     if !html.contains(success_marker) {
-        return Err(Error::Rejected("volunteer"));
+        return Err(Error::AmbiguousSubmission(
+            "Volunteer response contained no confirmation".into(),
+        ));
     }
     Ok(())
 }
@@ -869,17 +928,30 @@ async fn sync_volunteers_for_export(
     if !export.export_volunteers {
         return Ok(());
     }
-    let candidates = sqlx::query!(r#"
-        SELECT s.id AS "signup_id: Id<Signups>", s.user_id AS "user_id: crate::id::Id<crate::id::Users>",
-               rt.name AS role_type_name, rb.language AS "language: Language", re.episode_id AS "episode_id!"
+    #[derive(sqlx::FromRow)]
+    struct Candidate {
+        signup_id: Id<Signups>,
+        user_id: Id<Users>,
+        role_type_name: String,
+        language: Language,
+        episode_id: i64,
+    }
+    let candidates = sqlx::query_as::<_, Candidate>(
+        r#"
+        SELECT s.id::BIGINT AS signup_id, s.user_id,
+               rt.name AS role_type_name, rb.language, re.episode_id
         FROM signups s
         JOIN role_bindings rb ON rb.id = s.role_binding_id
         JOIN role_types rt ON rt.id = rb.role_type_id
         JOIN speedgaming_race_exports re ON re.race_id = s.race_id AND re.export_id = $1
-        WHERE re.state = 'succeeded' AND rb.language = ANY($2)
+        WHERE re.state = 'succeeded' AND re.episode_id IS NOT NULL AND re.operation<>'delete'
+          AND rb.language = ANY($2)
           AND s.status IN ('pending', 'confirmed') AND rt.name IN ('Commentary', 'Tracking')
         ORDER BY s.created_at, s.id
-    "#, export.id, &export.volunteer_languages as _)
+    "#,
+    )
+    .bind(export.id)
+    .bind(&export.volunteer_languages)
     .fetch_all(pool)
     .await?;
 
@@ -985,6 +1057,7 @@ async fn sync_outbound_exports(
     pool: &PgPool,
     http_client: &reqwest::Client,
 ) -> Result<Vec<ExportConfig>, Error> {
+    lifecycle::reconcile(pool, http_client).await?;
     sqlx::query!(r#"
         UPDATE speedgaming_race_exports SET state = 'ambiguous', last_error = 'export process stopped during submission'
         WHERE state = 'in_progress' AND last_attempt_at < NOW() - INTERVAL '15 minutes'
@@ -1008,6 +1081,9 @@ async fn sync_outbound_exports(
             );
         }
     }
+    // Read back new identities, and handle edits or withdrawals that happened
+    // while the initial submissions were in flight.
+    lifecycle::reconcile(pool, http_client).await?;
     Ok(exports)
 }
 
@@ -1018,18 +1094,36 @@ pub(crate) async fn check_and_sync_all_exports(
     let Ok(_guard) = SYNC_LOCK.try_lock() else {
         return Ok(());
     };
+    let mut lease = pool.begin().await?;
+    if !sqlx::query_scalar::<_, bool>("SELECT pg_try_advisory_xact_lock(728914, 1)")
+        .fetch_one(&mut *lease)
+        .await?
+    {
+        return Ok(());
+    }
     let exports = sync_outbound_exports(pool, http_client).await?;
     poll_all_exports(pool, http_client, &exports).await?;
     Ok(())
 }
 
 pub(crate) fn schedule_sync(pool: PgPool, http_client: reqwest::Client) {
-    tokio::spawn(async move {
-        let _guard = SYNC_LOCK.lock().await;
-        if let Err(error) = sync_outbound_exports(&pool, &http_client).await {
-            eprintln!("SpeedGaming export sync failed: {error}");
-        }
-    });
+    let _ = (pool, http_client);
+    SYNC_NOTIFY.notify_one();
+}
+
+pub(crate) async fn sync_pending(pool: &PgPool, http: &reqwest::Client) -> Result<(), Error> {
+    let _guard = SYNC_LOCK.lock().await;
+    // A transaction containing only an advisory lock coordinates multiple HTH
+    // processes; user race edits do not wait on row locks held over HTTP.
+    let mut lease = pool.begin().await?;
+    if !sqlx::query_scalar::<_, bool>("SELECT pg_try_advisory_xact_lock(728914, 1)")
+        .fetch_one(&mut *lease)
+        .await?
+    {
+        return Ok(());
+    }
+    sync_outbound_exports(pool, http).await?;
+    Ok(())
 }
 
 #[derive(Clone, Deserialize)]
@@ -1104,6 +1198,7 @@ async fn poll_export(
     if !has_races {
         return Ok(());
     }
+    lifecycle::reserve_schedule_request().await;
     let episodes = http_client
         .get(format!("{BASE_URL}/api/schedule/"))
         .query(&[

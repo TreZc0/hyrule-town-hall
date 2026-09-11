@@ -26,5 +26,9 @@
     "clientSecret": "your-startgg-oauth-client-secret"
   },
   "secretKey": "your-secret-key",
-  "avianartApiKey": null
+  "avianartApiKey": null,
+  "speedgaming": {
+    "username": "your-speedgaming-username",
+    "password": "your-speedgaming-password"
+  }
 }

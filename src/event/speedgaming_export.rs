@@ -101,16 +101,27 @@ pub(crate) async fn get(
         .header(&mut transaction, Some(&me), Tab::SpeedGamingExport, false)
         .await?;
     let exports = ExportConfig::for_event(&mut transaction, series, &event).await?;
+    let deliveries = sqlx::query_as::<_, (i32, i64, Option<i64>, String, Option<String>)>(
+        "SELECT re.export_id,re.race_id,re.episode_id,
+            re.operation || ' — ' || re.state::text,
+            re.last_error
+         FROM speedgaming_race_exports re JOIN speedgaming_exports e ON e.id=re.export_id
+         WHERE e.series=$1 AND e.event=$2 AND e.archived_at IS NULL ORDER BY re.race_id",
+    )
+    .bind(series)
+    .bind(&event)
+    .fetch_all(&mut *transaction)
+    .await?;
     let mut stats: HashMap<i32, (i64, i64, i64, i64)> = HashMap::default();
     for export in &exports {
-        let race_stats = sqlx::query!(
+        let (race_count, race_attention) = sqlx::query_as::<_, (i64, i64)>(
             r#"
-            SELECT COUNT(*) FILTER (WHERE state = 'succeeded') AS "succeeded!",
-                   COUNT(*) FILTER (WHERE state IN ('failed', 'ambiguous')) AS "attention!"
+            SELECT COUNT(*) FILTER (WHERE episode_id IS NOT NULL),
+                   COUNT(*) FILTER (WHERE state IN ('failed', 'ambiguous'))
             FROM speedgaming_race_exports WHERE export_id = $1
         "#,
-            export.id
         )
+        .bind(export.id)
         .fetch_one(&mut *transaction)
         .await?;
         let volunteer_stats = sqlx::query!(
@@ -126,8 +137,8 @@ pub(crate) async fn get(
         stats.insert(
             export.id,
             (
-                race_stats.succeeded,
-                race_stats.attention,
+                race_count,
+                race_attention,
                 volunteer_stats.succeeded,
                 volunteer_stats.attention,
             ),
@@ -139,6 +150,9 @@ pub(crate) async fn get(
         article {
             h2 : "SpeedGaming Export";
             p : "Exports upcoming 1v1 races to one SpeedGaming event. Volunteer signup languages are selected separately.";
+            @if !speedgaming_export::lifecycle::configured() {
+                p(class = "error") : "SpeedGaming username and password must be configured on the server before synchronization can run.";
+            }
 
             @if exports.is_empty() {
                 p : "No SpeedGaming exports are configured for this event.";
@@ -148,6 +162,27 @@ pub(crate) async fn get(
                 section {
                     h3 : &export.slug;
                     p : format!("Exported races: {succeeded}; race exports needing attention: {attention}; exported volunteer signups: {volunteer_succeeded}; volunteer exports needing attention: {volunteer_attention}");
+                    p : "Uncertain new submissions need manual verification. Retry sync will not submit them again and risk creating duplicates.";
+                    table {
+                        thead { tr { th : "Race"; th : "SpeedGaming episode"; th : "Sync status"; th : "Details"; th {} } }
+                        tbody {
+                            @for (_, race_id, episode, status, error) in deliveries.iter().filter(|row| row.0 == export.id) {
+                                tr {
+                                    td : race_id;
+                                    td : episode.map(|id| id.to_string()).unwrap_or_default();
+                                    td : status;
+                                    td : error.as_deref().unwrap_or_default();
+                                    td {
+                                        form(method = "post", action = uri!(sync_all(series, &*event))) {
+                                            input(type = "hidden", name = "csrf", value = csrf.as_ref().map(|token| token.authenticity_token().to_string()).unwrap_or_default());
+                                            input(type = "hidden", name = "race_id", value = race_id.to_string());
+                                            button(type = "submit") : "Retry sync";
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                     : full_form(uri!(update_export(series, &*event, export.id)), csrf.as_ref(), html! {
                         : form_field("volunteer_languages", &mut Vec::new(), html! {
                             label : "Volunteer signup languages";
@@ -364,6 +399,7 @@ pub(crate) async fn update_export(
 pub(crate) struct ActionForm {
     #[field(default = String::new())]
     csrf: String,
+    race_id: Option<i64>,
 }
 
 #[rocket::post(
@@ -425,7 +461,18 @@ pub(crate) async fn sync_all(
     }
     let mut form = form.into_inner();
     form.verify(&csrf);
-    if form.value.is_some() {
+    if let Some(value) = form.value {
+        sqlx::query(
+            "UPDATE speedgaming_race_exports re SET last_attempt_at=NULL
+            FROM speedgaming_exports e WHERE e.id=re.export_id AND e.series=$1 AND e.event=$2
+              AND re.state IN ('failed','ambiguous')
+              AND ($3::BIGINT IS NULL OR re.race_id=$3)",
+        )
+        .bind(series)
+        .bind(event)
+        .bind(value.race_id)
+        .execute(pool.inner())
+        .await?;
         speedgaming_export::schedule_sync(pool.inner().clone(), http_client.inner().clone());
     }
     Ok(Redirect::to(uri!(get(series, event))))

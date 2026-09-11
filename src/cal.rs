@@ -8130,6 +8130,11 @@ pub(crate) async fn edit_race_post(
 
             // Send cancel DMs to confirmed volunteers if race was just canceled
             if !was_ignored && race.ignored {
+                // Explicit cancellation is distinct from historical housekeeping.
+                sqlx::query("UPDATE speedgaming_race_exports SET operation='delete',
+                    state=CASE WHEN state='in_progress' THEN state ELSE 'pending' END,
+                    last_attempt_at=NULL,last_error=NULL WHERE race_id=$1 AND episode_id IS NOT NULL")
+                    .bind(i64::from(race.id)).execute(&mut *transaction).await?;
                 if let Ok(description) = race.notification_description(&mut transaction).await {
                     let signups = Signup::for_race(&mut transaction, race.id)
                         .await

@@ -262,6 +262,7 @@ async fn main(Args { port, subcommand }: Args) -> Result<(), Error> {
             default_panic_hook(info)
         }));
         let config = Config::load().await?;
+        speedgaming_export::lifecycle::initialize(config.speedgaming.as_ref())?;
         let http_client = reqwest::Client::builder()
             .user_agent(concat!(
                 "HyruleTownHall/",
@@ -668,9 +669,24 @@ async fn speedgaming_export_manager(
     shutdown: rocket::Shutdown,
 ) -> Result<(), Error> {
     let mut interval = tokio::time::interval(Duration::from_secs(5 * 60));
+    let mut listener = sqlx::postgres::PgListener::connect_with(&db_pool).await?;
+    listener.listen("speedgaming_sync").await?;
 
     loop {
         tokio::select! {
+            notification = listener.recv() => {
+                if let Err(error) = notification {
+                    eprintln!("SpeedGaming notification listener: {error}");
+                    sleep(Duration::from_secs(5)).await;
+                } else {
+                    speedgaming_export::schedule_sync(db_pool.clone(), http_client.clone());
+                }
+            }
+            _ = speedgaming_export::SYNC_NOTIFY.notified() => {
+                if let Err(error) = speedgaming_export::sync_pending(&db_pool, &http_client).await {
+                    eprintln!("SpeedGaming synchronization: {error}");
+                }
+            }
             _ = interval.tick() => {
                 if let Err(error) = speedgaming_export::check_and_sync_all_exports(&db_pool, &http_client).await {
                     eprintln!("Error syncing SpeedGaming exports: {error}");

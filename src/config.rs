@@ -34,6 +34,14 @@ pub(crate) struct Config {
     pub(crate) mmr_api_key: Option<String>,
     #[serde(default)]
     pub(crate) database: Option<ConfigDatabase>,
+    #[serde(default)]
+    pub(crate) speedgaming: Option<ConfigSpeedGaming>,
+}
+
+#[derive(Clone, Deserialize)]
+pub(crate) struct ConfigSpeedGaming {
+    pub(crate) username: String,
+    pub(crate) password: String,
 }
 
 impl Config {
