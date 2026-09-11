@@ -1,5 +1,6 @@
 use rocket::response::content::RawText;
 use serde::Serializer;
+pub(crate) mod enter_flow_layout;
 use {
     crate::{
         config::Config,
@@ -4832,6 +4833,7 @@ async fn enter_flow_form(
     uri: Origin<'_>,
     csrf: Option<&CsrfToken>,
     event: Data<'_>,
+    ctx: Context<'_>,
 ) -> Result<RawHtml<String>, event::Error> {
     let header = event
         .header(&mut transaction, me.as_ref(), Tab::Configure, true)
@@ -4905,6 +4907,7 @@ async fn enter_flow_form(
                 }, vec![], "Save deadline");
 
                 h3 : "Requirements";
+                p : "Choose a section and edit order numbers, then save sections and order below. Swap two numbers to swap requirements, or use the arrows for immediate moves. Ungrouped requirements appear first; within each section, requirements follow their order numbers, followed by child sections. Arrow moves do not save pending field edits.";
                 @if requirements.is_empty() {
                     p : "No requirements configured — all participants may sign up freely.";
                 } else {
@@ -4913,7 +4916,7 @@ async fn enter_flow_form(
                         @let label = req_type_label(type_str);
                         @let tooltip = req_type_tooltip(type_str);
                         @let summary = req_summary(req);
-                        div(style = "border: 1px solid var(--border); border-radius: 4px; padding: 10px 14px; margin-bottom: 8px; background: var(--bg-surface); display: flex; justify-content: space-between; align-items: center; gap: 8px;") {
+                        div(style = "border: 1px solid var(--border); border-radius: 4px; padding: 10px 14px; margin-bottom: 8px; background: var(--bg-surface); display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px;") {
                             div {
                                 strong {
                                     : label;
@@ -4923,6 +4926,7 @@ async fn enter_flow_form(
                                 @if !summary.is_empty() {
                                     span(style = "margin-left: 10px; opacity: 0.7; font-size: 0.9em;") : summary;
                                 }
+                                : enter_flow_layout::requirement_fields(&flow, i, req, &ctx);
                             }
                             div(style = "display: flex; gap: 4px; flex-shrink: 0;") {
                                 a(href = uri!(enter_flow_edit_get(event.series, &*event.event, i)), class = "button") : "Edit";
@@ -4940,6 +4944,9 @@ async fn enter_flow_form(
                         }
                     }
                 }
+
+                : enter_flow_layout::section_fields(&flow, &ctx);
+                : enter_flow_layout::save_button(event.series, &event.event, csrf, &ctx);
 
                 @let choice_suggestions = event.seed_gen_type.as_ref()
                     .map(|s| s.radio_choice_suggestions())
@@ -5067,7 +5074,15 @@ pub(crate) async fn enter_flow_get(
     let data = Data::new(&mut transaction, series, event)
         .await?
         .ok_or(StatusOrError::Status(Status::NotFound))?;
-    Ok(enter_flow_form(transaction, me, uri, csrf.as_ref(), data).await?)
+    Ok(enter_flow_form(
+        transaction,
+        me,
+        uri,
+        csrf.as_ref(),
+        data,
+        Context::default(),
+    )
+    .await?)
 }
 
 #[derive(FromForm, CsrfForm)]
@@ -5337,6 +5352,7 @@ pub(crate) async fn enter_flow_move_down(
 pub(crate) struct EnterFlowEditForm {
     #[field(default = String::new())]
     csrf: String,
+    section: Option<String>,
     #[field(default = String::new())]
     invites: String,
     #[field(default = String::new())]
@@ -6061,6 +6077,14 @@ async fn enter_flow_edit_form(
         _ => html! { p : "Unknown requirement type."; },
     };
 
+    let flow = load_flow_json(&mut transaction, event.series, &event.event).await?;
+    let fields = html! {
+        : form_field("section", &mut errors, html! {
+            label(for = "section") : "Section:";
+            : enter_flow_layout::section_select(&flow, "section", ctx.field_value("section").unwrap_or(req["section"].as_str().unwrap_or_default()), None);
+        });
+        : fields;
+    };
     let back_link = uri!(enter_flow_get(event.series, &*event.event));
     let content = html! {
         h2 {
@@ -6173,7 +6197,10 @@ pub(crate) async fn enter_flow_edit_post(
         .to_owned();
     if let Some(ref value) = form.value {
         let mut build_errors: Vec<(String, String)> = vec![];
-        let new_req = build_requirement_json(&type_str, value, &mut build_errors);
+        let mut new_req = build_requirement_json(&type_str, value, &mut build_errors);
+        if !new_req.is_null() {
+            enter_flow_layout::preserve_section(&req, &mut new_req, value.section.as_deref());
+        }
         for (field, msg) in build_errors {
             form.context
                 .push_error(form::Error::validation(msg).with_name(field));

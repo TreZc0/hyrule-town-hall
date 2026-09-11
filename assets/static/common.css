@@ -855,6 +855,32 @@ footer {
 .enter-flow-heading {
   margin: 1.5rem 0 0.5rem;
 }
+.enter-flow-section-editor {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  margin-bottom: 12px;
+}
+.enter-flow-section-editor input {
+  min-width: 0;
+}
+.enter-flow-section-remove {
+  grid-column: 1 / -1;
+}
+.enter-flow-requirement-position {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+}
+@media (max-width: 600px) {
+  .enter-flow-section-editor {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
 .enter-flow-subheading {
   margin: 1rem 0 0.35rem;
 }
