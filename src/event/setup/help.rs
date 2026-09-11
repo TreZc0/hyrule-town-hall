@@ -267,7 +267,7 @@ fn seed_choice_help() -> RawHtml<String> {
                 "order": [{"phase": "pick", "team": "high_seed"}, {"phase": "pick", "team": "low_seed"}]
             })).expect("example JSON serializes");
             p : "Put this object in Draft Config JSON and select Generic Ban/Pick. It uses stored qualifier ranks: higher seed picks game 1, lower seed picks game 2, and the remaining mode is the possible game 3. Create two games for double RR, or three for BO3. Keep round_modes unset, since fixed round modes disable drafting.";
-            p : "The selected baseline and final choice outcomes are saved with each generated seed and shown in Racetime and async delivery. Later edits do not change the description of an existing seed. Always + Random and Random + Random both remain one 50/50 decision for each game's seed; both async participants receive the same saved result.";
+            p : "The selected baseline and final choice outcomes are saved with each generated seed and shown in Racetime and async delivery. Later edits do not change the description of an existing seed. Always + Random and Random + Random both remain one 50/50 decision for each game; both async participants receive the same saved result.";
         }
         details {
             summary : "Yes/No versus Never/Random/Always";
@@ -276,9 +276,11 @@ fn seed_choice_help() -> RawHtml<String> {
             ul {
                 li : "Any No/Never, missing answer or unrecognized answer: the choice is disabled.";
                 li : "Everyone Yes/Always: the choice is enabled.";
-                li : "Everyone permits it, and at least one answer is Random: one 50/50 decision enables or disables the choice for that seed roll.";
+                li : "Everyone permits it, and at least one answer is Random: one 50/50 decision enables or disables the choice for that game.";
             }
-            p : "For example, Always + Random and Random + Random both give a 50% chance, not 25%. Never + Always and Never + Random are disabled. Each configured choice is resolved once per roll; seed generation and the random-result announcement use that same decision.";
+            p : "Choose when random player choices resolve in event setup: On race creation / import, On room opening, or On seed rolling (the default). The Seed Config JSON field is choice_resolution, with values race_creation, room_opening and seed_rolling. Creation waits until all participants are registered. Room opening means the first live room or async part, and falls back to seed generation when no room opens. Practice rolls remain independent; pooled qualifiers use only baseline settings.";
+            p : "Resolved results appear in the scheduling thread and race settings, and are reused after rescheduling, room recreation, restarts and generation failures. Player preference edits only affect unresolved races. Once resolved, participant replacements and choice-definition changes require restoring the original configuration or creating a replacement race. Existing seeds keep their saved descriptions.";
+            p : "For example, Always + Random and Random + Random both give a 50% chance, not 25%. Never + Always and Never + Random are disabled. Each configured choice is resolved once per game; seed generation and all announcements use that saved decision, including seed rerolls.";
         }
         details {
             summary : "Matching Enter Flow and Seed Config examples";

@@ -6052,7 +6052,7 @@ fn push_runner_timezones(
     }
 }
 
-fn split_discord_message(mut content: String) -> Vec<String> {
+pub(crate) fn split_discord_message(mut content: String) -> Vec<String> {
     const LIMIT: usize = 1_900;
     let mut chunks = Vec::new();
     while content.len() > LIMIT {
@@ -6077,11 +6077,28 @@ fn split_discord_message(mut content: String) -> Vec<String> {
 pub(crate) async fn create_scheduling_thread<'a>(
     ctx: &DiscordCtx,
     mut transaction: Transaction<'a, Postgres>,
-    race: &mut Race,
+    races: &mut [Race],
     game_count: i16,
 ) -> Result<Transaction<'a, Postgres>, Error> {
-    let event = race.event(&mut transaction).await?;
+    let event = races[0].event(&mut transaction).await?;
     racetime_bot::baselines::validate_match(&event, game_count).map_err(sqlx::Error::Protocol)?;
+    // Save every game's decision before publishing the opening message. A Discord failure
+    // must not roll back an outcome that players might already have seen.
+    for race in races.iter() {
+        race.save(&mut transaction).await?;
+    }
+    transaction.commit().await?;
+    let pool = ctx.data.read().await.get::<DbPool>().expect("database pool missing").clone();
+    transaction = pool.begin().await?;
+    let mut choice_summaries = Vec::new();
+    for race in races.iter() {
+        if let Some(snapshot) = racetime_bot::choice_resolution::read(&mut *transaction, race.id).await? {
+            let prefix = race.game.map(|game| format!("Game {game}\n")).unwrap_or_default();
+            choice_summaries.push(format!("{prefix}{}", snapshot.display(event.automated_asyncs || matches!(race.schedule, RaceSchedule::Async { .. }))));
+        }
+    }
+    let race_ids = races.iter().map(|race| i64::from(race.id)).collect_vec();
+    let race = &mut races[0];
     let (Some(guild_id), Some(scheduling_channel)) =
         (event.discord_guild, event.discord_scheduling_channel)
     else {
@@ -6260,7 +6277,7 @@ pub(crate) async fn create_scheduling_thread<'a>(
     };
     // Show settings choices that every scheduled participant selected.
     let choice_requirements = event.choice_requirements();
-    if !choice_requirements.is_empty() {
+    if choice_summaries.is_empty() && !choice_requirements.is_empty() {
         let team_ids = race.teams().map(|t| t.id).collect_vec();
         if team_ids.len() > 1 {
             let rows = sqlx::query!(
@@ -6328,7 +6345,16 @@ pub(crate) async fn create_scheduling_thread<'a>(
             }
         }
     }
-    if let Some(ref sgt) = event.seed_gen_type {
+    if !choice_summaries.is_empty() {
+        content.push_line("");
+        content.push_line("");
+        if let Some(config) = event.seed_gen_type.as_ref().and_then(racetime_bot::choice_resolution::config) {
+            if let Some(baseline) = config.pending_baseline(race, event.draft_kind_str.is_some()) {
+                content.push_line(baseline);
+            }
+        }
+        content.push(choice_summaries.join("\n\n"));
+    } else if let Some(ref sgt) = event.seed_gen_type {
         let db_pool = ctx
             .data
             .read()
@@ -6347,6 +6373,8 @@ pub(crate) async fn create_scheduling_thread<'a>(
             content.push(display_str);
         }
     }
+    let mut content_chunks = split_discord_message(content.build()).into_iter();
+    let opening_content = content_chunks.next().unwrap_or_default();
     let thread_id = if let Some(ChannelType::Forum) = scheduling_channel
         .to_channel(ctx)
         .await?
@@ -6356,7 +6384,7 @@ pub(crate) async fn create_scheduling_thread<'a>(
         scheduling_channel
             .create_forum_post(
                 ctx,
-                CreateForumPost::new(title, CreateMessage::default().content(content.build()))
+                CreateForumPost::new(title, CreateMessage::default().content(opening_content))
                     .auto_archive_duration(AutoArchiveDuration::OneWeek),
             )
             .await?
@@ -6370,10 +6398,15 @@ pub(crate) async fn create_scheduling_thread<'a>(
                     .auto_archive_duration(AutoArchiveDuration::OneWeek),
             )
             .await?;
-        thread.say(ctx, content.build()).await?;
+        thread.say(ctx, opening_content).await?;
         thread.id
     };
-    for chunk in participant_chunks.into_iter().chain(timezone_chunks) {
+    // Preserve the thread link even if delivery of a later message needs retrying.
+    sqlx::query("UPDATE races SET scheduling_thread = $1 WHERE id = ANY($2)")
+        .bind(thread_id.get() as i64).bind(&race_ids).execute(&mut *transaction).await?;
+    transaction.commit().await?;
+    transaction = pool.begin().await?;
+    for chunk in content_chunks.chain(participant_chunks).chain(timezone_chunks) {
         thread_id.say(ctx, chunk).await?;
     }
     race.scheduling_thread = Some(thread_id);
@@ -6394,6 +6427,11 @@ pub(crate) async fn create_scheduling_thread<'a>(
                 )
                 .await?;
         }
+    }
+    for race in races.iter_mut() {
+        race.scheduling_thread = Some(thread_id);
+        sqlx::query("UPDATE races SET resolved_settings = jsonb_set(resolved_settings, '{announced}', 'true') WHERE id = $1")
+            .bind(i64::from(race.id)).execute(&mut *transaction).await?;
     }
     Ok(transaction)
 }

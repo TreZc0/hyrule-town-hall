@@ -241,6 +241,7 @@ impl OwrEventConfig {
             base_placements: baseline.base_placements.clone(),
             start_inventory: baseline.start_inventory.clone(),
             choices: self.choices.clone(),
+            choice_resolution: self.choice_resolution,
             selected_baseline: Some((key.to_owned(), baseline.label.clone())),
             ..Self::default()
         })

@@ -21,6 +21,8 @@ pub(crate) struct PracticeOption {
 #[cfg_attr(unix, derive(Protocol))]
 pub(crate) struct OwrEventConfig {
     #[serde(default)]
+    pub(crate) choice_resolution: super::choice_resolution::Timing,
+    #[serde(default)]
     pub(crate) base_settings: serde_json::Value,
     #[serde(default)]
     pub(crate) base_placements: serde_json::Value,
@@ -243,6 +245,10 @@ impl SeedGenType {
         draft_required: bool,
     ) -> Option<String> {
         if let Self::Owr { config, .. } | Self::AlttprDoorRando { source: AlttprDrSource::MutualChoices { config }, .. } = self {
+            if let Some(snapshot) = super::choice_resolution::read(db_pool, race.id).await.ok().flatten() {
+                let prefix = config.pending_baseline(race, draft_required).map(|baseline| format!("{baseline}\n")).unwrap_or_default();
+                return Some(format!("{prefix}{}", snapshot.display(is_async)));
+            }
             if let Some(baseline) = config.pending_baseline(race, draft_required) {
                 let choices = super::owr_choices_for_race(db_pool, race).await;
                 let mut text = format!("{baseline}\nPending options: {}", super::owr_choices_description(&choices, config));
@@ -339,15 +345,15 @@ impl SeedGenType {
         )
     }
 
-    pub(crate) async fn settings_display_str<'e, E>(
+    pub(crate) async fn settings_display_str(
         &self,
-        executor: E,
+        executor: &mut sqlx::PgConnection,
         race: &Race,
         labels: &[(&str, String)],
-    ) -> Option<String>
-    where
-        E: sqlx::Executor<'e, Database = sqlx::Postgres>,
-    {
+    ) -> Option<String> {
+        if let Some(snapshot) = super::choice_resolution::read(&mut *executor, race.id).await.ok().flatten() {
+            return Some(snapshot.display(false));
+        }
         let config = match self {
             Self::AlttprDoorRando {
                 source: AlttprDrSource::MutualChoices { config },

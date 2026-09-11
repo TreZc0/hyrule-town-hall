@@ -2304,6 +2304,12 @@ impl Race {
                 .execute(&mut **transaction)
                 .await?;
         }
+        // Resolve creation-time choices for every insertion path, including imported and
+        // additional games. Existing snapshots are validated and never overwritten.
+        let event = self.event(transaction).await.map_err(|error| sqlx::Error::Protocol(error.to_string()))?;
+        if let Some(config) = event.seed_gen_type.as_ref().and_then(racetime_bot::choice_resolution::config) {
+            racetime_bot::choice_resolution::ensure(transaction, self, config, racetime_bot::choice_resolution::Timing::RaceCreation).await?;
+        }
         Ok(())
     }
 
@@ -3674,7 +3680,7 @@ pub(crate) async fn create_race_post(
             transaction = discord_bot::create_scheduling_thread(
                 &*discord_ctx.read().await,
                 transaction,
-                &mut race,
+                std::slice::from_mut(&mut race),
                 1,
             )
             .await?;
@@ -3919,9 +3925,9 @@ pub(crate) async fn create_race_post(
             } else {
                 None
             };
-            let mut scheduling_thread = None;
+            let mut races = Vec::new();
             for game in 1..=value.game_count {
-                let mut race = Race {
+                let race = Race {
                     is_qualifier: value.is_qualifier,
                     qualifier_number: value.is_qualifier.then_some(value.qualifier_number),
                     id: Id::<Races>::new(&mut transaction).await?,
@@ -3968,20 +3974,13 @@ pub(crate) async fn create_race_post(
                     custom_title: None,
                     custom_create_room: true,
                     companion_race_id: None,
-                    scheduling_thread,
+                    scheduling_thread: None,
                 };
-                if game == 1 {
-                    transaction = discord_bot::create_scheduling_thread(
-                        &*discord_ctx.read().await,
-                        transaction,
-                        &mut race,
-                        value.game_count,
-                    )
-                    .await?;
-                    scheduling_thread = race.scheduling_thread;
-                }
-                race.save(&mut transaction).await?;
+                races.push(race);
             }
+            transaction = discord_bot::create_scheduling_thread(
+                &*discord_ctx.read().await, transaction, &mut races, value.game_count,
+            ).await?;
             transaction.commit().await?;
             RedirectOrContent::Redirect(Redirect::to(uri!(event::races(
                 event.series,
@@ -5575,27 +5574,17 @@ async fn import_race(
         return Ok(());
     }
     let game_count = race.game.unwrap_or(1);
-    let mut scheduling_thread = None;
+    let mut races = Vec::new();
     for game in 1..=game_count {
-        let mut race = Race {
+        races.push(Race {
             id: Id::<Races>::new(&mut transaction).await?,
             game: (game_count > 1).then_some(game),
             draft: race.draft.as_ref().filter(|_| game == 1).cloned(),
-            scheduling_thread,
+            scheduling_thread: None,
             ..race.clone()
-        };
-        if game == 1 {
-            transaction = discord_bot::create_scheduling_thread(
-                discord_ctx,
-                transaction,
-                &mut race,
-                game_count,
-            )
-            .await?;
-            scheduling_thread = race.scheduling_thread;
-        }
-        race.save(&mut transaction).await?;
+        });
     }
+    transaction = discord_bot::create_scheduling_thread(discord_ctx, transaction, &mut races, game_count).await?;
     transaction.commit().await?;
     Ok(())
 }

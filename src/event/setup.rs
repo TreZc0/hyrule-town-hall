@@ -292,20 +292,6 @@ async fn setup_form(
                             label(class = "help") : " (Restreamers can use !restream when they arrive to disable auto-start until the restream is ready)";
                         });
 
-                        : form_field("rando_version_json", &mut errors, html! {
-                            : help::label("rando_version_json", "Randomizer Version (JSON)");
-                            textarea(id = "rando_version_json", name = "rando_version_json", rows = "8", style = "font-family: monospace; width: 100%; max-width: 800px;") {
-                                : ctx.field_value("rando_version_json").unwrap_or(&rando_version_string);
-                            }
-                            p(class = "help") : "Randomizer version config as JSON. Leave empty to clear.";
-                            details {
-                                summary : "Examples";
-                                pre(style = "font-size: 13px; background: #2d2d2d; color: #f8f8f2; padding: 12px; border-radius: 4px; overflow-x: auto;") {
-                                    : "// TWW randomizer build:\n{\n  \"type\": \"tww\",\n  \"identifier\": \"dev_tanjo3.1.10.5\",\n  \"githubUrl\": \"https://github.com/tanjo3/wwrando/releases/tag/dev_tanjo3.1.10.5\",\n  \"trackerLink\": \"wooferzfg.me/tww-rando-tracker/miniblins\"\n}\n\n// OoTR pinned version:\n{ \"type\": \"pinned\", \"version\": \"8.3.16 f.1\" }\n\n// OoTR latest branch:\n{ \"type\": \"latest\", \"branch\": \"dev\" }";
-                                }
-                            }
-                        });
-
                         h3 : "Additional Settings";
 
                         : form_field("enter_url", &mut errors, html! {
@@ -555,6 +541,20 @@ async fn setup_form(
 
                         h3 : "Seed Generation";
 
+                        : form_field("rando_version_json", &mut errors, html! {
+                            : help::label("rando_version_json", "Randomizer Version (JSON)");
+                            textarea(id = "rando_version_json", name = "rando_version_json", rows = "8", style = "font-family: monospace; width: 100%; max-width: 800px;") {
+                                : ctx.field_value("rando_version_json").unwrap_or(&rando_version_string);
+                            }
+                            p(class = "help") : "Randomizer version config as JSON. Leave empty to clear.";
+                            details {
+                                summary : "Examples";
+                                pre(style = "font-size: 13px; background: #2d2d2d; color: #f8f8f2; padding: 12px; border-radius: 4px; overflow-x: auto;") {
+                                    : "// TWW randomizer build:\n{\n  \"type\": \"tww\",\n  \"identifier\": \"dev_tanjo3.1.10.5\",\n  \"githubUrl\": \"https://github.com/tanjo3/wwrando/releases/tag/dev_tanjo3.1.10.5\",\n  \"trackerLink\": \"wooferzfg.me/tww-rando-tracker/miniblins\"\n}\n\n// OoTR pinned version:\n{ \"type\": \"pinned\", \"version\": \"8.3.16 f.1\" }\n\n// OoTR latest branch:\n{ \"type\": \"latest\", \"branch\": \"dev\" }";
+                                }
+                            }
+                        });
+
                         : form_field("seed_gen_type", &mut errors, html! {
                             : help::label("seed_gen_type", "Seed Gen Type");
                             select(id = "seed_gen_type", name = "seed_gen_type", style = "width: 100%; max-width: 600px;") {
@@ -575,6 +575,16 @@ async fn setup_form(
                             }
                             label(class = "help") : "Choose OWR (regular build) for /opt/owr or OWR (tournament build) for /opt/owr_tourney. The selection applies to this event's live, async and practice seeds. Both accept the same JSON structure; use settings supported by the installed build.";
                             p(class = "help") : "For pooled qualifiers, configure each mode's generator and baseline settings on the Qualifiers page after creating the event. Existing pooled OWR modes also use the tournament build. A branch name in Seed Config JSON does not switch installations.";
+                        });
+
+                        : form_field("choice_resolution", &mut errors, html! {
+                            label(for = "choice_resolution") : "Resolve random player choices";
+                            select(id = "choice_resolution", name = "choice_resolution") {
+                                @for (value, label) in [("race_creation", "On race creation / import"), ("room_opening", "On room opening"), ("seed_rolling", "On seed rolling")] {
+                                    option(value = value, selected? = ctx.field_value("choice_resolution").unwrap_or(seed_config_json.as_ref().and_then(|config| config.get("choice_resolution")).and_then(|value| value.as_str()).unwrap_or("seed_rolling")) == value) : label;
+                                }
+                            }
+                            p(class = "help") : "For OWR and Door Rando mutual choices. Each game's result is saved and reused for all rooms and seed rerolls. Room opening falls back to seed rolling when there is no room. This selector sets choice_resolution in Seed Config JSON; changing it affects only unresolved races.";
                         });
 
                         : form_field("seed_config", &mut errors, html! {
@@ -1036,6 +1046,7 @@ pub(crate) struct SetupForm {
     is_live_event: bool,
     seed_gen_type: Option<String>,
     seed_config: Option<String>,
+    choice_resolution: Option<String>,
 }
 
 #[rocket::post("/event/<series>/<event>/setup", data = "<form>")]
@@ -1373,7 +1384,7 @@ pub(crate) async fn post(
                 None
             };
 
-            let seed_config_json: Option<serde_json::Value> = if let Some(ref sc_str) =
+            let mut seed_config_json: Option<serde_json::Value> = if let Some(ref sc_str) =
                 value.seed_config
             {
                 if sc_str.trim().is_empty() {
@@ -1393,6 +1404,12 @@ pub(crate) async fn post(
             } else {
                 None
             };
+
+            if let Some(timing) = value.choice_resolution.as_deref() {
+                if let Some(config) = seed_config_json.as_mut().and_then(serde_json::Value::as_object_mut) {
+                    config.insert("choice_resolution".into(), json!(timing));
+                }
+            }
 
             let start_delay_open: Option<i32> = if let Some(ref sdo_str) = value.start_delay_open {
                 if sdo_str.trim().is_empty() {
@@ -2469,6 +2486,16 @@ fn create_form_content(
                             p(class = "help") : "For pooled qualifiers, configure each mode's generator and baseline settings on the Qualifiers page after creating the event. Existing pooled OWR modes also use the tournament build. A branch name in Seed Config JSON does not switch installations.";
                         });
 
+                        : form_field("choice_resolution", &mut errors, html! {
+                            label(for = "choice_resolution") : "Resolve random player choices";
+                            select(id = "choice_resolution", name = "choice_resolution") {
+                                @for (value, label) in [("race_creation", "On race creation / import"), ("room_opening", "On room opening"), ("seed_rolling", "On seed rolling")] {
+                                    option(value = value, selected? = ctx.field_value("choice_resolution").unwrap_or("seed_rolling") == value) : label;
+                                }
+                            }
+                            p(class = "help") : "For OWR and Door Rando mutual choices. Each game's result is saved and reused for all rooms and seed rerolls. Room opening falls back to seed rolling when there is no room. This selector sets choice_resolution in Seed Config JSON; changing it affects only unresolved races.";
+                        });
+
                         : form_field("seed_config", &mut errors, html! {
                             : help::label("seed_config", "Seed Config JSON");
                             textarea(id = "seed_config", name = "seed_config", rows = "6", style = "font-family: monospace; width: 100%; max-width: 800px;") {
@@ -2550,6 +2577,7 @@ pub(crate) struct CreateEventForm {
     is_live_event: bool,
     seed_gen_type: Option<String>,
     seed_config: Option<String>,
+    choice_resolution: Option<String>,
 }
 
 #[rocket::post("/event/new", data = "<form>")]
@@ -2661,7 +2689,7 @@ pub(crate) async fn create_post(
             };
 
         // Parse seed_config JSON
-        let seed_config_json: Option<serde_json::Value> =
+        let mut seed_config_json: Option<serde_json::Value> =
             if let Some(ref sc_str) = value.seed_config {
                 if sc_str.trim().is_empty() {
                     None
@@ -2680,6 +2708,12 @@ pub(crate) async fn create_post(
             } else {
                 None
             };
+
+        if let Some(timing) = value.choice_resolution.as_deref() {
+            if let Some(config) = seed_config_json.as_mut().and_then(serde_json::Value::as_object_mut) {
+                config.insert("choice_resolution".into(), json!(timing));
+            }
+        }
 
         // Parse start_delay_open
         let start_delay_open: Option<i32> = if let Some(ref sdo_str) = value.start_delay_open {

@@ -43,6 +43,7 @@ pub(crate) mod report;
 
 pub(crate) mod seed_gen_type;
 pub(crate) mod baselines;
+pub(crate) mod choice_resolution;
 
 /// racetime 0.35 removed its own catch-all `Error`/`ResultExt`, since `RaceHandler` now has an
 /// associated `Error` type instead of a single crate-wide one. This reimplements the same
@@ -1514,15 +1515,19 @@ impl GlobalState {
                     Ok(config) => config,
                     Err(error) => return alttpr_dr_error_receiver(RollError::AlttprDe(error)),
                 };
+                let snapshot = match choice_resolution::for_seed(&self.db_pool, &cal_event.race, &config).await {
+                    Ok(snapshot) => snapshot,
+                    Err(error) => return alttpr_dr_error_receiver(RollError::AlttprDe(error.to_string())),
+                };
                 let choices = owr_choices_for_race(&self.db_pool, &cal_event.race).await;
                 let labels: Vec<(String, String)> = event
                     .choice_requirements()
                     .into_iter()
                     .map(|(key, label)| (key.to_owned(), label))
                     .collect();
-                let resolved = resolve_all_choices(&choices, &config);
+                let resolved = snapshot.as_ref().map(|snapshot| snapshot.resolved.clone()).unwrap_or_else(|| resolve_all_choices(&choices, &config));
                 let resolved_randoms_str =
-                    reveal_resolved_randoms_str(&choices, &resolved, &config, &labels);
+                    snapshot.as_ref().and_then(|snapshot| snapshot.reveal(&config, &labels));
                 self.roll_mutual_choices_dr_seed(config.clone(), resolved, resolved_randoms_str)
             }
             SeedGenType::AlttprDoorRando {
@@ -1550,15 +1555,19 @@ impl GlobalState {
                     Ok(config) => config,
                     Err(error) => return alttpr_dr_error_receiver(RollError::AlttprDe(error)),
                 };
+                let snapshot = match choice_resolution::for_seed(&self.db_pool, &cal_event.race, &config).await {
+                    Ok(snapshot) => snapshot,
+                    Err(error) => return alttpr_dr_error_receiver(RollError::AlttprDe(error.to_string())),
+                };
                 let choices = owr_choices_for_race(&self.db_pool, &cal_event.race).await;
                 let labels: Vec<(String, String)> = event
                     .choice_requirements()
                     .into_iter()
                     .map(|(key, label)| (key.to_owned(), label))
                     .collect();
-                let resolved = resolve_all_choices(&choices, &config);
+                let resolved = snapshot.as_ref().map(|snapshot| snapshot.resolved.clone()).unwrap_or_else(|| resolve_all_choices(&choices, &config));
                 let resolved_randoms_str =
-                    reveal_resolved_randoms_str(&choices, &resolved, &config, &labels);
+                    snapshot.as_ref().and_then(|snapshot| snapshot.reveal(&config, &labels));
                 self.roll_owr_seed(resolved, config.clone(), resolved_randoms_str, *build)
             }
             SeedGenType::TWWR { permalink } => {
@@ -3178,7 +3187,7 @@ struct Breaks {
     interval: Duration,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub(crate) enum ChoiceValue {
     #[default]
     Never,
@@ -3630,6 +3639,9 @@ pub(crate) async fn owr_choices_for_race(
     db_pool: &PgPool,
     race: &Race,
 ) -> HashMap<String, ChoiceValue> {
+    if let Some(snapshot) = choice_resolution::read(db_pool, race.id).await.expect("failed to read saved race choices") {
+        return snapshot.values();
+    }
     let team_ids = race.teams().map(|t| t.id).collect_vec();
     let rows = sqlx::query!(
         "SELECT custom_choices FROM teams WHERE id = ANY($1)",
@@ -5226,6 +5238,13 @@ impl Handler {
                 return;
             }
         };
+        let snapshot = match choice_resolution::for_seed(&ctx.global_state.db_pool, &cal_event.race, &config).await {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                self.roll_seed_inner(ctx, Some(delay_until), alttpr_dr_error_receiver(RollError::AlttprDe(error.to_string())), language, article, "seed".into(), false).await;
+                return;
+            }
+        };
         let choices = owr_choices_for_race(&ctx.global_state.db_pool, &cal_event.race).await;
         let seed_options_str = owr_choices_description(&choices, &config);
         let seed_options_str = config.selected_baseline.as_ref().map_or(seed_options_str.clone(), |(_, label)| format!("{label}; {seed_options_str}"));
@@ -5241,9 +5260,9 @@ impl Handler {
                     .collect()
             })
             .unwrap_or_default();
-        let resolved = resolve_all_choices(&choices, &config);
+        let resolved = snapshot.as_ref().map(|snapshot| snapshot.resolved.clone()).unwrap_or_else(|| resolve_all_choices(&choices, &config));
         let resolved_randoms_str =
-            reveal_resolved_randoms_str(&choices, &resolved, &config, &labels);
+            snapshot.as_ref().and_then(|snapshot| snapshot.reveal(&config, &labels));
         let receiver = ctx.global_state.clone().roll_mutual_choices_dr_seed(
             config,
             resolved,
@@ -5303,6 +5322,13 @@ impl Handler {
                 return;
             }
         };
+        let snapshot = match choice_resolution::for_seed(&ctx.global_state.db_pool, &cal_event.race, &config).await {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                self.roll_seed_inner(ctx, Some(delay_until), alttpr_dr_error_receiver(RollError::AlttprDe(error.to_string())), language, article, "seed".into(), false).await;
+                return;
+            }
+        };
         let choices = owr_choices_for_race(&ctx.global_state.db_pool, &cal_event.race).await;
         let description = owr_choices_description(&choices, &config);
         let description = config.selected_baseline.as_ref().map_or(description.clone(), |(_, label)| format!("{label}; {description}"));
@@ -5317,9 +5343,9 @@ impl Handler {
                     .collect()
             })
             .unwrap_or_default();
-        let resolved = resolve_all_choices(&choices, &config);
+        let resolved = snapshot.as_ref().map(|snapshot| snapshot.resolved.clone()).unwrap_or_else(|| resolve_all_choices(&choices, &config));
         let resolved_randoms_str =
-            reveal_resolved_randoms_str(&choices, &resolved, &config, &labels);
+            snapshot.as_ref().and_then(|snapshot| snapshot.reveal(&config, &labels));
         self.roll_seed_inner(
             ctx,
             Some(delay_until),
@@ -6045,6 +6071,11 @@ impl RaceHandler<GlobalState> for Handler {
             let result = {
                 let mut pending_sends = Vec::default();
                 let event = cal_event.race.event(&mut transaction).await.to_racetime()?;
+                if let Some(config) = event.seed_gen_type.as_ref().and_then(choice_resolution::config) {
+                    if let Some(snapshot) = choice_resolution::ensure(&mut transaction, &cal_event.race, config, choice_resolution::Timing::RoomOpening).await.to_racetime()? {
+                        pending_sends.push(PendingSend::Say(snapshot.display(!matches!(cal_event.kind, cal::EventKind::Normal))));
+                    }
+                }
                 let mut entrants = Vec::default();
                 for member in cal_event
                     .racetime_users_to_invite(
@@ -7948,6 +7979,16 @@ pub(crate) async fn create_room(
         .to_racetime()?;
     let is_racetime = matches!(&handle_mode, RaceHandleMode::RaceTime);
     let is_discord = matches!(&handle_mode, RaceHandleMode::Discord);
+    if matches!(&handle_mode, RaceHandleMode::RaceTime | RaceHandleMode::Discord) {
+        if let Some(config) = event.seed_gen_type.as_ref().and_then(choice_resolution::config) {
+            let pool = discord_ctx.data.read().await.get::<crate::discord_bot::DbPool>().expect("database pool missing").clone();
+            choice_resolution::ensure(transaction, &cal_event.race, config, choice_resolution::Timing::RoomOpening).await.to_racetime()?;
+            // Scheduling may already hold this race's row lock. Commit on the same
+            // connection before room creation or the async seed handler starts.
+            let resolved_transaction = mem::replace(transaction, pool.begin().await.to_racetime()?);
+            resolved_transaction.commit().await.to_racetime()?;
+        }
+    }
 
     // Only races which will actually open on racetime.gg need a game mapping
     // and credentials. Informational and Discord-only events must not stop the
@@ -8110,6 +8151,11 @@ pub(crate) async fn create_room(
                             info_user
                         }
                         }
+                    };
+                    let info_user = if let Some(snapshot) = choice_resolution::read(&mut **transaction, cal_event.race.id).await.to_racetime()? {
+                        format!("{info_user}\n{}", snapshot.display(!matches!(cal_event.kind, cal::EventKind::Normal)))
+                    } else {
+                        info_user
                     };
                     let schedule_goal = if let Some(round) = cal_event
                         .race
@@ -8767,6 +8813,7 @@ async fn create_rooms(
         select! {
             () = &mut shutdown => break,
             _ = sleep(Duration::from_secs(30)) => { //TODO exact timing (coordinate with everything that can change the schedule)
+                choice_resolution::announce_pending(&global_state.db_pool, &*global_state.discord_ctx.read().await).await?;
                 // Query for rooms to open while holding the lock
                 let rooms_to_open = lock!(new_room_lock = global_state.new_room_lock; {
                     let mut transaction = global_state.db_pool.begin().await?;
