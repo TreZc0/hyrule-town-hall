@@ -1483,10 +1483,6 @@ p.error {
 
 /* Organizer qualifier forms: readable sections, explicit labels and shared help. */
 .qualifier-admin {
-  max-width: 1200px;
-  margin-inline: auto;
-  padding: clamp(1rem, 3vw, 2rem);
-  border-radius: 0.75rem;
   overflow-wrap: anywhere;
 }
 .qualifier-admin h2 { margin-top: 2rem; }
@@ -1495,7 +1491,6 @@ p.error {
   margin: 1rem 0;
   padding: 1.25rem;
   border-color: var(--border);
-  border-radius: 0.6rem;
 }
 .qualifier-admin fieldset {
   min-width: 0;
@@ -1585,7 +1580,7 @@ p.error {
 .qualifier-checkbox > .setting-label { display: inline; }
 .qualifier-checkbox > .setting-help { position: fixed; }
 .qualifier-activation { margin-top: 2rem; padding: 1rem; border-radius: 0.5rem; background: var(--bg-secondary); }
-.qualifier-mode-card, .qualifier-pool-card { margin-top: 1.25rem; padding: 1.25rem; border: 1px solid var(--border); border-radius: 0.6rem; background: var(--bg-secondary); }
+.qualifier-mode-card, .qualifier-pool-card { margin-top: 1.25rem; padding: 1.25rem; border: 1px solid var(--border); background: var(--bg-secondary); }
 .qualifier-mode-card > summary { cursor: pointer; font-weight: 700; font-size: 1.1rem; padding-block: 0.25rem; }
 .qualifier-mode-card[open] > summary { margin-bottom: 1rem; }
 .qualifier-mode-card > form, .qualifier-pool-card form { border: 0; margin-bottom: 0; }
@@ -1598,7 +1593,6 @@ p.error {
 .qualifier-admin .setting-help pre { white-space: pre; }
 @media (max-width: 700px) {
   .qualifier-grid { grid-template-columns: minmax(0, 1fr); }
-  .qualifier-admin { padding: 0.85rem; }
   .qualifier-admin form, .qualifier-mode-card, .qualifier-pool-card, .qualifier-disclosure { padding: 0.85rem; }
   .qualifier-admin input[type="submit"] { width: 100%; justify-content: center; }
   .qualifier-jump { padding: 0.4rem; gap: 0.2rem; }
