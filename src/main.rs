@@ -336,8 +336,7 @@ async fn main(Args { port, subcommand }: Args) -> Result<(), Error> {
             .connect_with(db_options)
             .await?;
         let seed_metadata = Arc::default();
-        let practice_seeds: event::PracticeSeeds =
-            Arc::new(tokio::sync::RwLock::new(HashMap::default()));
+        let practice_seeds: event::PracticeSeeds = Arc::default();
         let race_import_jobs: cal::RaceImportJobs =
             Arc::new(tokio::sync::RwLock::new(HashMap::default()));
         let ootr_api_client = Arc::new(ootr_web::ApiClient::new(

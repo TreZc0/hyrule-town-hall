@@ -18,8 +18,11 @@ pub(crate) mod configure;
 pub(crate) mod pooled_qualifiers;
 pub(crate) mod scoring;
 
-pub(crate) type PracticeSeeds = Arc<tokio::sync::RwLock<HashMap<Uuid, PracticeSeedStatus>>>;
+mod practice;
+pub(crate) use practice::PracticeSeeds;
+use practice::PracticeSeedStore;
 
+#[derive(Clone)]
 pub(crate) enum PracticeSeedResult {
     Permalink {
         permalink: String,
@@ -38,6 +41,7 @@ pub(crate) enum PracticeSeedResult {
     },
 }
 
+#[derive(Clone)]
 pub(crate) enum PracticeSeedStatus {
     Generating,
     Done(PracticeSeedResult),
@@ -1070,7 +1074,7 @@ impl<'a> Data<'a> {
                         Some(SeedGenType::Owr { .. }) => true,
                         Some(SeedGenType::AlttprDoorRando { source: AlttprDrSource::Boothisman, practice_modes, .. }) => !practice_modes.is_empty(),
                         Some(SeedGenType::AlttprDoorRando { source: AlttprDrSource::MutualChoices { .. }, .. }) => true,
-                        Some(SeedGenType::AlttprAvianart { practice_presets, .. }) => !practice_presets.is_empty(),
+                        Some(generator @ SeedGenType::AlttprAvianart { .. }) => !practice::avianart_presets(generator).is_empty(),
                         Some(SeedGenType::TWWR { .. }) => self.twwr_permalink().is_some(),
                         _ => is_ootr && self.single_settings.is_some(),
                     };
@@ -5061,21 +5065,19 @@ fn practice_baseline_field(config: &racetime_bot::seed_gen_type::OwrEventConfig)
 #[rocket::get("/event/<series>/<event>/practice")]
 pub(crate) async fn practice_seed(
     pool: &State<PgPool>,
-    global_state: &State<Arc<racetime_bot::GlobalState>>,
-    me: User,
+    me: Option<User>,
     uri: Origin<'_>,
     csrf: Option<CsrfToken>,
     series: Series,
     event: &str,
 ) -> Result<RedirectOrContent, StatusOrError<Error>> {
-    let _ = global_state; // only needed by practice_seed_post; included to keep signature symmetric
     let mut transaction = pool.begin().await?;
     let data = Data::new(&mut transaction, series, event)
         .await?
         .ok_or(StatusOrError::Status(Status::NotFound))?;
     let is_ootr = matches!(data.seed_gen_type, Some(SeedGenType::OoTR));
 
-    let me_opt = Some(me);
+    let me_opt = me;
     let header = data
         .header(&mut transaction, me_opt.as_ref(), Tab::Practice, false)
         .await?;
@@ -5202,10 +5204,8 @@ pub(crate) async fn practice_seed(
                 "Generate Practice Seed",
             )
         }
-        Some(SeedGenType::AlttprAvianart {
-            practice_presets, ..
-        }) if !practice_presets.is_empty() => {
-            let presets = practice_presets.clone();
+        Some(generator @ SeedGenType::AlttprAvianart { .. }) if !practice::avianart_presets(generator).is_empty() => {
+            let presets = practice::avianart_presets(generator);
             full_form(
                 form_uri,
                 csrf.as_ref(),
@@ -5213,7 +5213,7 @@ pub(crate) async fn practice_seed(
                     fieldset {
                         legend : "Preset";
                         select(name="preset", required) {
-                            option(value="") : "Select a preset…";
+                            @if presets.len() > 1 { option(value="") : "Select a preset…"; }
                             @for p in &presets {
                                 option(value=p.value.as_str()) : p.label.as_str();
                             }
@@ -5234,6 +5234,8 @@ pub(crate) async fn practice_seed(
         : header;
         article {
             h2 : "Practice Seed";
+            p : "Anyone can generate a practice seed; no account or event entry is required.";
+            p : practice::RETENTION_NOTICE;
             : form_content;
         }
     };
@@ -5259,16 +5261,15 @@ pub(crate) async fn practice_seed_post(
     global_state: &State<Arc<racetime_bot::GlobalState>>,
     practice_seeds: &State<PracticeSeeds>,
     ootr_api_client: &State<Arc<ootr_web::ApiClient>>,
-    me: User,
+    me: Option<User>,
     csrf: Option<CsrfToken>,
     series: Series,
     event: &str,
     form: Form<Contextual<'_, PracticeSeedForm>>,
 ) -> Result<Redirect, StatusOrError<Error>> {
-    let _ = me;
     let mut form = form.into_inner();
     form.verify(&csrf);
-    let form = form
+    let mut form = form
         .value
         .ok_or(StatusOrError::Status(Status::UnprocessableEntity))?;
 
@@ -5279,18 +5280,18 @@ pub(crate) async fn practice_seed_post(
     let mut seed_gen_type = data.seed_gen_type.clone();
     let is_ootr = matches!(seed_gen_type, Some(SeedGenType::OoTR));
 
-    let job_id = Uuid::new_v4();
+    practice::validate_form(
+        seed_gen_type.as_ref().ok_or(StatusOrError::Status(Status::NotFound))?,
+        &mut form,
+    ).map_err(StatusOrError::Status)?;
     let seeds = Arc::clone(practice_seeds.inner());
-    seeds
-        .write()
-        .await
-        .insert(job_id, PracticeSeedStatus::Generating);
+    let job_id = PracticeSeedStore::start(&seeds, series, event, me.as_ref().map(|user| user.display_name().to_owned())).await;
 
     if let Some(SeedGenType::Owr { config, .. } | SeedGenType::AlttprDoorRando { source: AlttprDrSource::MutualChoices { config }, .. }) = &mut seed_gen_type {
         match config.select(form.baseline.as_deref()) {
             Ok(selected) => *config = selected,
             Err(error) => {
-                seeds.write().await.insert(job_id, PracticeSeedStatus::Error(error));
+                seeds.write().await.finish(job_id, PracticeSeedStatus::Error(error));
                 return Ok(Redirect::to(uri!(practice_seed_status(series, event, job_id.to_string()))));
             }
         }
@@ -5323,7 +5324,7 @@ pub(crate) async fn practice_seed_post(
             label: "View Seed on OoT Randomizer".to_string(),
             seed_hash: None,
         });
-        seeds.write().await.insert(job_id, status);
+        seeds.write().await.finish(job_id, status);
         let job_id_str = job_id.to_string();
         return Ok(Redirect::to(uri!(practice_seed_status(
             series,
@@ -5424,18 +5425,8 @@ pub(crate) async fn practice_seed_post(
                 .preset
                 .filter(|p| !p.is_empty())
                 .ok_or(StatusOrError::Status(Status::UnprocessableEntity))?;
-            let result = Arc::clone(&*global_state)
-                .practice_avianart_seed(preset)
-                .await;
-            let status = match result {
-                Ok(hash) => PracticeSeedStatus::Done(PracticeSeedResult::SeedLink {
-                    url: format!("https://avianart.games/perm/{hash}"),
-                    label: "Open Seed on Avianart".to_string(),
-                    seed_hash: None,
-                }),
-                Err(e) => PracticeSeedStatus::Error(e.to_string()),
-            };
-            seeds.write().await.insert(job_id, status);
+            let rx = Arc::clone(&*global_state).roll_avianart_seed(preset);
+            racetime_bot::start_practice_seed_roll(Arc::clone(&seeds), job_id, rx, vec![]);
         }
         _ => return Err(StatusOrError::Status(Status::NotFound)),
     }
@@ -5459,160 +5450,8 @@ pub(crate) async fn practice_seed_status(
     job_id: &str,
 ) -> Result<RedirectOrContent, StatusOrError<Error>> {
     let job_id = Uuid::parse_str(job_id).map_err(|_| StatusOrError::Status(Status::NotFound))?;
-    let seeds = Arc::clone(practice_seeds.inner());
-    let status = seeds.read().await.get(&job_id).map(|s| match s {
-        PracticeSeedStatus::Generating => 0u8,
-        PracticeSeedStatus::Done(_) => 1,
-        PracticeSeedStatus::Error(_) => 2,
-    });
-    let status_tag = status.ok_or(StatusOrError::Status(Status::NotFound))?;
-
-    if status_tag == 1 {
-        // Done — show landing page
-        let done = seeds.write().await.remove(&job_id);
-        return Ok(match done {
-            Some(PracticeSeedStatus::Done(PracticeSeedResult::Permalink {
-                permalink,
-                seed_hash,
-            })) => {
-                let mut transaction = pool.begin().await?;
-                let data = Data::new(&mut transaction, series, event)
-                    .await?
-                    .ok_or(StatusOrError::Status(Status::NotFound))?;
-                let header = data
-                    .header(&mut transaction, me.as_ref(), Tab::Practice, false)
-                    .await?;
-                let chests = data.chests().await?;
-                let content = html! {
-                    : header;
-                    article {
-                        h2 : "Practice Seed Ready";
-                        p {
-                            strong : "Permalink: ";
-                            code : &permalink;
-                        }
-                        @if !seed_hash.is_empty() {
-                            p {
-                                strong : "Seed Hash: ";
-                                code : &seed_hash;
-                            }
-                        }
-                    }
-                };
-                RedirectOrContent::Content(
-                    page(
-                        transaction,
-                        &me,
-                        &uri,
-                        PageStyle {
-                            chests,
-                            ..PageStyle::default()
-                        },
-                        "Practice Seed Ready",
-                        content,
-                    )
-                    .await?,
-                )
-            }
-            Some(PracticeSeedStatus::Done(PracticeSeedResult::PatcherLink {
-                url,
-                seed_hash,
-                selected_choices,
-                settings_summary,
-            })) => {
-                let mut transaction = pool.begin().await?;
-                let data = Data::new(&mut transaction, series, event)
-                    .await?
-                    .ok_or(StatusOrError::Status(Status::NotFound))?;
-                let header = data
-                    .header(&mut transaction, me.as_ref(), Tab::Practice, false)
-                    .await?;
-                let chests = data.chests().await?;
-                let content = html! {
-                    : header;
-                    article {
-                        h2 : "Practice Seed Ready";
-                        p {
-                            a(href = &url, target = "_blank") : "Open in Patcher";
-                        }
-                        @if let Some(hash) = seed_hash {
-                            p {
-                                strong : "Seed Hash: ";
-                                code : hash.join(" ");
-                            }
-                        }
-                        @if let Some(summary) = settings_summary {
-                            @for line in summary.lines() { p : line; }
-                        } else if !selected_choices.is_empty() {
-                            p {
-                                strong : "Selected Options: ";
-                                : selected_choices.join(", ");
-                            }
-                        }
-                    }
-                };
-                RedirectOrContent::Content(
-                    page(
-                        transaction,
-                        &me,
-                        &uri,
-                        PageStyle {
-                            chests,
-                            ..PageStyle::default()
-                        },
-                        "Practice Seed Ready",
-                        content,
-                    )
-                    .await?,
-                )
-            }
-            Some(PracticeSeedStatus::Done(PracticeSeedResult::SeedLink {
-                url,
-                label,
-                seed_hash,
-            })) => {
-                let mut transaction = pool.begin().await?;
-                let data = Data::new(&mut transaction, series, event)
-                    .await?
-                    .ok_or(StatusOrError::Status(Status::NotFound))?;
-                let header = data
-                    .header(&mut transaction, me.as_ref(), Tab::Practice, false)
-                    .await?;
-                let chests = data.chests().await?;
-                let content = html! {
-                    : header;
-                    article {
-                        h2 : "Practice Seed Ready";
-                        p {
-                            a(href = &url, target = "_blank") : label.as_str();
-                        }
-                        @if let Some(hash) = seed_hash {
-                            p {
-                                strong : "Seed Hash: ";
-                                code : hash.join(" ");
-                            }
-                        }
-                    }
-                };
-                RedirectOrContent::Content(
-                    page(
-                        transaction,
-                        &me,
-                        &uri,
-                        PageStyle {
-                            chests,
-                            ..PageStyle::default()
-                        },
-                        "Practice Seed Ready",
-                        content,
-                    )
-                    .await?,
-                )
-            }
-            _ => return Err(StatusOrError::Status(Status::InternalServerError)),
-        });
-    }
-
+    let job = practice_seeds.read().await.get(job_id, series, event)
+        .ok_or(StatusOrError::Status(Status::NotFound))?;
     let mut transaction = pool.begin().await?;
     let data = Data::new(&mut transaction, series, event)
         .await?
@@ -5621,51 +5460,64 @@ pub(crate) async fn practice_seed_status(
         .header(&mut transaction, me.as_ref(), Tab::Practice, false)
         .await?;
     let chests = data.chests().await?;
-
-    let content = if status_tag == 2 {
-        let error_msg = seeds
-            .read()
-            .await
-            .get(&job_id)
-            .and_then(|s| match s {
-                PracticeSeedStatus::Error(e) => Some(e.clone()),
-                _ => None,
-            })
-            .unwrap_or_else(|| "Unknown error".to_string());
-        html! {
-            : header;
-            article {
-                h2 : "Practice Seed Failed";
-                p : &error_msg;
-                a(href = uri!(practice_seed(series, event)).to_string()) : "Try again";
+    let game_id = data.game(&mut transaction).await?.map(|game| game.id);
+    let link = format!("{}{}", base_uri(), uri!(practice_seed_status(series, event, job_id.to_string())));
+    let content = html! {
+        : header;
+        article {
+            @match &job.status {
+                PracticeSeedStatus::Done(result) => {
+                    h2 : "Practice Seed Ready";
+                    @match result {
+                        PracticeSeedResult::Permalink { permalink, seed_hash } => {
+                            p { strong : "Permalink: "; code : &permalink; }
+                            @if !seed_hash.is_empty() {
+                                p { strong : "Seed Hash: "; code : &seed_hash; }
+                            }
+                        }
+                        PracticeSeedResult::PatcherLink { url, seed_hash, selected_choices, settings_summary } => {
+                            p { a(href = &url, target = "_blank") : "Open in Patcher"; }
+                            @if let Some(hash) = seed_hash {
+                                p { strong : "Seed Hash: "; span(class = "hash") : seed::hash_icons(&mut transaction, game_id, hash).await?; }
+                            }
+                            @if let Some(summary) = settings_summary {
+                                @for line in summary.lines() { p : line; }
+                            } else if !selected_choices.is_empty() {
+                                p { strong : "Selected Options: "; : selected_choices.join(", "); }
+                            }
+                        }
+                        PracticeSeedResult::SeedLink { url, label, seed_hash } => {
+                            p { a(href = &url, target = "_blank") : label.as_str(); }
+                            @if let Some(hash) = seed_hash {
+                                p { strong : "Seed Hash: "; span(class = "hash") : seed::hash_icons(&mut transaction, game_id, hash).await?; }
+                            }
+                        }
+                    }
+                    p { a(href = uri!(practice_seed(series, event))) : "Generate another seed"; }
+                }
+                PracticeSeedStatus::Error(error) => {
+                    h2 : "Practice Seed Failed";
+                    p : &error;
+                    a(href = uri!(practice_seed(series, event))) : "Try again";
+                }
+                PracticeSeedStatus::Generating => {
+                    script : "setTimeout(function(){ location.reload(); }, 2000);";
+                    h2 : "Generating Practice Seed…";
+                    p : "Your practice seed is being generated. This page will refresh automatically.";
+                }
             }
-        }
-    } else {
-        html! {
-            : header;
-            script {
-                : "setTimeout(function(){ location.reload(); }, 2000);";
-            }
-            article {
-                h2 : "Generating Practice Seed…";
-                p : "Your practice seed is being generated. This page will refresh automatically.";
-            }
+            : job.details(&link);
         }
     };
-
     Ok(RedirectOrContent::Content(
         page(
             transaction,
             &me,
             &uri,
-            PageStyle {
-                chests,
-                ..PageStyle::default()
-            },
+            PageStyle { chests, ..PageStyle::default() },
             "Practice Seed",
             content,
-        )
-        .await?,
+        ).await?,
     ))
 }
 

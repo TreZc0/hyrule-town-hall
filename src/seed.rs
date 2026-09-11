@@ -499,6 +499,31 @@ enum SpoilerStatus {
     NotFound,
 }
 
+/// Render a file-select hash using the game's icon set, preserving unknown symbols as text.
+pub(crate) async fn hash_icons(
+    transaction: &mut Transaction<'_, Postgres>,
+    game_id: Option<i32>,
+    hash: &[String],
+) -> Result<RawHtml<String>, sqlx::Error> {
+    let icons = if let Some(game_id) = game_id {
+        HashIconData::all_for_game(transaction, game_id).await?
+    } else {
+        Vec::new()
+    };
+    // Providers differ in spacing and capitalization (e.g. "Bug Net", "Bugnet", "BugNet").
+    let normalize = |name: &str| name.split_whitespace().collect::<String>().to_lowercase();
+    Ok(html! {
+        @for (index, name) in hash.iter().enumerate() {
+            @if index > 0 { : " "; }
+            @if let Some(icon) = icons.iter().find(|icon| normalize(&icon.name) == normalize(name)) {
+                img(class = "hash-icon", alt = name, title = name, src = format!("/static/hash-icon/{}", icon.file_name));
+            } else {
+                code : name;
+            }
+        }
+    })
+}
+
 pub(crate) async fn table_cell(
     now: DateTime<Utc>,
     seed: &Data,
@@ -614,13 +639,7 @@ pub(crate) async fn table_cell(
                 }
             }
             div(class = "hash") {
-                @for hash_icon_name in file_hash {
-                    @if let Some(hash_icon_data) = HashIconData::by_name(transaction, game_id, &hash_icon_name).await? {
-                        @let file_name = &hash_icon_data.file_name;
-                        @let src = format!("/static/hash-icon/{}", file_name);
-                        img(class = "hash-icon", alt = hash_icon_name, src = src);
-                    }
-                }
+                : hash_icons(transaction, Some(game_id), &file_hash).await?;
             }
         },
         (Some(file_hash), Some(seed_links), draft_mode) => html! {
@@ -631,13 +650,7 @@ pub(crate) async fn table_cell(
                     }
                 }
                 div(class = "hash") {
-                    @for hash_icon_name in file_hash {
-                        @if let Some(hash_icon_data) = HashIconData::by_name(transaction, game_id, &hash_icon_name).await? {
-                            @let file_name = &hash_icon_data.file_name;
-                            @let src = format!("/static/hash-icon/{}", file_name);
-                            img(class = "hash-icon", alt = hash_icon_name, src = src);
-                        }
-                    }
+                    : hash_icons(transaction, Some(game_id), &file_hash).await?;
                 }
                 div(class = "seed-links") : seed_links;
             }

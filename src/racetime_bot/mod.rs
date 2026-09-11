@@ -1950,15 +1950,6 @@ impl GlobalState {
         }));
         update_rx
     }
-
-    pub(crate) async fn practice_avianart_seed(
-        self: Arc<Self>,
-        preset: String,
-    ) -> Result<String, avianart::AvianartError> {
-        let client =
-            avianart::AvianartClient::new(self.avianart_api_key.clone(), self.http_client.clone());
-        client.generate_seed(&preset).await
-    }
 }
 
 pub(crate) fn start_practice_seed_roll(
@@ -2024,7 +2015,7 @@ pub(crate) fn start_practice_seed_roll(
                 }
             }
         };
-        seeds.write().await.insert(job_id, status);
+        seeds.write().await.finish(job_id, status);
     });
 }
 

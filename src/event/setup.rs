@@ -57,7 +57,7 @@ fn seed_config_help() -> RawHtml<String> {
                 ("ALTTPR Door Rando — mystery weights", "Select alttpr_dr. Replace the URL with your event's accessible mystery weights YAML.", json!({
                     "source": "mystery_pool", "mystery_weights_url": "https://example.com/event-weights.yaml"
                 })),
-                ("ALTTPR Avianart — default and practice presets", "Select alttpr_avianart. preset is the default when no draft supplies one. practice_presets lists available practice options. Pooled modes require a default preset.", json!({
+                ("ALTTPR Avianart — default and practice presets", "Select alttpr_avianart. preset is the default when no draft supplies one. practice_presets optionally lists available practice options; otherwise practice uses preset. Pooled modes require a default preset.", json!({
                     "preset": "casualboots", "practice_presets": [{"value": "casualboots", "label": "Casual Boots"}, {"value": "open", "label": "Open"}]
                 })),
                 ("TWWR — settings permalink", "Select twwr and paste the settings permalink exported by your randomizer. Replace the placeholder before saving.", json!({
