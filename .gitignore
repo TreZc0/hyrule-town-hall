@@ -5,7 +5,4 @@ target
 .claude
 localdocs
 cfg/hth.json
-tmp
 .tmp
-docs/
-tools
