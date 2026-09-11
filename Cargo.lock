@@ -4757,6 +4757,7 @@ dependencies = [
  "log",
  "log-lock",
  "mhstatus",
+ "mimalloc",
  "noisy_float",
  "nonempty-collections",
  "ootr-utils",

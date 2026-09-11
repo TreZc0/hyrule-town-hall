@@ -1,7 +1,7 @@
 #![recursion_limit = "512"]
 
-//#[global_allocator]
-//static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc; // fails to compile on Ubuntu
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 use {
     crate::prelude::*,

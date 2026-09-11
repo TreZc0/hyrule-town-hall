@@ -61,7 +61,7 @@ lazy-regex = "3"
 log = "0.4"
 log-lock = { git = "https://github.com/fenhl/log-lock" }
 mhstatus = { git = "https://github.com/midoshouse/status.midos.house" }
-#mimalloc = "0.1.43" # fails to compile on Ubuntu
+mimalloc = "0.1"
 noisy_float = "0.2"
 nonempty-collections = "1"
 ootr-utils = { git = "https://github.com/midoshouse/rust-ootr-utils", features = ["sqlx"] }

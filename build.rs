@@ -2,7 +2,7 @@ use {
     git2::{Oid, Repository},
     semver::Version,
     std::{
-        collections::HashMap,
+        collections::BTreeMap,
         env,
         fs::{self, File},
         io::prelude::*,
@@ -19,7 +19,7 @@ enum Error {
 }
 
 fn check_static_file(
-    cache: &mut HashMap<PathBuf, Oid>,
+    cache: &mut BTreeMap<PathBuf, Oid>,
     repo: &Repository,
     relative_path: &Path,
     path: PathBuf,
@@ -47,7 +47,7 @@ fn check_static_file(
 }
 
 fn check_static_dir(
-    cache: &mut HashMap<PathBuf, Oid>,
+    cache: &mut BTreeMap<PathBuf, Oid>,
     repo: &Repository,
     relative_path: &Path,
     path: PathBuf,
@@ -81,7 +81,7 @@ fn check_static_dir(
 fn main() -> Result<(), Error> {
     println!("cargo:rerun-if-changed=nonexistent.foo");
     let static_dir = Path::new("assets").join("static");
-    let mut cache = HashMap::default();
+    let mut cache = BTreeMap::default(); // Keep generated code ordered consistently across builds.
     let repo = Repository::open(&env::var_os("CARGO_MANIFEST_DIR").unwrap())?;
     for entry in fs::read_dir(&static_dir)? {
         let entry = entry?;
