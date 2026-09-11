@@ -387,8 +387,9 @@ struct RequirementStatus {
 }
 
 enum RequirementDisplay {
-    Section(RawHtml<String>),
+    Content(RawHtml<String>),
     Requirement {
+        is_choice: bool,
         is_checked: Option<bool>,
         html_content: Box<dyn FnOnce(&mut Vec<&form::Error<'_>>) -> RawHtml<String> + Send>,
     },
@@ -814,59 +815,39 @@ impl Requirement {
             }
             Self::BooleanChoice {
                 key, label, prompt, ..
-            } => {
-                let key = key.clone();
-                let display = prompt.as_ref().unwrap_or(label).clone();
-                let yes_checked = defaults
-                    .field_value(&format!("custom_choices[{key}]"))
-                    .is_some_and(|value| value == "yes");
-                let no_checked = defaults
-                    .field_value(&format!("custom_choices[{key}]"))
-                    .is_some_and(|value| value == "no");
-                RequirementStatus {
-                    blocks_submit: false,
-                    html_content: Box::new(move |errors| {
-                        html! {
-                            : form_field(&format!("custom_choices[{key}]"), errors, html! {
-                                label(for = &format!("custom_choices[{key}]")) : display;
-                                br;
-                                input(id = &format!("custom_choices[{key}]-yes"), type = "radio", name = &format!("custom_choices[{key}]"), value = "yes", checked? = yes_checked);
-                                label(for = &format!("custom_choices[{key}]-yes")) : "Yes";
-                                input(id = &format!("custom_choices[{key}]-no"), type = "radio", name = &format!("custom_choices[{key}]"), value = "no", checked? = no_checked);
-                                label(for = &format!("custom_choices[{key}]-no")) : "No";
-                            });
-                        }
-                    }),
-                }
             }
-            Self::RadioChoice {
+            | Self::RadioChoice {
                 key, label, prompt, ..
             } => {
-                let key = key.clone();
+                let field_name = format!("custom_choices[{key}]");
                 let display = prompt.as_ref().unwrap_or(label).clone();
-                let never_checked = defaults
-                    .field_value(&format!("custom_choices[{key}]"))
-                    .is_some_and(|value| value == "never");
-                let random_checked = defaults
-                    .field_value(&format!("custom_choices[{key}]"))
-                    .is_some_and(|value| value == "random");
-                let always_checked = defaults
-                    .field_value(&format!("custom_choices[{key}]"))
-                    .is_some_and(|value| value == "always");
+                let selected = defaults.field_value(&field_name).map(str::to_owned);
+                let options: &[(&str, &str)] = if matches!(self, Self::BooleanChoice { .. }) {
+                    &[("yes", "Yes"), ("no", "No")]
+                } else {
+                    &[
+                        ("never", "Never"),
+                        ("random", "Random"),
+                        ("always", "Always"),
+                    ]
+                };
                 RequirementStatus {
                     blocks_submit: false,
                     html_content: Box::new(move |errors| {
                         html! {
-                            : form_field(&format!("custom_choices[{key}]"), errors, html! {
-                                label(for = &format!("custom_choices[{key}]")) : display;
-                                br;
-                                input(id = &format!("custom_choices[{key}]-never"), type = "radio", name = &format!("custom_choices[{key}]"), value = "never", checked? = never_checked);
-                                label(for = &format!("custom_choices[{key}]-never")) : "Never";
-                                input(id = &format!("custom_choices[{key}]-random"), type = "radio", name = &format!("custom_choices[{key}]"), value = "random", checked? = random_checked);
-                                label(for = &format!("custom_choices[{key}]-random")) : "Random";
-                                input(id = &format!("custom_choices[{key}]-always"), type = "radio", name = &format!("custom_choices[{key}]"), value = "always", checked? = always_checked);
-                                label(for = &format!("custom_choices[{key}]-always")) : "Always";
-                            });
+                            div(class = "enter-choice") {
+                                : form_field(&field_name, errors, html! {
+                                    legend : display;
+                                    div(class = "enter-choice-options") {
+                                        @for (value, label) in options {
+                                            label(class = "enter-choice-option") {
+                                                input(type = "radio", name = &field_name, value = value, checked? = selected.as_deref() == Some(*value));
+                                                span : label;
+                                            }
+                                        }
+                                    }
+                                });
+                            }
                         }
                     }),
                 }
@@ -1650,15 +1631,47 @@ pub(crate) async fn enter_form(
                             let mut can_submit = true;
                             let mut request_qualifier = false;
                             let mut requirements_display = Vec::with_capacity(flow.iter_requirements().count() + flow.sections.len());
+                            let has_boolean_choices = flow.iter_requirements().any(|requirement| matches!(requirement, Requirement::BooleanChoice { .. }));
+                            let has_radio_choices = flow.iter_requirements().any(|requirement| matches!(requirement, Requirement::RadioChoice { .. }));
+                            let mut explained_choices = false;
                             for item in flow.display_items(|_| true) {
                                 match item {
-                                    FlowDisplayItem::Section { section, depth } => requirements_display.push(RequirementDisplay::Section(section_heading(section, depth))),
+                                    FlowDisplayItem::Section { section, depth } => requirements_display.push(RequirementDisplay::Content(section_heading(section, depth))),
                                     FlowDisplayItem::Requirement(requirement) => {
                                         let is_checked = requirement.is_checked(&mut transaction, http_client, discord_ctx, me, &data, config).await?;
                                         let status = requirement.check_get(http_client, discord_ctx, &data, is_checked, uri!(get(data.series, &*data.event, defaults.my_role(), defaults.teammate())), &defaults, me, config).await?;
                                         if status.blocks_submit { can_submit = false }
                                         if requirement.request_qualifier(&mut transaction, http_client, discord_ctx, me, &data, config).await?.is_some() { request_qualifier = true }
-                                        requirements_display.push(RequirementDisplay::Requirement { is_checked, html_content: status.html_content });
+                                        let is_choice = matches!(requirement, Requirement::BooleanChoice { .. } | Requirement::RadioChoice { .. });
+                                        if is_choice && !explained_choices {
+                                            requirements_display.push(RequirementDisplay::Content(html! {
+                                                aside(class = "enter-choice-help") {
+                                                    h4 : "How these choices work";
+                                                    p : "Choose one answer for each option. Your answers are combined with the other participants’ answers for each match.";
+                                                    @if has_radio_choices {
+                                                        p {
+                                                            strong : "Never";
+                                                            : " vetoes an option. ";
+                                                            strong : "Random";
+                                                            : " allows a 50/50 decision if nobody vetoes it. ";
+                                                            strong : "Always";
+                                                            : " requests the option, but only applies it if everyone agrees; another participant’s Random or Never takes precedence.";
+                                                        }
+                                                    }
+                                                    @if has_boolean_choices {
+                                                        p {
+                                                            strong : "Yes";
+                                                            : " allows an option when everyone agrees. ";
+                                                            strong : "No";
+                                                            : " vetoes it for the match.";
+                                                        }
+                                                    }
+                                                    p : "Event rules determine which options apply when choices conflict or depend on the selected mode.";
+                                                }
+                                            }));
+                                            explained_choices = true;
+                                        }
+                                        requirements_display.push(RequirementDisplay::Requirement { is_choice, is_checked, html_content: status.html_content });
                                     }
                                 }
                             }
@@ -1679,13 +1692,15 @@ pub(crate) async fn enter_form(
                                     : preface;
                                     @for display in requirements_display {
                                         @match display {
-                                            RequirementDisplay::Section(heading) => : heading;
-                                            RequirementDisplay::Requirement { is_checked, html_content } => div(class = "check-item") {
-                                                div(class = "checkmark") {
-                                                    @match is_checked {
-                                                        Some(true) => : "✓";
-                                                        Some(false) => {}
-                                                        None => : "?";
+                                            RequirementDisplay::Content(heading) => : heading;
+                                            RequirementDisplay::Requirement { is_choice, is_checked, html_content } => div(class = if is_choice { "enter-choice-item" } else { "check-item" }) {
+                                                @if !is_choice {
+                                                    div(class = "checkmark") {
+                                                        @match is_checked {
+                                                            Some(true) => : "✓";
+                                                            Some(false) => {}
+                                                            None => : "?";
+                                                        }
                                                     }
                                                 }
                                                 div : html_content(&mut errors);
@@ -1699,13 +1714,15 @@ pub(crate) async fn enter_form(
                                         : preface;
                                         @for display in requirements_display {
                                             @match display {
-                                                RequirementDisplay::Section(heading) => : heading;
-                                                RequirementDisplay::Requirement { is_checked, html_content } => div(class = "check-item") {
-                                                    div(class = "checkmark") {
-                                                        @match is_checked {
-                                                            Some(true) => : "✓";
-                                                            Some(false) => {}
-                                                            None => : "?";
+                                                RequirementDisplay::Content(heading) => : heading;
+                                                RequirementDisplay::Requirement { is_choice, is_checked, html_content } => div(class = if is_choice { "enter-choice-item" } else { "check-item" }) {
+                                                    @if !is_choice {
+                                                        div(class = "checkmark") {
+                                                            @match is_checked {
+                                                                Some(true) => : "✓";
+                                                                Some(false) => {}
+                                                                None => : "?";
+                                                            }
                                                         }
                                                     }
                                                     div : html_content(&mut Vec::default());
@@ -1795,7 +1812,7 @@ pub(crate) async fn enter_form(
         html! {
             : header;
             : invites;
-            : content;
+            div(class = "enter-page") : content;
         },
     )
     .await?)

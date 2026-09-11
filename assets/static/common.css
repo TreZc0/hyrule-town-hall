@@ -858,6 +858,100 @@ footer {
 .enter-flow-subheading {
   margin: 1rem 0 0.35rem;
 }
+.enter-choice-help {
+  max-width: 48rem;
+  margin: 0.75rem 0 1.5rem;
+  padding: 1rem 1.25rem;
+  border-left: 3px solid var(--accent);
+  border-radius: 0.375rem;
+  background: var(--bg-secondary);
+}
+.enter-choice-help h4 {
+  margin: 0 0 0.5rem;
+}
+.enter-choice-help p {
+  margin: 0.5rem 0 0;
+}
+.enter-choice-item {
+  margin-bottom: 1.5rem;
+}
+.enter-choice fieldset {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.enter-choice fieldset.error {
+  padding: 0.75rem;
+  border: 1px solid #c00000;
+  border-radius: 0.5rem;
+}
+.enter-choice legend {
+  padding: 0;
+  margin-bottom: 0.65rem;
+  font-weight: 600;
+}
+.enter-choice-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.enter-choice-option {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  min-height: 44px;
+  padding: 0.6rem 0.85rem;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  background: var(--bg-secondary);
+  cursor: pointer;
+}
+.enter-choice-option input {
+  margin: 0;
+  accent-color: #79b5ff;
+}
+.enter-choice-option:hover {
+  background: var(--hover-bg);
+}
+.enter-choice-option:has(input:checked) {
+  border-color: #79b5ff;
+  background: #234773;
+  color: var(--hover-text);
+  box-shadow: inset 0 0 0 1px #79b5ff;
+}
+.enter-choice-option:has(input:focus-visible) {
+  outline: 2px solid #79b5ff;
+  outline-offset: 3px;
+}
+.enter-page form > fieldset:last-child:has(> input[type="submit"]) {
+  margin: 2rem 0 1rem;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+.enter-page form > fieldset:last-child > input[type="submit"] {
+  width: 100%;
+  max-width: 28rem;
+  min-height: 54px;
+  padding: 0.85rem 1.5rem;
+  border: 1px solid transparent;
+  border-radius: 0.6rem;
+  background: #79b5ff;
+  color: var(--bg-primary);
+  font: inherit;
+  font-size: 1.125rem;
+  font-weight: 700;
+  white-space: normal;
+}
+.enter-page form > fieldset:last-child > input[type="submit"]:hover {
+  background: #a4ceff;
+}
+.enter-page form > fieldset:last-child > input[type="submit"]:focus-visible {
+  outline: 2px solid #79b5ff;
+  outline-offset: 4px;
+}
 .vs1 {
   text-align: end;
 }
@@ -1385,4 +1479,127 @@ p.error {
     font-size: 0.85rem;
     white-space: pre-wrap;
     overflow-wrap: anywhere;
+}
+
+/* Organizer qualifier forms: readable sections, explicit labels and shared help. */
+.qualifier-admin {
+  max-width: 1200px;
+  margin-inline: auto;
+  padding: clamp(1rem, 3vw, 2rem);
+  border-radius: 0.75rem;
+  overflow-wrap: anywhere;
+}
+.qualifier-admin h2 { margin-top: 2rem; }
+.qualifier-admin h3, .qualifier-admin h4 { margin-top: 0; }
+.qualifier-admin form {
+  margin: 1rem 0;
+  padding: 1.25rem;
+  border-color: var(--border);
+  border-radius: 0.6rem;
+}
+.qualifier-admin fieldset {
+  min-width: 0;
+  margin: 0 0 1rem;
+  padding: 0;
+  border: 0;
+}
+.qualifier-admin fieldset.error { border: 1px solid #c00000; padding: 0.75rem; }
+.qualifier-admin form > fieldset:last-child:has(> input[type="submit"]) {
+  margin: 1.5rem 0 0;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+}
+.qualifier-admin input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]):not([type="submit"]),
+.qualifier-admin select, .qualifier-admin textarea {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  min-height: 44px;
+  margin: 0.4rem 0;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 0.4rem;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  color-scheme: dark;
+  font: inherit;
+}
+.qualifier-admin input[readonly] { color: var(--text-muted); border-style: dashed; }
+.qualifier-admin input:focus-visible, .qualifier-admin select:focus-visible,
+.qualifier-admin textarea:focus-visible, .qualifier-admin summary:focus-visible {
+  outline: 2px solid #79b5ff;
+  outline-offset: 3px;
+}
+.qualifier-admin input[type="checkbox"] { accent-color: #79b5ff; width: 1.1rem; height: 1.1rem; flex-shrink: 0; }
+.qualifier-admin input[type="submit"] {
+  min-height: 44px;
+  max-width: 100%;
+  border-color: transparent;
+  background: #79b5ff;
+  color: var(--bg-primary);
+  font: inherit;
+  font-weight: 700;
+  white-space: normal;
+}
+.qualifier-admin input[type="submit"]:hover { background: #a4ceff; }
+.qualifier-admin table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  margin-block: 1rem;
+  border-collapse: collapse;
+}
+.qualifier-admin th { background: var(--bg-secondary); font-size: 0.85rem; }
+.qualifier-admin td { vertical-align: top; text-align: left; }
+.qualifier-admin td:has(form) { min-width: 19rem; }
+.qualifier-admin td form { margin-inline: 0; }
+.qualifier-admin pre { max-width: 100%; white-space: pre-wrap; overflow-wrap: anywhere; }
+.qualifier-jump {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 2rem;
+  padding: 0.75rem;
+  border-radius: 0.5rem;
+}
+.qualifier-jump a { background: transparent; padding: 0.5rem 0.75rem; border-radius: 0.35rem; }
+.qualifier-section, .qualifier-section-title { margin-top: 2.5rem; padding-top: 1.5rem; border-top: 1px solid var(--border); scroll-margin-top: 1rem; }
+.qualifier-section > h2 { margin-top: 0.25rem; }
+.qualifier-eyebrow { color: #79b5ff; font-size: 0.85rem; font-weight: 700; margin: 0; }
+.qualifier-intro { max-width: 75ch; color: var(--text-muted); margin-bottom: 1.5rem; }
+.qualifier-status { padding: 1rem 1.25rem; border: 1px solid #b7944c; border-left-width: 4px; background: #282538; border-radius: 0.5rem; margin-bottom: 1.5rem; }
+.qualifier-status-ready { background: #16333a; border-color: #63b99c; }
+.qualifier-status p, .qualifier-status ul { margin: 0.5rem 0 0; }
+.qualifier-status li + li { margin-top: 0.35rem; }
+.qualifier-form-section + .qualifier-form-section { margin-top: 2rem; padding-top: 1.5rem; border-top: 1px solid var(--border); }
+.qualifier-form-section h3 { margin-bottom: 0.35rem; }
+.qualifier-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1.25rem 1.5rem; margin-top: 1.25rem; }
+.qualifier-field { min-width: 0; margin-bottom: 1.25rem; }
+.qualifier-grid > .qualifier-field { margin-bottom: 0; }
+.qualifier-grid + .qualifier-field { margin-top: 1.5rem; }
+.qualifier-field > .setting-label { font-weight: 600; }
+.qualifier-hint { margin: 0.4rem 0 0; color: var(--text-muted); font-size: 0.9rem; line-height: 1.5; }
+.qualifier-formula { background: var(--bg-secondary); border-radius: 0.4rem; padding: 0.85rem 1rem; font-size: 0.9rem; }
+.qualifier-checkbox { display: flex; align-items: baseline; gap: 0.6rem; position: relative; }
+.qualifier-checkbox > .setting-label { display: inline; }
+.qualifier-checkbox > .setting-help { position: fixed; }
+.qualifier-activation { margin-top: 2rem; padding: 1rem; border-radius: 0.5rem; background: var(--bg-secondary); }
+.qualifier-mode-card, .qualifier-pool-card { margin-top: 1.25rem; padding: 1.25rem; border: 1px solid var(--border); border-radius: 0.6rem; background: var(--bg-secondary); }
+.qualifier-mode-card > summary { cursor: pointer; font-weight: 700; font-size: 1.1rem; padding-block: 0.25rem; }
+.qualifier-mode-card[open] > summary { margin-bottom: 1rem; }
+.qualifier-mode-card > form, .qualifier-pool-card form { border: 0; margin-bottom: 0; }
+.qualifier-badge { display: inline-block; margin-left: 0.75rem; padding: 0.2rem 0.6rem; border: 1px solid var(--border); border-radius: 2rem; font-size: 0.75rem; font-weight: 500; vertical-align: middle; }
+.qualifier-admin textarea.qualifier-code { font: 0.9rem/1.6 ui-monospace, SFMono-Regular, Consolas, monospace; tab-size: 2; }
+.qualifier-empty, .qualifier-notice { padding: 1rem; background: var(--bg-primary); border-radius: 0.4rem; color: var(--text-muted); }
+.qualifier-disclosure { margin-top: 1rem; padding: 1rem; border: 1px solid var(--border); border-radius: 0.5rem; }
+.qualifier-disclosure > summary { font-weight: 600; cursor: pointer; }
+.qualifier-pool-actions { margin-bottom: 1.5rem; }
+.qualifier-admin .setting-help pre { white-space: pre; }
+@media (max-width: 700px) {
+  .qualifier-grid { grid-template-columns: minmax(0, 1fr); }
+  .qualifier-admin { padding: 0.85rem; }
+  .qualifier-admin form, .qualifier-mode-card, .qualifier-pool-card, .qualifier-disclosure { padding: 0.85rem; }
+  .qualifier-admin input[type="submit"] { width: 100%; justify-content: center; }
+  .qualifier-jump { padding: 0.4rem; gap: 0.2rem; }
 }
