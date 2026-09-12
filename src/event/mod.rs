@@ -3721,7 +3721,7 @@ async fn manage_team_page(
         .await?
         .ok_or(StatusOrError::Status(Status::NotFound))?;
     let me = me.ok_or(StatusOrError::Status(Status::Unauthorized))?;
-    if !data.organizers(&mut transaction).await?.contains(&me) {
+    if !me.is_global_admin() && !data.organizers(&mut transaction).await?.contains(&me) {
         return Err(StatusOrError::Status(Status::Forbidden));
     }
     let team_obj = Team::from_id(&mut transaction, team)
@@ -3931,7 +3931,7 @@ pub(crate) async fn manage_team_post(
     let data = Data::new(&mut transaction, series, event)
         .await?
         .ok_or(StatusOrError::Status(Status::NotFound))?;
-    if !data.organizers(&mut transaction).await?.contains(&me) {
+    if !me.is_global_admin() && !data.organizers(&mut transaction).await?.contains(&me) {
         return Err(StatusOrError::Status(Status::Forbidden));
     }
     let team_obj = Team::from_id(&mut transaction, team)
@@ -4080,7 +4080,7 @@ pub(crate) async fn manage_team_choices_post(
     let data = Data::new(&mut transaction, series, event)
         .await?
         .ok_or(StatusOrError::Status(Status::NotFound))?;
-    if !data.organizers(&mut transaction).await?.contains(&me) {
+    if !me.is_global_admin() && !data.organizers(&mut transaction).await?.contains(&me) {
         return Err(StatusOrError::Status(Status::Forbidden));
     }
     let mut form = form.into_inner();
@@ -4221,7 +4221,7 @@ pub(crate) async fn set_startgg_id(
     let data = Data::new(&mut transaction, series, event)
         .await?
         .ok_or(StatusOrError::Status(Status::NotFound))?;
-    if !data.organizers(&mut transaction).await?.contains(&me) {
+    if !me.is_global_admin() && !data.organizers(&mut transaction).await?.contains(&me) {
         return Err(StatusOrError::Status(Status::Forbidden));
     }
     let mut form = form.into_inner();
@@ -4273,7 +4273,7 @@ async fn manage_racetime_entrant_page(
         .await?
         .ok_or(StatusOrError::Status(Status::NotFound))?;
     let me = me.ok_or(StatusOrError::Status(Status::Unauthorized))?;
-    if !data.organizers(&mut transaction).await?.contains(&me) {
+    if !me.is_global_admin() && !data.organizers(&mut transaction).await?.contains(&me) {
         return Err(StatusOrError::Status(Status::Forbidden));
     }
     let qualifier_kind = data.qualifier_kind(&mut transaction, Some(&me)).await?;
@@ -4369,7 +4369,7 @@ pub(crate) async fn manage_racetime_entrant_post(
     let data = Data::new(&mut transaction, series, event)
         .await?
         .ok_or(StatusOrError::Status(Status::NotFound))?;
-    if !data.organizers(&mut transaction).await?.contains(&me) {
+    if !me.is_global_admin() && !data.organizers(&mut transaction).await?.contains(&me) {
         return Err(StatusOrError::Status(Status::Forbidden));
     }
     let qualifier_kind = data.qualifier_kind(&mut transaction, Some(&me)).await?;
