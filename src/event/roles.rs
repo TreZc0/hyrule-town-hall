@@ -2987,6 +2987,117 @@ pub(crate) async fn forfeit_role(
     })
 }
 
+fn match_volunteer_summary(signups: &[Signup], language: Language) -> String {
+    let mut counts = std::collections::BTreeMap::<&str, (usize, usize)>::new();
+    for signup in signups.iter().filter(|signup| signup.language == language) {
+        let count = match signup.status {
+            VolunteerSignupStatus::Confirmed => {
+                &mut counts.entry(&signup.role_type_name).or_default().0
+            }
+            VolunteerSignupStatus::Pending => {
+                &mut counts.entry(&signup.role_type_name).or_default().1
+            }
+            VolunteerSignupStatus::Declined | VolunteerSignupStatus::Aborted => continue,
+        };
+        *count += 1;
+    }
+    counts
+        .into_iter()
+        .map(|(role, (selected, pending))| {
+            let role_name = |count| match role {
+                "Commentary" | "Commentatory" | "Commentator" => {
+                    if count == 1 {
+                        "Commentator"
+                    } else {
+                        "Commentators"
+                    }
+                }
+                "Tracking" | "Tracker" => {
+                    if count == 1 {
+                        "Tracker"
+                    } else {
+                        "Trackers"
+                    }
+                }
+                _ => role,
+            };
+            match (selected, pending) {
+                (0, pending) => format!("{pending} {} pending", role_name(pending)),
+                (selected, 0) => format!("{selected} {} selected", role_name(selected)),
+                (selected, pending) => format!(
+                    "{selected} {} selected, {pending} pending",
+                    role_name(selected)
+                ),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+async fn volunteer_match_row(
+    transaction: &mut Transaction<'_, Postgres>,
+    race: &Race,
+    start: DateTime<Utc>,
+    signups: &[Signup],
+    language: Language,
+) -> Result<RawHtml<String>, Error> {
+    let matchup = if race.is_qualifier {
+        format!(
+            "{} (Qualifier)",
+            race.round.as_deref().unwrap_or("Qualifier")
+        )
+    } else {
+        let entrants: &[Entrant] = match &race.entrants {
+            Entrants::Two(entrants) => entrants,
+            Entrants::Three(entrants) => entrants,
+            _ => &[],
+        };
+        let mut names = Vec::new();
+        for entrant in entrants {
+            names.push(match entrant {
+                Entrant::MidosHouseTeam(team) => team
+                    .name(transaction)
+                    .await?
+                    .unwrap_or_else(|| "Unknown Team".to_string().into())
+                    .into_owned(),
+                Entrant::Named { name, .. } => name.clone(),
+                Entrant::Discord { .. } => "Discord User".to_string(),
+            });
+        }
+        if names.is_empty() {
+            "TBD vs TBD".to_string()
+        } else {
+            names.join(" vs ")
+        }
+    };
+    let round = race
+        .phase
+        .iter()
+        .chain(race.round.iter())
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let summary = match_volunteer_summary(signups, language);
+    Ok(html! {
+        li {
+            : format_datetime(start, DateTimeFormat { long: false, running_text: false });
+            : " - ";
+            @if !round.is_empty() || race.game.is_some() {
+                : round;
+                @if let Some(game) = race.game {
+                    : format!(" (Game {game})");
+                }
+                : " - ";
+            }
+            a(href = format!("{}?lang={}", uri!(match_signup_page_get(race.series, &*race.event, race.id, _)), language.short_code())) : matchup;
+            @if !summary.is_empty() {
+                : ": ";
+                : summary;
+            }
+        }
+    })
+}
+
 async fn volunteer_page(
     mut transaction: Transaction<'_, Postgres>,
     me: Option<User>,
@@ -3043,12 +3154,17 @@ async fn volunteer_page(
                     .collect::<Vec<_>>()
             };
 
+            let now = Utc::now();
             let mut upcoming_races = Vec::new();
             for race in Race::for_event(&mut transaction, &reqwest::Client::new(), &data).await? {
-                if race.companion_primary_id(&mut transaction).await?.is_none() {
-                    upcoming_races.push(race);
+                if let RaceSchedule::Live { start, .. } = race.schedule {
+                    if start > now && race.companion_primary_id(&mut transaction).await?.is_none() {
+                        let signups = Signup::for_race(&mut transaction, race.id).await?;
+                        upcoming_races.push((start, race, signups));
+                    }
                 }
             }
+            upcoming_races.sort_by_key(|(start, race, _)| (*start, race.id));
 
             // Get active languages and determine selected language
             let active_languages = EffectiveRoleBinding::active_languages(
@@ -3272,42 +3388,12 @@ async fn volunteer_page(
                                     : binding.language;
                                     : ")";
                                 }
-                                @let now = chrono::Utc::now();
-                                @let available_races = upcoming_races.iter().filter(|race| {
-                                    match race.schedule {
-                                        RaceSchedule::Live { start, .. } => start > now,
-                                        _ => false,
-                                    }
-                                }).collect::<Vec<_>>();
-
-                                @if available_races.is_empty() {
+                                @if upcoming_races.is_empty() {
                                     p : "No upcoming races available for signup.";
                                 } else {
                                     ul {
-                                        @for race in available_races {
-                                            li {
-                                                a(href = uri!(match_signup_page_get(data.series, &*data.event, race.id, _))) : {
-                                                    if race.is_qualifier {
-                                                        format!("{} (Qualifier)", race.round.clone().unwrap_or_else(|| "Qualifier".to_string()))
-                                                    } else {
-                                                        match &race.entrants {
-                                                            Entrants::Two([team1, team2]) => format!("{} vs {}",
-                                                                match team1 {
-                                                                    Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
-                                                                    Entrant::Named { name, .. } => name.clone(),
-                                                                    Entrant::Discord { .. } => "Discord User".to_string(),
-                                                                },
-                                                                match team2 {
-                                                                    Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
-                                                                    Entrant::Named { name, .. } => name.clone(),
-                                                                    Entrant::Discord { .. } => "Discord User".to_string(),
-                                                                }
-                                                            ),
-                                                            _ => "TBD vs TBD".to_string(),
-                                                        }
-                                                    }
-                                                };
-                                            }
+                                        @for (start, race, signups) in &upcoming_races {
+                                            : volunteer_match_row(&mut transaction, race, *start, signups, binding.language).await?;
                                         }
                                     }
                                 }
@@ -3325,42 +3411,12 @@ async fn volunteer_page(
                                 : binding.language;
                                 : ")";
                             }
-                            @let now = chrono::Utc::now();
-                            @let available_races = upcoming_races.iter().filter(|race| {
-                                match race.schedule {
-                                    RaceSchedule::Live { start, .. } => start > now,
-                                    _ => false,
-                                }
-                            }).collect::<Vec<_>>();
-
-                            @if available_races.is_empty() {
+                            @if upcoming_races.is_empty() {
                                 p : "No upcoming races available for signup.";
                             } else {
                                 ul {
-                                    @for race in available_races {
-                                        li {
-                                            a(href = uri!(match_signup_page_get(data.series, &*data.event, race.id, _))) : {
-                                                if race.is_qualifier {
-                                                    format!("{} (Qualifier)", race.round.clone().unwrap_or_else(|| "Qualifier".to_string()))
-                                                } else {
-                                                    match &race.entrants {
-                                                        Entrants::Two([team1, team2]) => format!("{} vs {}",
-                                                            match team1 {
-                                                                Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
-                                                                Entrant::Named { name, .. } => name.clone(),
-                                                                Entrant::Discord { .. } => "Discord User".to_string(),
-                                                            },
-                                                            match team2 {
-                                                                Entrant::MidosHouseTeam(team) => team.name(&mut transaction).await?.unwrap_or_else(|| "Unknown Team".to_string().into()).into_owned(),
-                                                                Entrant::Named { name, .. } => name.clone(),
-                                                                Entrant::Discord { .. } => "Discord User".to_string(),
-                                                            }
-                                                        ),
-                                                        _ => "TBD vs TBD".to_string(),
-                                                    }
-                                                }
-                                            };
-                                        }
+                                    @for (start, race, signups) in &upcoming_races {
+                                        : volunteer_match_row(&mut transaction, race, *start, signups, binding.language).await?;
                                     }
                                 }
                             }
