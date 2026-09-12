@@ -4,6 +4,7 @@ use super::{
     seed_gen_type::{AlttprDrSource, OwrEventConfig, SeedGenType},
 };
 use crate::prelude::*;
+use serenity::all::{EditMessage, GetMessages};
 use sqlx::types::Json;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -12,6 +13,8 @@ use sqlx::types::Json;
 pub(crate) enum Timing {
     RaceCreation,
     RoomOpening,
+    // Keep the stored key/protocol variant compatible. Generation fixes the
+    // choices privately; each participant sees them only with their seed.
     #[default]
     SeedRolling,
 }
@@ -21,7 +24,7 @@ impl Timing {
         match self {
             Self::RaceCreation => "race creation/import",
             Self::RoomOpening => "room opening",
-            Self::SeedRolling => "seed rolling",
+            Self::SeedRolling => "seed reveal",
         }
     }
 }
@@ -59,6 +62,21 @@ impl Snapshot {
             }
         }
         Ok(())
+    }
+
+    /// A saved seed can exist long before either async participant sees it.
+    pub(crate) fn visible_at(&self, stage: Timing) -> bool {
+        self.timing <= stage
+    }
+
+    pub(crate) fn seed_presentation(&self, config: &OwrEventConfig) -> serde_json::Value {
+        json!({
+            "baseline_key": config.selected_baseline.as_ref().map(|(key, _)| key),
+            "baseline_label": config.selected_baseline.as_ref().map(|(_, label)| label),
+            "settings_summary": self.display_for_config(false, config),
+            "async_settings_summary": self.display_for_config(true, config),
+            "includes_choice_heading": true,
+        })
     }
 
     pub(crate) fn values(&self) -> HashMap<String, ChoiceValue> {
@@ -111,11 +129,20 @@ impl Snapshot {
     }
 
     fn baseline_summary(&self, is_async: bool, baseline: Option<&str>) -> String {
-        let config = OwrEventConfig {
+        let mut config = OwrEventConfig {
             choices: baseline.map_or_else(|| self.definitions.clone(), |key| OwrEventConfig::choices_for_baseline(&self.definitions, key)),
             selected_baseline: Some((baseline.unwrap_or_default().to_owned(), String::new())),
             ..OwrEventConfig::default()
         };
+        // Disabled optional patches were never in play unless the players randomized them.
+        // Keep rule-only outcomes (including bans), and preserve supersession diagnostics.
+        if let Some(choices) = config.choices.as_object_mut() {
+            choices.retain(|key, entry| {
+                !super::choice_entry_affects_seed(Some(entry))
+                    || self.resolved.get(key) == Some(&true)
+                    || self.preferences.get(key) == Some(&ChoiceValue::Random)
+            });
+        }
         let report = super::apply_patches_with_supercedes(
             &self.resolved,
             &config.choices,
@@ -235,7 +262,7 @@ pub(crate) async fn ensure(
         definitions: all_choices.choices.clone(),
         resolved: super::resolve_all_choices(&preferences, &all_choices),
         preferences,
-        timing: stage,
+        timing: config.choice_resolution,
         selected_baseline: config.selected_baseline.clone(),
     };
     sqlx::query("UPDATE races SET resolved_settings = $2 WHERE id = $1")
@@ -257,26 +284,38 @@ pub(crate) async fn for_seed(
     Ok(snapshot)
 }
 
-/// Durable pending announcements are retried after commit, including races without a room.
+const PENDING_ANNOUNCEMENTS: &str = "SELECT r.id, r.resolved_settings, r.scheduling_thread, r.game, (e.automated_asyncs OR r.async_start1 IS NOT NULL) FROM races r JOIN events e ON e.series = r.series AND e.event = r.event WHERE r.resolved_settings IS NOT NULL AND NOT COALESCE((r.resolved_settings->>'announced')::boolean, FALSE) AND r.resolved_settings->>'timing' = 'race_creation' AND r.scheduling_thread IS NOT NULL AND NOT r.ignored FOR UPDATE OF r SKIP LOCKED";
+
+/// Only creation-time choices belong in the shared scheduling thread.
 pub(crate) async fn announce_pending(pool: &PgPool, ctx: &DiscordCtx) -> sqlx::Result<()> {
     let mut transaction = pool.begin().await?;
     let rows = sqlx::query_as::<_, (i64, Json<Snapshot>, i64, Option<i16>, bool)>(
-        "SELECT r.id, r.resolved_settings, r.scheduling_thread, r.game, (e.automated_asyncs OR r.async_start1 IS NOT NULL) FROM races r JOIN events e ON e.series = r.series AND e.event = r.event WHERE r.resolved_settings IS NOT NULL AND NOT COALESCE((r.resolved_settings->>'announced')::boolean, FALSE) AND (r.resolved_settings->>'timing' != 'seed_rolling' OR r.seed_data IS NOT NULL) AND r.scheduling_thread IS NOT NULL AND NOT r.ignored FOR UPDATE OF r SKIP LOCKED"
+        PENDING_ANNOUNCEMENTS
     ).fetch_all(&mut *transaction).await?;
     for (race, Json(snapshot), thread, game, is_async) in rows {
         let prefix = game
             .map(|game| format!("Game {game}\n"))
             .unwrap_or_default();
         let message = format!("{prefix}{}", snapshot.display(is_async));
-        let mut delivered = true;
-        for chunk in crate::discord_bot::split_discord_message(message) {
-            if let Err(error) = ChannelId::new(thread as u64).say(ctx, chunk).await {
-                log::warn!("Could not announce choices for race {race}: {error}");
-                delivered = false;
-                break;
+        let thread = ChannelId::new(thread as u64);
+        // Imports can fill in participants after the scheduling thread was created.
+        // Put these late creation-time decisions after its welcome paragraph too.
+        let delivered: serenity::Result<()> = async {
+            let messages = thread.messages(ctx, GetMessages::new().after(MessageId::new(1)).limit(1)).await?;
+            let Some(mut opening) = messages.into_iter().next() else {
+                return Err(serenity::Error::Other("Scheduling thread has no opening message"));
+            };
+            if !opening.content.contains(&message) {
+                let mut chunks = crate::discord_bot::split_discord_message(crate::discord_bot::insert_scheduling_settings(&opening.content, &message)).into_iter();
+                opening.edit(ctx, EditMessage::new().content(chunks.next().unwrap_or_default())).await?;
+                for chunk in chunks {
+                    thread.say(ctx, chunk).await?;
+                }
             }
-        }
-        if !delivered {
+            Ok(())
+        }.await;
+        if let Err(error) = delivered {
+            log::warn!("Could not announce choices for race {race}: {error}");
             continue;
         }
         sqlx::query("UPDATE races SET resolved_settings = jsonb_set(resolved_settings, '{announced}', 'true') WHERE id = $1")

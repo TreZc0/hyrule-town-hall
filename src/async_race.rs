@@ -54,6 +54,7 @@ impl AsyncRaceManager {
                 .ok_or(Error::EventNotFound)?;
 
             if let Some(async_channel) = event.discord_async_channel {
+                let mut choices_prepared = false;
                 for (async_part, start_time) in Self::get_async_parts(&race) {
                     if let Some(start_time) = start_time {
                         let time_until_start = start_time - Utc::now();
@@ -67,6 +68,14 @@ impl AsyncRaceManager {
                             && time_until_start > chrono::Duration::zero()
                             && time_until_start <= chrono::Duration::minutes(30)
                         {
+                            if !choices_prepared {
+                                if let Some(config) = event.seed_gen_type.as_ref().and_then(racetime_bot::choice_resolution::config) {
+                                    let mut choice_transaction = pool.begin().await?;
+                                    racetime_bot::choice_resolution::ensure(&mut choice_transaction, &race, config, racetime_bot::choice_resolution::Timing::RoomOpening).await?;
+                                    choice_transaction.commit().await?;
+                                }
+                                choices_prepared = true;
+                            }
                             Self::create_async_thread(
                                 &mut transaction,
                                 discord_ctx,
@@ -347,55 +356,14 @@ impl AsyncRaceManager {
         content.push(display_order.to_string());
         content.push(" of this round.");
 
-        if let Some(racetime_bot::seed_gen_type::SeedGenType::Owr { config, .. } | racetime_bot::seed_gen_type::SeedGenType::AlttprDoorRando { source: racetime_bot::seed_gen_type::AlttprDrSource::MutualChoices { config }, .. }) = event.seed_gen_type.as_ref() {
-            let baseline = race.seed.seed_data.as_ref().and_then(|data| data.get("seed_presentation")).and_then(|data| data.get("baseline_label")).and_then(|value| value.as_str()).map(|label| format!("Baseline: {label}"))
-                .or_else(|| config.pending_baseline(race, event.draft_kind_str.is_some()));
-            if let Some(baseline) = baseline { content.push_line(""); content.push(baseline); content.push_line(""); }
-        }
-
-        if let Some(racetime_bot::seed_gen_type::SeedGenType::Owr { .. }) =
-            event.seed_gen_type.as_ref()
-        {
-            let choices = racetime_bot::owr_choices_for_race(db_pool, race).await;
-            let Some(racetime_bot::seed_gen_type::SeedGenType::Owr { config, .. }) =
-                event.seed_gen_type.as_ref()
-            else {
-                unreachable!()
-            };
-            let description = racetime_bot::owr_choices_description(&choices, config);
-
-            content.push_line("");
-            content.push_line("");
-            content.push("---");
-            content.push_line("");
-            content.push(format!("**Seed Settings:** {description}"));
-            content.push_line("");
-            content.push("---");
-        }
-
-        if let Some(racetime_bot::seed_gen_type::SeedGenType::AlttprDoorRando {
-            source: racetime_bot::seed_gen_type::AlttprDrSource::MutualChoices { config },
-            ..
-        }) = event.seed_gen_type.as_ref()
-        {
-            let choices = racetime_bot::owr_choices_for_race(db_pool, race).await;
-
-            content.push_line("");
-            content.push_line("");
-            content.push("---");
-            content.push_line("");
-            content.push(format!(
-                "**Seed Settings:** {}",
-                racetime_bot::owr_choices_description(&choices, config)
-            ));
-            if let Some(race_options) =
-                racetime_bot::alttpr_dr_player_rules_str_filtered(&choices, config, true)
+        if let Some(config) = event.seed_gen_type.as_ref().and_then(racetime_bot::choice_resolution::config) {
+            if let Some(snapshot) = racetime_bot::choice_resolution::read(db_pool, race.id).await?
+                .filter(|snapshot| snapshot.visible_at(racetime_bot::choice_resolution::Timing::RoomOpening))
             {
                 content.push_line("");
-                content.push(format!("**Race Rules:** {}", race_options));
+                content.push(snapshot.display_for_config(true, &config.for_display(race, event.draft_kind_str.is_some())));
+                content.push_line("");
             }
-            content.push_line("");
-            content.push("---");
         }
 
         if let Some(racetime_bot::seed_gen_type::SeedGenType::AlttprDoorRando {
@@ -586,7 +554,13 @@ impl AsyncRaceManager {
             }
         }
 
-        let settings_summary = race.seed.seed_data.as_ref().and_then(|data| racetime_bot::baselines::seed_summary(data, true));
+        // Read saved choices here as well, so seeds rolled before this fix get the same
+        // complete, filtered summary beside the seed in each participant's private thread.
+        let settings_summary = if let Some(snapshot) = racetime_bot::choice_resolution::read(&mut **transaction, race.id).await? {
+            Some(snapshot.display(true))
+        } else {
+            race.seed.seed_data.as_ref().and_then(|data| racetime_bot::baselines::seed_summary(data, true))
+        };
 
         let thread_id = match async_part {
             1 => {

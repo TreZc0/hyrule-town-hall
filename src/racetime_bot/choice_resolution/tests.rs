@@ -1,4 +1,5 @@
 use super::*;
+use crate::racetime_bot::{SeedRollUpdate, baselines, seed_gen_type::OwrBuild};
 
 fn fixture(timing: Timing) -> OwrEventConfig {
     OwrEventConfig {
@@ -86,6 +87,78 @@ fn display_identifies_suppressed_patches() {
             .display(false)
             .contains("Option: not applied (superseded by Stronger)")
     );
+}
+
+#[test]
+fn saved_choices_are_only_visible_at_the_selected_reveal_stage() {
+    for timing in [Timing::RaceCreation, Timing::RoomOpening, Timing::SeedRolling] {
+        let snapshot = Snapshot {
+            teams: vec![1, 2],
+            definitions: fixture(timing).choices,
+            preferences: [("option".into(), ChoiceValue::Random)].into(),
+            resolved: [("option".into(), true)].into(),
+            timing,
+            selected_baseline: None,
+        };
+        // Reloading a pre-rolled seed or opening a second async part must not
+        // make its saved outcomes eligible for the shared scheduling thread.
+        let restored: Snapshot = serde_json::from_value(serde_json::to_value(snapshot).unwrap()).unwrap();
+        assert_eq!(restored.visible_at(Timing::RaceCreation), timing == Timing::RaceCreation);
+        assert_eq!(restored.visible_at(Timing::RoomOpening), timing != Timing::SeedRolling);
+        assert!(restored.visible_at(Timing::SeedRolling));
+    }
+    assert_eq!(Timing::SeedRolling.label(), "seed reveal");
+}
+
+#[tokio::test]
+async fn agreed_settings_and_random_outcomes_travel_with_the_seed() {
+    let config = OwrEventConfig {
+        choices: json!({
+            "zw": {"label": "ZW", "settings": {"zw": true}},
+            "flute": {"label": "Starting Flute", "start_inventory": ["Flute"]},
+            "pseudoboots": {"label": "Pseudoboots", "settings": {"pseudoboots": true}},
+            "hovering": {"value_labels": {"always": "Hovering/Moldorm Bouncing: allowed", "never": "Hovering/Moldorm Bouncing: banned"}},
+            "delay": {"hidden_for_async": true, "value_labels": {"always": "No Delay", "never": "Stream delay"}}
+        }),
+        ..OwrEventConfig::default()
+    };
+    let mut snapshot = Snapshot {
+        teams: vec![1, 2],
+        definitions: config.choices.clone(),
+        preferences: [("pseudoboots".into(), ChoiceValue::Always), ("delay".into(), ChoiceValue::Always)].into(),
+        resolved: [("zw".into(), false), ("flute".into(), false), ("pseudoboots".into(), true), ("hovering".into(), false), ("delay".into(), true)].into(),
+        timing: Timing::SeedRolling,
+        selected_baseline: None,
+    };
+    let expected = "Choices resolved at seed reveal:\nPseudoboots: applied\nHovering/Moldorm Bouncing: banned";
+    assert_eq!(snapshot.display(true), expected);
+    assert_eq!(snapshot.display(false), format!("{expected}\nNo Delay"));
+
+    // No random choices are required to deliver the agreed settings.
+    let (tx, rx) = mpsc::channel(1);
+    tx.send(SeedRollUpdate::Done {
+        seed: seed::Data {
+            seed_data: Some(seed::Files::AlttprDoorRando { uuid: Uuid::nil(), is_owr: false }.to_seed_data_base()),
+            ..Default::default()
+        },
+        resolved_randoms: None,
+        rsl_preset: None,
+        version: None,
+        unlock_spoiler_log: UnlockSpoilerLog::Never,
+    }).await.unwrap();
+    drop(tx);
+    let mut updates = baselines::with_presentation(rx, Some(snapshot.seed_presentation(&config)));
+    let SeedRollUpdate::Done { seed, .. } = updates.recv().await.unwrap() else { panic!() };
+    let saved = seed.to_seed_data().unwrap();
+    // Both async participants get the same summary from the persisted seed.
+    for _part in 1..=2 {
+        assert_eq!(baselines::seed_summary(&saved, true).as_deref(), Some(expected));
+    }
+    snapshot.preferences.insert("flute".into(), ChoiceValue::Random);
+    let summary = snapshot.display(true);
+    assert!(summary.contains("Starting Flute: not applied"));
+    assert!(!summary.contains("ZW"));
+    assert!(!summary.contains("baseline unchanged"));
 }
 
 fn race(id: i64) -> Race {
@@ -203,6 +276,18 @@ async fn database_timing_retries_concurrency_and_per_game_storage() {
         );
         assert_eq!(a.unwrap().unwrap().resolved, first.clone().unwrap());
         assert_eq!(b.unwrap().unwrap().resolved, first.unwrap());
+    }
+    // A seed generated early must never enqueue a scheduling-thread announcement.
+    sqlx::raw_sql("ALTER TABLE races ADD COLUMN series TEXT DEFAULT 'test', ADD COLUMN event TEXT DEFAULT 'test', ADD COLUMN scheduling_thread BIGINT DEFAULT 42, ADD COLUMN game SMALLINT, ADD COLUMN async_start1 TIMESTAMPTZ, ADD COLUMN seed_data JSONB DEFAULT '{}'::jsonb, ADD COLUMN ignored BOOLEAN DEFAULT FALSE; CREATE TABLE events (series TEXT, event TEXT, automated_asyncs BOOLEAN); INSERT INTO events VALUES ('test', 'test', TRUE);")
+        .execute(&pool).await.unwrap();
+    let pending = sqlx::query_as::<_, (i64, Json<Snapshot>, i64, Option<i16>, bool)>(PENDING_ANNOUNCEMENTS)
+        .fetch_all(&pool).await.unwrap();
+    assert_eq!(pending.iter().map(|(race, ..)| *race).collect_vec(), vec![1]);
+    for id in [2_i64, 3] {
+        let kind = SeedGenType::Owr { config: fixture(if id == 2 { Timing::RoomOpening } else { Timing::SeedRolling }), build: OwrBuild::Regular };
+        assert!(kind.scheduling_thread_str(&pool, &race(id), None, true, false).await.is_none());
+        let mut connection = pool.acquire().await.unwrap();
+        assert!(kind.settings_display_str(&mut connection, &race(id), &[]).await.is_none());
     }
     // A concurrent first resolution must also choose only once.
     sqlx::query("INSERT INTO races (id, team1, team2) VALUES (4, 1, 2)")

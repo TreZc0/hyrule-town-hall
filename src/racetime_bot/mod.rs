@@ -1528,7 +1528,8 @@ impl GlobalState {
                 let resolved = snapshot.as_ref().map(|snapshot| snapshot.resolved.clone()).unwrap_or_else(|| resolve_all_choices(&choices, &config));
                 let resolved_randoms_str =
                     snapshot.as_ref().and_then(|snapshot| snapshot.reveal(&config, &labels));
-                self.roll_mutual_choices_dr_seed(config.clone(), resolved, resolved_randoms_str)
+                let presentation = snapshot.as_ref().map(|snapshot| snapshot.seed_presentation(&config));
+                baselines::with_presentation(self.roll_mutual_choices_dr_seed(config.clone(), resolved, resolved_randoms_str), presentation)
             }
             SeedGenType::AlttprDoorRando {
                 source: AlttprDrSource::MysteryPool { weights_url },
@@ -1568,7 +1569,8 @@ impl GlobalState {
                 let resolved = snapshot.as_ref().map(|snapshot| snapshot.resolved.clone()).unwrap_or_else(|| resolve_all_choices(&choices, &config));
                 let resolved_randoms_str =
                     snapshot.as_ref().and_then(|snapshot| snapshot.reveal(&config, &labels));
-                self.roll_owr_seed(resolved, config.clone(), resolved_randoms_str, *build)
+                let presentation = snapshot.as_ref().map(|snapshot| snapshot.seed_presentation(&config));
+                baselines::with_presentation(self.roll_owr_seed(resolved, config.clone(), resolved_randoms_str, *build), presentation)
             }
             SeedGenType::TWWR { permalink } => {
                 let version = event.rando_version.clone();
@@ -2625,7 +2627,13 @@ impl SeedRollUpdate {
                     }
                 }
 
-                let summary = seed.seed_data.as_ref().and_then(|data| baselines::seed_summary(data, false))
+                let saved_summary = if let Some(OfficialRaceData { cal_event, .. }) = official_data {
+                    choice_resolution::read(db_pool, cal_event.race.id).await.to_racetime()?
+                        .map(|snapshot| snapshot.display(!matches!(cal_event.kind, cal::EventKind::Normal)))
+                } else {
+                    None
+                };
+                let summary = saved_summary.or_else(|| seed.seed_data.as_ref().and_then(|data| baselines::seed_summary(data, false)))
                     .or_else(|| resolved_randoms.map(|s| format!("Final settings - {s}")));
                 if let Some(summary) = summary {
                     for chunk in baselines::message_chunks(&summary) { ctx.say(chunk).await?; }
@@ -5149,7 +5157,7 @@ impl Handler {
             receiver,
             language,
             article,
-            format!("seed with {}", seed_options_str),
+            format!("seed with {seed_options_str}"),
             false,
         )
         .await;
@@ -5248,7 +5256,6 @@ impl Handler {
         let choices = owr_choices_for_race(&ctx.global_state.db_pool, &cal_event.race).await;
         let seed_options_str = owr_choices_description(&choices, &config);
         let seed_options_str = config.selected_baseline.as_ref().map_or(seed_options_str.clone(), |(_, label)| format!("{label}; {seed_options_str}"));
-        let race_options_str = alttpr_dr_player_rules_str(&choices, &config);
         let labels: Vec<(String, String)> = self
             .official_data
             .as_ref()
@@ -5263,6 +5270,7 @@ impl Handler {
         let resolved = snapshot.as_ref().map(|snapshot| snapshot.resolved.clone()).unwrap_or_else(|| resolve_all_choices(&choices, &config));
         let resolved_randoms_str =
             snapshot.as_ref().and_then(|snapshot| snapshot.reveal(&config, &labels));
+        let presentation = snapshot.as_ref().map(|snapshot| snapshot.seed_presentation(&config));
         let receiver = ctx.global_state.clone().roll_mutual_choices_dr_seed(
             config,
             resolved,
@@ -5271,25 +5279,17 @@ impl Handler {
         self.roll_seed_inner(
             ctx,
             Some(delay_until),
-            receiver,
+            baselines::with_presentation(receiver, presentation),
             language,
             article,
-            format!("seed with {}", seed_options_str),
+            if snapshot.as_ref().is_some_and(|snapshot| !snapshot.visible_at(choice_resolution::Timing::RoomOpening)) {
+                "seed".into()
+            } else {
+                format!("seed with {seed_options_str}")
+            },
             false,
         )
         .await;
-        if let Some(race_options_str) = race_options_str {
-            ctx.send_message(
-                format!(
-                    "@entrants Remember: this race will be played with {}!",
-                    race_options_str
-                ),
-                true,
-                Vec::default(),
-            )
-            .await
-            .expect("failed to send race options");
-        }
     }
 
     async fn roll_owr_seed(
@@ -5346,15 +5346,20 @@ impl Handler {
         let resolved = snapshot.as_ref().map(|snapshot| snapshot.resolved.clone()).unwrap_or_else(|| resolve_all_choices(&choices, &config));
         let resolved_randoms_str =
             snapshot.as_ref().and_then(|snapshot| snapshot.reveal(&config, &labels));
+        let presentation = snapshot.as_ref().map(|snapshot| snapshot.seed_presentation(&config));
         self.roll_seed_inner(
             ctx,
             Some(delay_until),
-            ctx.global_state
+            baselines::with_presentation(ctx.global_state
                 .clone()
-                .roll_owr_seed(resolved, config, resolved_randoms_str, build),
+                .roll_owr_seed(resolved, config, resolved_randoms_str, build), presentation),
             language,
             article,
-            format!("seed with {description}"),
+            if snapshot.as_ref().is_some_and(|snapshot| !snapshot.visible_at(choice_resolution::Timing::RoomOpening)) {
+                "seed".into()
+            } else {
+                format!("seed with {description}")
+            },
             false,
         )
         .await;
@@ -6072,7 +6077,8 @@ impl RaceHandler<GlobalState> for Handler {
                 let mut pending_sends = Vec::default();
                 let event = cal_event.race.event(&mut transaction).await.to_racetime()?;
                 if let Some(config) = event.seed_gen_type.as_ref().and_then(choice_resolution::config) {
-                    if let Some(snapshot) = choice_resolution::ensure(&mut transaction, &cal_event.race, config, choice_resolution::Timing::RoomOpening).await.to_racetime()? {
+                    if let Some(snapshot) = choice_resolution::ensure(&mut transaction, &cal_event.race, config, choice_resolution::Timing::RoomOpening).await.to_racetime()?
+                        .filter(|snapshot| snapshot.visible_at(choice_resolution::Timing::RoomOpening)) {
                         let display_config = config.for_display(&cal_event.race, event.draft_kind_str.is_some());
                         pending_sends.push(PendingSend::Say(snapshot.display_for_config(!matches!(cal_event.kind, cal::EventKind::Normal), &display_config)));
                     }
@@ -8153,7 +8159,8 @@ pub(crate) async fn create_room(
                         }
                         }
                     };
-                    let info_user = if let Some(snapshot) = choice_resolution::read(&mut **transaction, cal_event.race.id).await.to_racetime()? {
+                    let info_user = if let Some(snapshot) = choice_resolution::read(&mut **transaction, cal_event.race.id).await.to_racetime()?
+                        .filter(|snapshot| snapshot.visible_at(choice_resolution::Timing::RoomOpening)) {
                         let is_async = !matches!(cal_event.kind, cal::EventKind::Normal);
                         let summary = event.seed_gen_type.as_ref().and_then(choice_resolution::config)
                             .map(|config| snapshot.display_for_config(is_async, &config.for_display(&cal_event.race, event.draft_kind_str.is_some())))

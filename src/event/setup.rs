@@ -581,11 +581,11 @@ async fn setup_form(
                         : form_field("choice_resolution", &mut errors, html! {
                             label(for = "choice_resolution") : "Resolve random player choices";
                             select(id = "choice_resolution", name = "choice_resolution") {
-                                @for (value, label) in [("race_creation", "On race creation / import"), ("room_opening", "On room opening"), ("seed_rolling", "On seed rolling")] {
+                                @for (value, label) in [("race_creation", "On race creation / import"), ("room_opening", "On room opening"), ("seed_rolling", "On seed reveal")] {
                                     option(value = value, selected? = ctx.field_value("choice_resolution").unwrap_or(seed_config_json.as_ref().and_then(|config| config.get("choice_resolution")).and_then(|value| value.as_str()).unwrap_or("seed_rolling")) == value) : label;
                                 }
                             }
-                            p(class = "help") : "For OWR and Door Rando mutual choices. Each game's result is saved and reused for all rooms and seed rerolls. Room opening falls back to seed rolling when there is no room. This selector sets choice_resolution in Seed Config JSON; changing it affects only unresolved races.";
+                            p(class = "help") : "For OWR and Door Rando mutual choices. Each game's result is saved and reused for all rooms and seed rerolls. Only creation/import posts settings in the scheduling thread. Room opening posts in each race room or private async thread; without a room it falls back to seed reveal. Seed reveal posts settings beside the seed, separately for each async participant. This selector sets choice_resolution in Seed Config JSON; changing it affects only unresolved races.";
                         });
 
                         : guides::seed_config();
@@ -2229,11 +2229,11 @@ fn create_form_content(
                         : form_field("choice_resolution", &mut errors, html! {
                             label(for = "choice_resolution") : "Resolve random player choices";
                             select(id = "choice_resolution", name = "choice_resolution") {
-                                @for (value, label) in [("race_creation", "On race creation / import"), ("room_opening", "On room opening"), ("seed_rolling", "On seed rolling")] {
+                                @for (value, label) in [("race_creation", "On race creation / import"), ("room_opening", "On room opening"), ("seed_rolling", "On seed reveal")] {
                                     option(value = value, selected? = ctx.field_value("choice_resolution").unwrap_or("seed_rolling") == value) : label;
                                 }
                             }
-                            p(class = "help") : "For OWR and Door Rando mutual choices. Each game's result is saved and reused for all rooms and seed rerolls. Room opening falls back to seed rolling when there is no room. This selector sets choice_resolution in Seed Config JSON; changing it affects only unresolved races.";
+                            p(class = "help") : "For OWR and Door Rando mutual choices. Each game's result is saved and reused for all rooms and seed rerolls. Only creation/import posts settings in the scheduling thread. Room opening posts in each race room or private async thread; without a room it falls back to seed reveal. Seed reveal posts settings beside the seed, separately for each async participant. This selector sets choice_resolution in Seed Config JSON; changing it affects only unresolved races.";
                         });
 
                         : guides::seed_config();

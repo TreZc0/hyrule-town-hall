@@ -92,7 +92,7 @@ pub(super) fn presentation(
                             "applied".to_owned()
                         }
                     } else {
-                        "not applied; baseline unchanged".to_owned()
+                        "not applied".to_owned()
                     }
                 } else {
                     if enabled { "allowed" } else { "not allowed" }.to_owned()
@@ -397,7 +397,6 @@ impl OwrEventConfig {
 /// Presentation comes from the saved seed, never from today's event configuration.
 pub(crate) fn seed_summary(data: &serde_json::Value, is_async: bool) -> Option<String> {
     if let Some(presentation) = data.get("seed_presentation") {
-        let label = presentation.get("baseline_label")?.as_str()?;
         let summary = if is_async {
             presentation.get("async_settings_summary")
         } else {
@@ -405,7 +404,12 @@ pub(crate) fn seed_summary(data: &serde_json::Value, is_async: bool) -> Option<S
         }
         .or_else(|| presentation.get("settings_summary"))?
         .as_str()?;
-        Some(format!("Baseline: {label}\n{summary}"))
+        if presentation.get("includes_choice_heading").and_then(serde_json::Value::as_bool) == Some(true) {
+            Some(summary.to_owned())
+        } else {
+            let label = presentation.get("baseline_label")?.as_str()?;
+            Some(format!("Baseline: {label}\n{summary}"))
+        }
     } else {
         data.get("resolved_randoms")
             .and_then(|v| v.as_str())

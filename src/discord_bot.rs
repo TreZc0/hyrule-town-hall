@@ -6074,6 +6074,18 @@ pub(crate) fn split_discord_message(mut content: String) -> Vec<String> {
     chunks
 }
 
+/// Keep settings after the welcome paragraph, ahead of scheduling instructions.
+pub(crate) fn insert_scheduling_settings(opening: &str, settings: &str) -> String {
+    if settings.is_empty() {
+        return opening.to_owned();
+    }
+    if let Some((welcome, instructions)) = opening.split_once("\n\n") {
+        format!("{welcome}\n\n{settings}\n\n{instructions}")
+    } else {
+        format!("{opening}\n\n{settings}")
+    }
+}
+
 pub(crate) async fn create_scheduling_thread<'a>(
     ctx: &DiscordCtx,
     mut transaction: Transaction<'a, Postgres>,
@@ -6092,7 +6104,8 @@ pub(crate) async fn create_scheduling_thread<'a>(
     transaction = pool.begin().await?;
     let mut choice_summaries = Vec::new();
     for race in races.iter() {
-        if let Some(snapshot) = racetime_bot::choice_resolution::read(&mut *transaction, race.id).await? {
+        if let Some(snapshot) = racetime_bot::choice_resolution::read(&mut *transaction, race.id).await?
+            .filter(|snapshot| snapshot.visible_at(racetime_bot::choice_resolution::Timing::RaceCreation)) {
             let prefix = race.game.map(|game| format!("Game {game}\n")).unwrap_or_default();
             choice_summaries.push(format!("{prefix}{}", snapshot.display(event.automated_asyncs || matches!(race.schedule, RaceSchedule::Async { .. }))));
         }
@@ -6178,6 +6191,31 @@ pub(crate) async fn create_scheduling_thread<'a>(
         title.clone_from(custom_title);
     }
     let runner_timezones = runner_timezones_for_race(&mut transaction, ctx, race).await?;
+    let mut settings = MessageBuilder::default();
+    if !choice_summaries.is_empty() {
+        if let Some(config) = event.seed_gen_type.as_ref().and_then(racetime_bot::choice_resolution::config) {
+            if let Some(baseline) = config.pending_baseline(race, event.draft_kind_str.is_some()) {
+                settings.push_line(baseline);
+            }
+        }
+        settings.push(choice_summaries.join("\n\n"));
+    } else if let Some(ref sgt) = event.seed_gen_type {
+        let db_pool = ctx
+            .data
+            .read()
+            .await
+            .get::<DbPool>()
+            .expect("database connection pool missing from Discord context")
+            .clone();
+        let is_async =
+            event.automated_asyncs || matches!(race.schedule, RaceSchedule::Async { .. });
+        if let Some(display_str) = sgt
+            .scheduling_thread_str(&db_pool, race, event.round_modes.as_ref(), is_async, event.draft_kind_str.is_some())
+            .await
+        {
+            settings.push(display_str);
+        }
+    }
     let mut content = MessageBuilder::default();
     if_chain! {
         if let French = event.language;
@@ -6231,7 +6269,9 @@ pub(crate) async fn create_scheduling_thread<'a>(
             }
             content.push("match.");
             if speedgaming_export::LEGACY_IMPORT_ENABLED && let Some(speedgaming_slug) = &event.speedgaming_slug {
-                content.push(" Use <https://speedgaming.org/");
+                content.push_line("");
+                content.push_line("");
+                content.push("Use <https://speedgaming.org/");
                 content.push(speedgaming_slug);
                 if game_count > 1 {
                     content.push("/submit> to schedule your races.");
@@ -6277,7 +6317,7 @@ pub(crate) async fn create_scheduling_thread<'a>(
     };
     // Show settings choices that every scheduled participant selected.
     let choice_requirements = event.choice_requirements();
-    if choice_summaries.is_empty() && !choice_requirements.is_empty() {
+    if event.seed_gen_type.as_ref().and_then(racetime_bot::choice_resolution::config).is_none() && !choice_requirements.is_empty() {
         let team_ids = race.teams().map(|t| t.id).collect_vec();
         if team_ids.len() > 1 {
             let rows = sqlx::query!(
@@ -6345,35 +6385,8 @@ pub(crate) async fn create_scheduling_thread<'a>(
             }
         }
     }
-    if !choice_summaries.is_empty() {
-        content.push_line("");
-        content.push_line("");
-        if let Some(config) = event.seed_gen_type.as_ref().and_then(racetime_bot::choice_resolution::config) {
-            if let Some(baseline) = config.pending_baseline(race, event.draft_kind_str.is_some()) {
-                content.push_line(baseline);
-            }
-        }
-        content.push(choice_summaries.join("\n\n"));
-    } else if let Some(ref sgt) = event.seed_gen_type {
-        let db_pool = ctx
-            .data
-            .read()
-            .await
-            .get::<DbPool>()
-            .expect("database connection pool missing from Discord context")
-            .clone();
-        let is_async =
-            event.automated_asyncs || matches!(race.schedule, RaceSchedule::Async { .. });
-        if let Some(display_str) = sgt
-            .scheduling_thread_str(&db_pool, race, event.round_modes.as_ref(), is_async, event.draft_kind_str.is_some())
-            .await
-        {
-            content.push_line("");
-            content.push_line("");
-            content.push(display_str);
-        }
-    }
-    let mut content_chunks = split_discord_message(content.build()).into_iter();
+    let content = insert_scheduling_settings(&content.build(), &settings.build());
+    let mut content_chunks = split_discord_message(content).into_iter();
     let opening_content = content_chunks.next().unwrap_or_default();
     let thread_id = if let Some(ChannelType::Forum) = scheduling_channel
         .to_channel(ctx)
@@ -6430,7 +6443,7 @@ pub(crate) async fn create_scheduling_thread<'a>(
     }
     for race in races.iter_mut() {
         race.scheduling_thread = Some(thread_id);
-        sqlx::query("UPDATE races SET resolved_settings = jsonb_set(resolved_settings, '{announced}', 'true') WHERE id = $1")
+        sqlx::query("UPDATE races SET resolved_settings = jsonb_set(resolved_settings, '{announced}', 'true') WHERE id = $1 AND resolved_settings->>'timing' = 'race_creation'")
             .bind(i64::from(race.id)).execute(&mut *transaction).await?;
     }
     Ok(transaction)
@@ -6478,8 +6491,6 @@ pub(crate) async fn handle_race(
 
     let is_second_part = cal_event.race.seed.files().is_some();
 
-    let mut seed_presentation_data = cal_event.race.seed.seed_data.clone();
-
     if !is_second_part {
         let discord_data = discord_ctx.data.read().await;
         let global_state = discord_data
@@ -6514,7 +6525,6 @@ pub(crate) async fn handle_race(
             if let Some(ref resolved_randoms) = resolved_randoms {
                 seed_data_json["resolved_randoms"] = serde_json::json!(resolved_randoms);
             }
-            seed_presentation_data = Some(seed_data_json.clone());
             sqlx::query!(
                 "UPDATE races SET seed_data = $1 WHERE id = $2",
                 seed_data_json,
@@ -6545,12 +6555,6 @@ pub(crate) async fn handle_race(
         let msg = content.build();
         if let Some(channel) = event.discord_organizer_channel {
             channel.say(&discord_ctx, msg).await?;
-            if let Some(summary) = seed_presentation_data.as_ref().and_then(|data| racetime_bot::baselines::seed_summary(data, true)) {
-                for chunk in racetime_bot::baselines::message_chunks(&summary) {
-                    channel.send_message(&discord_ctx, CreateMessage::new().content(chunk).allowed_mentions(CreateAllowedMentions::default())).await?;
-                }
-            }
-
         }
     }
 

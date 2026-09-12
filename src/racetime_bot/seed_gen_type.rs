@@ -250,19 +250,10 @@ impl SeedGenType {
         is_async: bool,
         draft_required: bool,
     ) -> Option<String> {
-        if let Self::Owr { config, .. } | Self::AlttprDoorRando { source: AlttprDrSource::MutualChoices { config }, .. } = self {
-            let display_config = config.for_display(race, draft_required);
-            if let Some(snapshot) = super::choice_resolution::read(db_pool, race.id).await.ok().flatten() {
-                return Some(snapshot.display_for_config(is_async, &display_config));
-            }
-            if let Some(baseline) = config.pending_baseline(race, draft_required) {
-                let choices = super::owr_choices_for_race(db_pool, race).await;
-                let mut text = format!("{baseline}\nPending options: {}", super::owr_choices_description(&choices, &display_config));
-                if let Some(rules) = super::alttpr_dr_player_rules_str_filtered(&choices, &display_config, is_async) {
-                    text.push_str(&format!("\nPlayer rules: {rules}"));
-                }
-                return Some(text);
-            }
+        if let Some(config) = super::choice_resolution::config(self) {
+            let snapshot = super::choice_resolution::read(db_pool, race.id).await.ok().flatten()?;
+            return snapshot.visible_at(super::choice_resolution::Timing::RaceCreation)
+                .then(|| snapshot.display_for_config(is_async, &config.for_display(race, draft_required)));
         }
         match self {
             Self::AlttprDoorRando {
@@ -272,43 +263,6 @@ impl SeedGenType {
                 let opts = super::AlttprDeRaceOptions::for_race(db_pool, race, round_modes).await;
                 opts.mode_display()
                     .map(|mode| format!("This race will be played in {} mode.", mode))
-            }
-            Self::AlttprDoorRando {
-                source: AlttprDrSource::MutualChoices { config },
-                ..
-            } => {
-                let mut choices = super::owr_choices_for_race(db_pool, race).await;
-                if is_async {
-                    choices.retain(|key, _| {
-                        !super::choice_entry_hidden_for_async(super::choice_entry(config, key))
-                    });
-                }
-                let seed_settings = super::owr_choices_description(&choices, config);
-                if let Some(player_rules) =
-                    super::alttpr_dr_player_rules_str_filtered(&choices, config, is_async)
-                {
-                    Some(format!(
-                        "This race will be played with {} as settings.\n\nThis race will be played with {}.",
-                        seed_settings, player_rules,
-                    ))
-                } else {
-                    Some(format!(
-                        "This race will be played with {} as settings.",
-                        seed_settings
-                    ))
-                }
-            }
-            Self::Owr { config, .. } => {
-                let mut choices = super::owr_choices_for_race(db_pool, race).await;
-                if is_async {
-                    choices.retain(|key, _| {
-                        !super::choice_entry_hidden_for_async(super::choice_entry(config, key))
-                    });
-                }
-                Some(format!(
-                    "This race will be played with {} as settings.",
-                    super::owr_choices_description(&choices, config),
-                ))
             }
             _ => None,
         }
@@ -367,7 +321,9 @@ impl SeedGenType {
         };
         let config = config.for_display(race, race.draft.is_some());
         if let Some(snapshot) = super::choice_resolution::read(&mut *executor, race.id).await.ok().flatten() {
-            return Some(snapshot.display_for_config(false, &config));
+            // This table is public, including while another async part is still pending.
+            return (snapshot.visible_at(super::choice_resolution::Timing::RaceCreation) || race.is_ended())
+                .then(|| snapshot.display_for_config(false, &config));
         }
         let team_ids = race.teams().map(|t| t.id).collect_vec();
         if team_ids.len() < 2 {
