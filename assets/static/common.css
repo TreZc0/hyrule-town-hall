@@ -193,10 +193,6 @@ textarea {
   color: var(--text-primary);
 }
 
-.favicon-container .button {
-
-}
-
 input[type="text"], input[type="number"], input[type="url"],
 input[type="datetime-local"], input[type="date"], input[type="time"], select {
   margin: 0 5px !important;
