@@ -2623,23 +2623,14 @@ pub(crate) async fn list(
                                             }
                                         }
                                         enter::Requirement::RadioChoice { key, .. } => td {
-                                            @match custom_choices.get(key).map(|v| v.as_str()) {
+                                            @match custom_choices.get(key).map(String::as_str) {
                                                 Some("always") => : "✓";
                                                 Some("random") => : "?";
+                                                Some("never") => : "✗";
                                                 _ => {}
                                             }
                                         }
                                         _ => {}
-                                    }
-                                    @if let enter::Requirement::RadioChoice { key, .. } = requirement {
-                                        td {
-                                            @match custom_choices.get(key).map(String::as_str) {
-                                                Some("always") => { : "Always"; }
-                                                Some("random") => { : "Random"; }
-                                                Some("never") => { : "Never"; }
-                                                _ => {}
-                                            }
-                                        }
                                     }
                                 }
                             }
