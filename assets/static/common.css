@@ -843,18 +843,20 @@ footer {
 
 .check-item {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 0.35rem;
   margin: 0.3rem 0;
 }
 .checkmark {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   flex: 0 0 auto;
   border: 1px solid var(--border);
   width: 24px;
   height: 24px;
   border-radius: 50%;
-  margin: 0.55rem 0.15rem 0 0.3rem;
-  text-align: center;
+  margin: 0 0.15rem 0 0.3rem;
 }
 .enter-page .check-item > div:last-child {
   flex: 1 1 auto;
@@ -867,7 +869,7 @@ footer {
   box-sizing: border-box;
   max-width: 48rem;
   min-height: 44px;
-  margin: 0.2rem 0 0.6rem;
+  margin: 0.4rem 0;
   padding: 0.65rem 0.85rem;
   border: 1px solid var(--border);
   border-radius: 0.5rem;
