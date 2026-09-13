@@ -110,6 +110,44 @@ fn saved_choices_are_only_visible_at_the_selected_reveal_stage() {
     assert_eq!(Timing::SeedRolling.label(), "seed reveal");
 }
 
+#[test]
+fn scheduling_threads_show_agreements_without_revealing_saved_random_outcomes() {
+    for timing in [Timing::RoomOpening, Timing::SeedRolling] {
+        let mut config = fixture(timing);
+        config.choices["boots"] = json!({"label": "Boots", "settings": {"boots": true}});
+        let preferences = super::super::resolve_choice_values(&[
+            json!({"option": "random", "boots": "always", "delay": "never"}),
+            json!({"option": "always", "boots": "always", "delay": "always"}),
+        ]);
+        let expected = "Both agreed on: Boots, Use stream delay\nRandom Choice: Option";
+        assert_eq!(scheduling_preferences(&preferences, &config, false), expected);
+        assert_eq!(scheduling_preferences(&preferences, &config, true), "Both agreed on: Boots\nRandom Choice: Option");
+        for enabled in [false, true] {
+            let snapshot = Snapshot {
+                teams: vec![1, 2],
+                definitions: config.choices.clone(),
+                preferences: preferences.clone(),
+                resolved: [("option".into(), enabled), ("boots".into(), true), ("delay".into(), false)].into(),
+                timing,
+                selected_baseline: None,
+            };
+            assert_eq!(snapshot.scheduling_display(false, &config), expected);
+        }
+    }
+}
+
+#[test]
+fn scheduling_preferences_respect_pending_and_selected_baselines() {
+    let mut config = fixture(Timing::SeedRolling);
+    config.choices["option"]["baselines"] = json!(["a"]);
+    config.choices["other"] = json!({"label": "Other", "settings": {"other": true}, "baselines": ["b"]});
+    let preferences = [("option".into(), ChoiceValue::Always), ("other".into(), ChoiceValue::Always)].into();
+    assert_eq!(scheduling_preferences(&preferences, &config, true), "If a is selected:\nBoth agreed on: Option\nIf b is selected:\nBoth agreed on: Other");
+    config.choices = OwrEventConfig::choices_for_baseline(&config.choices, "a");
+    config.selected_baseline = Some(("a".into(), "A".into()));
+    assert_eq!(scheduling_preferences(&preferences, &config, true), "Both agreed on: Option");
+}
+
 #[tokio::test]
 async fn agreed_settings_and_random_outcomes_travel_with_the_seed() {
     let config = OwrEventConfig {
@@ -285,7 +323,7 @@ async fn database_timing_retries_concurrency_and_per_game_storage() {
     assert_eq!(pending.iter().map(|(race, ..)| *race).collect_vec(), vec![1]);
     for id in [2_i64, 3] {
         let kind = SeedGenType::Owr { config: fixture(if id == 2 { Timing::RoomOpening } else { Timing::SeedRolling }), build: OwrBuild::Regular };
-        assert!(kind.scheduling_thread_str(&pool, &race(id), None, true, false).await.is_none());
+        assert_eq!(kind.scheduling_thread_str(&pool, &race(id), None, true, false).await.as_deref(), Some("Random Choice: Option"));
         let mut connection = pool.acquire().await.unwrap();
         assert!(kind.settings_display_str(&mut connection, &race(id), &[]).await.is_none());
     }
@@ -296,6 +334,9 @@ async fn database_timing_retries_concurrency_and_per_game_storage() {
         .unwrap();
     let game4 = race(4);
     let config = fixture(Timing::SeedRolling);
+    let kind = SeedGenType::Owr { config: config.clone(), build: OwrBuild::Regular };
+    assert_eq!(kind.scheduling_thread_str(&pool, &game4, None, true, false).await.as_deref(), Some("Random Choice: Option"));
+    assert!(read(&pool, game4.id).await.unwrap().is_none());
     let (a, b) = tokio::join!(
         for_seed(&pool, &game4, &config),
         for_seed(&pool, &game4, &config)

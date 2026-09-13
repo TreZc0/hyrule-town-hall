@@ -52,6 +52,20 @@ pub(crate) struct Snapshot {
 }
 
 impl Snapshot {
+    pub(crate) fn scheduling_display(&self, is_async: bool, config: &OwrEventConfig) -> String {
+        if self.visible_at(Timing::RaceCreation) {
+            return self.display_for_config(is_async, config);
+        }
+        // A pre-rolled seed must only expose the original agreements here, never
+        // the saved random outcomes or preferences edited after resolution.
+        let mut config = config.clone();
+        config.choices = self.definitions.clone();
+        if let Some((key, _)) = &config.selected_baseline {
+            config.choices = OwrEventConfig::choices_for_baseline(&config.choices, key);
+        }
+        scheduling_preferences(&self.preferences, &config, is_async)
+    }
+
     fn validate(&self, teams: &[i64], config: &OwrEventConfig) -> sqlx::Result<()> {
         if self.teams != teams || &self.definitions != config.choice_definitions() {
             return Err(sqlx::Error::Protocol("Participants or choice definitions changed after this race's choices were resolved. Restore them or create a replacement race; saved outcomes cannot be rerolled.".into()));
@@ -167,6 +181,55 @@ impl Snapshot {
     ) -> Option<String> {
         super::reveal_resolved_randoms_str(&self.preferences, &self.resolved, config, labels)
     }
+}
+
+/// Show agreements immediately, keeping random choices pending until their reveal stage.
+pub(crate) fn scheduling_preferences(
+    preferences: &HashMap<String, ChoiceValue>,
+    config: &OwrEventConfig,
+    is_async: bool,
+) -> String {
+    let scopes: std::collections::BTreeSet<_> = config.choices.as_object().into_iter()
+        .flat_map(|choices| choices.values())
+        .filter_map(|entry| entry.get("baselines").and_then(serde_json::Value::as_array))
+        .flatten().filter_map(serde_json::Value::as_str).collect();
+    if config.selected_baseline.is_none() && !scopes.is_empty() {
+        return scopes.into_iter().map(|key| {
+            let mut scoped = config.clone();
+            scoped.choices = OwrEventConfig::choices_for_baseline(&config.choices, key);
+            scoped.selected_baseline = Some((key.to_owned(), String::new()));
+            format!("If {key} is selected:\n{}", scheduling_preferences(preferences, &scoped, is_async))
+        }).collect_vec().join("\n");
+    }
+    let mut agreed = Vec::new();
+    let mut random = Vec::new();
+    for (key, entry) in config.choices.as_object().into_iter().flatten().sorted_by_key(|(key, _)| key.as_str()) {
+        if is_async && super::choice_entry_hidden_for_async(Some(entry)) {
+            continue;
+        }
+        let value = preferences.get(key).copied().unwrap_or_default();
+        let label = super::choice_entry_label(Some(entry), key);
+        match value {
+            ChoiceValue::Random => random.push(label.to_owned()),
+            ChoiceValue::Never if super::choice_entry_affects_seed(Some(entry)) => {}
+            value => {
+                if let Some(label) = super::configured_choice_label(Some(entry), label, value) {
+                    agreed.push(label);
+                }
+            }
+        }
+    }
+    let mut lines = Vec::new();
+    if !agreed.is_empty() {
+        lines.push(format!("Agreed on: {}", agreed.join(", ")));
+    }
+    if !random.is_empty() {
+        lines.push(format!("Random Choice: {}", random.join(", ")));
+    }
+    if lines.is_empty() {
+        lines.push("This match will be played on base settings".to_owned());
+    }
+    lines.join("\n")
 }
 
 pub(crate) async fn read<'e, E>(executor: E, race: Id<Races>) -> sqlx::Result<Option<Snapshot>>

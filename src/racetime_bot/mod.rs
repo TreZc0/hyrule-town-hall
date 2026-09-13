@@ -1379,7 +1379,7 @@ impl GlobalState {
                 bps: true,
                 name: uuid.to_string(),
                 race: true,
-                skip_playthrough: true,
+                skip_playthrough: false,
                 spoiler: "full",
                 suppress_rom: true,
             };
@@ -2036,7 +2036,7 @@ fn inject_alttpr_dr_meta(yaml_content: &str, uuid: Uuid) -> Result<String, serde
         bps: true,
         name: uuid.to_string(),
         race: true,
-        skip_playthrough: true,
+        skip_playthrough: false,
         spoiler: "full",
         suppress_rom: true,
     };
@@ -3495,7 +3495,7 @@ fn build_dr_yaml_with_report(
         bps: true,
         name: uuid.to_string(),
         race: true,
-        skip_playthrough: true,
+        skip_playthrough: false,
         spoiler: "full",
         suppress_rom: true,
     };

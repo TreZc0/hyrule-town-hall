@@ -585,7 +585,7 @@ async fn setup_form(
                                     option(value = value, selected? = ctx.field_value("choice_resolution").unwrap_or(seed_config_json.as_ref().and_then(|config| config.get("choice_resolution")).and_then(|value| value.as_str()).unwrap_or("seed_rolling")) == value) : label;
                                 }
                             }
-                            p(class = "help") : "For OWR and Door Rando mutual choices. Each game's result is saved and reused for all rooms and seed rerolls. Only creation/import posts settings in the scheduling thread. Room opening posts in each race room or private async thread; without a room it falls back to seed reveal. Seed reveal posts settings beside the seed, separately for each async participant. This selector sets choice_resolution in Seed Config JSON; changing it affects only unresolved races.";
+                            p(class = "help") : "For OWR and Door Rando mutual choices. Each game's result is saved and reused for all rooms and seed rerolls. Scheduling threads always show agreed settings and rules; only creation/import also reveals random results there. Room opening posts in each race room or private async thread; without a room it falls back to seed reveal. Seed reveal posts settings beside the seed, separately for each async participant. This selector sets choice_resolution in Seed Config JSON; changing it affects only unresolved races.";
                         });
 
                         : guides::seed_config();
@@ -2233,7 +2233,7 @@ fn create_form_content(
                                     option(value = value, selected? = ctx.field_value("choice_resolution").unwrap_or("seed_rolling") == value) : label;
                                 }
                             }
-                            p(class = "help") : "For OWR and Door Rando mutual choices. Each game's result is saved and reused for all rooms and seed rerolls. Only creation/import posts settings in the scheduling thread. Room opening posts in each race room or private async thread; without a room it falls back to seed reveal. Seed reveal posts settings beside the seed, separately for each async participant. This selector sets choice_resolution in Seed Config JSON; changing it affects only unresolved races.";
+                            p(class = "help") : "For OWR and Door Rando mutual choices. Each game's result is saved and reused for all rooms and seed rerolls. Scheduling threads always show agreed settings and rules; only creation/import also reveals random results there. Room opening posts in each race room or private async thread; without a room it falls back to seed reveal. Seed reveal posts settings beside the seed, separately for each async participant. This selector sets choice_resolution in Seed Config JSON; changing it affects only unresolved races.";
                         });
 
                         : guides::seed_config();

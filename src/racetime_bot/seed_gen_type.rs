@@ -251,9 +251,25 @@ impl SeedGenType {
         draft_required: bool,
     ) -> Option<String> {
         if let Some(config) = super::choice_resolution::config(self) {
-            let snapshot = super::choice_resolution::read(db_pool, race.id).await.ok().flatten()?;
-            return snapshot.visible_at(super::choice_resolution::Timing::RaceCreation)
-                .then(|| snapshot.display_for_config(is_async, &config.for_display(race, draft_required)));
+            let display_config = config.for_display(race, draft_required);
+            let summary = if let Some(snapshot) = super::choice_resolution::read(db_pool, race.id).await.ok()? {
+                snapshot.scheduling_display(is_async, &display_config)
+            } else {
+                let team_ids = race.teams_opt()?.map(|team| i64::from(team.id)).collect_vec();
+                if team_ids.len() < 2 {
+                    return None;
+                }
+                let rows = sqlx::query_scalar::<_, serde_json::Value>("SELECT custom_choices FROM teams WHERE id = ANY($1)")
+                    .bind(&team_ids).fetch_all(db_pool).await.ok()?;
+                if rows.len() != team_ids.len() {
+                    return None;
+                }
+                super::choice_resolution::scheduling_preferences(&super::resolve_choice_values(&rows), &display_config, is_async)
+            };
+            return Some(match config.pending_baseline(race, draft_required) {
+                Some(baseline) => format!("{baseline}\n{summary}"),
+                None => summary,
+            });
         }
         match self {
             Self::AlttprDoorRando {

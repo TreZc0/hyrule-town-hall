@@ -132,7 +132,7 @@ async fn migrated_crosskeys_and_cabookey_match_main_for_every_seed_choice_combin
             );
             assert_eq!(
                 actual.meta,
-                json!({"bps":true, "name":Uuid::nil().to_string(), "race":true, "skip_playthrough":true, "spoiler":"full", "suppress_rom":true})
+                json!({"bps":true, "name":Uuid::nil().to_string(), "race":true, "skip_playthrough":false, "spoiler":"full", "suppress_rom":true})
             );
             cases += 1;
         }
