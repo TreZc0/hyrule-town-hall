@@ -3,6 +3,7 @@ use {
     crate::{
         discord_bot::ADMIN_USER,
         event::{Data, Tab, enter},
+        game::Game,
         prelude::*,
         racetime_bot::VersionedBranch,
         user::DisplaySource,
@@ -10,6 +11,27 @@ use {
     serenity::model::id::RoleId,
 };
 
+async fn can_manage_game(
+    transaction: &mut Transaction<'_, Postgres>,
+    user: &User,
+    game: &Game,
+) -> Result<bool, event::Error> {
+    Ok(user.is_global_admin() || game.is_admin(transaction, user).await?)
+}
+
+async fn can_manage_series(
+    transaction: &mut Transaction<'_, Postgres>,
+    user: &User,
+    series: Series,
+) -> Result<bool, event::Error> {
+    if user.is_global_admin() {
+        return Ok(true);
+    }
+    let Some(game) = Game::from_series(transaction, series).await? else {
+        return Ok(false);
+    };
+    Ok(game.is_admin(transaction, user).await?)
+}
 
 fn preroll_help() -> RawHtml<String> {
     html! {
@@ -140,14 +162,19 @@ async fn setup_form(
         None => String::new(),
     };
 
+    let can_manage = if let Some(ref me) = me {
+        can_manage_series(&mut transaction, me, event.series).await?
+    } else {
+        false
+    };
     let content = if event.is_ended() {
         html! {
             article {
                 p : "This event has ended and can no longer be configured.";
             }
         }
-    } else if let Some(ref me) = me {
-        if me.is_global_admin() {
+    } else if me.is_some() {
+        if can_manage {
             let mut errors = ctx.errors().collect_vec();
             let all_events = sqlx::query!(
                 r#"SELECT series AS "series: crate::series::Series", event, display_name FROM events ORDER BY series, event"#
@@ -666,7 +693,7 @@ async fn setup_form(
         } else {
             html! {
                 article {
-                    p : "You must be a global admin to access this page.";
+                    p : "You must be a global admin or an admin for this event's game to access this page.";
                 }
             }
         }
@@ -813,9 +840,9 @@ pub(crate) async fn post(
                 "This event has ended and can no longer be configured",
             ));
         }
-        if !me.is_global_admin() {
+        if !can_manage_series(&mut transaction, &me, event_data.series).await? {
             form.context.push_error(form::Error::validation(
-                "You must be a global admin to configure this event.",
+                "You must be a global admin or an admin for this event's game to configure this event.",
             ));
         }
 
@@ -1574,9 +1601,9 @@ pub(crate) async fn add_organizer(
                 "This event has ended and can no longer be configured",
             ));
         }
-        if !me.is_global_admin() {
+        if !can_manage_series(&mut transaction, &me, event_data.series).await? {
             form.context.push_error(form::Error::validation(
-                "You must be a global admin to configure this event.",
+                "You must be a global admin or an admin for this event's game to configure this event.",
             ));
         }
 
@@ -1675,9 +1702,9 @@ pub(crate) async fn remove_organizer(
                 "This event has ended and can no longer be configured",
             ));
         }
-        if !me.is_global_admin() {
+        if !can_manage_series(&mut transaction, &me, event_data.series).await? {
             form.context.push_error(form::Error::validation(
-                "You must be a global admin to configure this event.",
+                "You must be a global admin or an admin for this event's game to configure this event.",
             ));
         }
 
@@ -1754,9 +1781,9 @@ pub(crate) async fn copy_organizers(
                 "This event has ended and can no longer be configured.",
             ));
         }
-        if !me.is_global_admin() {
+        if !can_manage_series(&mut transaction, &me, event_data.series).await? {
             form.context.push_error(form::Error::validation(
-                "You must be a global admin to configure this event.",
+                "You must be a global admin or an admin for this event's game to configure this event.",
             ));
         }
         let (source_series, source_event_slug) =
@@ -1849,9 +1876,9 @@ pub(crate) async fn update_enter_flow(
                 "This event has ended and can no longer be configured",
             ));
         }
-        if !me.is_global_admin() {
+        if !can_manage_series(&mut transaction, &me, event_data.series).await? {
             form.context.push_error(form::Error::validation(
-                "You must be a global admin to configure this event.",
+                "You must be a global admin or an admin for this event's game to configure this event.",
             ));
         }
 
@@ -2008,22 +2035,24 @@ struct UserSearchRow {
 }
 fn create_form_content(
     me: &Option<User>,
-    _uri: &Origin<'_>,
     csrf: Option<&CsrfToken>,
     ctx: Context<'_>,
+    game: &Game,
+    series: &[Series],
+    can_manage: bool,
 ) -> RawHtml<String> {
-    if let Some(me) = me {
-        if me.is_global_admin() {
+    if me.is_some() {
+        if can_manage {
             let mut errors = ctx.errors().collect_vec();
             html! {
                 article {
-                    h2 : "Create New Event";
+                    h2 : format!("Create New Event — {}", game.display_name);
 
-                    : full_form(uri!(create_post), csrf, html! {
+                    : full_form(uri!(create_post(&game.name)), csrf, html! {
                         : form_field("series", &mut errors, html! {
                             : help::label("series", "Series");
                             select(id = "series", name = "series", style = "width: 100%; max-width: 600px;") {
-                                @for series in all::<Series>() {
+                                @for series in series {
                                     option(value = series.slug(), selected? = ctx.field_value("series").map_or(false, |v| v == series.slug())) : series.display_name();
                                 }
                             }
@@ -2252,7 +2281,7 @@ fn create_form_content(
         } else {
             html! {
                 article {
-                    p : "You must be a global admin to access this page.";
+                    p : "You must be a global admin or an admin for this game to access this page.";
                 }
             }
         }
@@ -2260,7 +2289,7 @@ fn create_form_content(
         html! {
             article {
                 p {
-                    a(href = uri!(auth::login(Some(uri!(create_get))))) : "Sign in or create a Hyrule Town Hall account";
+                    a(href = uri!(auth::login(Some(uri!(create_get(&game.name)))))) : "Sign in or create a Hyrule Town Hall account";
                     : " to access this page.";
                 }
             }
@@ -2268,15 +2297,32 @@ fn create_form_content(
     }
 }
 
-#[rocket::get("/event/new")]
+#[rocket::get("/games/<game_name>/event/new")]
 pub(crate) async fn create_get(
     pool: &State<PgPool>,
     me: Option<User>,
     uri: Origin<'_>,
     csrf: Option<CsrfToken>,
+    game_name: &str,
 ) -> Result<RawHtml<String>, StatusOrError<event::Error>> {
-    let transaction = pool.begin().await?;
-    let content = create_form_content(&me, &uri, csrf.as_ref(), Context::default());
+    let mut transaction = pool.begin().await?;
+    let game = Game::from_name(&mut transaction, game_name)
+        .await?
+        .ok_or(StatusOrError::Status(Status::NotFound))?;
+    let series = game.series(&mut transaction).await?;
+    let can_manage = if let Some(ref me) = me {
+        can_manage_game(&mut transaction, me, &game).await?
+    } else {
+        false
+    };
+    let content = create_form_content(
+        &me,
+        csrf.as_ref(),
+        Context::default(),
+        &game,
+        &series,
+        can_manage,
+    );
     Ok(page(
         transaction,
         &me,
@@ -2321,27 +2367,41 @@ pub(crate) struct CreateEventForm {
     choice_resolution: Option<String>,
 }
 
-#[rocket::post("/event/new", data = "<form>")]
+#[rocket::post("/games/<game_name>/event/new", data = "<form>")]
 pub(crate) async fn create_post(
     pool: &State<PgPool>,
     me: User,
     uri: Origin<'_>,
     csrf: Option<CsrfToken>,
+    game_name: &str,
     form: Form<Contextual<'_, CreateEventForm>>,
 ) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
+    let mut transaction = pool.begin().await?;
+    let game = Game::from_name(&mut transaction, game_name)
+        .await?
+        .ok_or(StatusOrError::Status(Status::NotFound))?;
+    let allowed_series = game.series(&mut transaction).await?;
+    let can_manage = can_manage_game(&mut transaction, &me, &game).await?;
     let mut form = form.into_inner();
     form.verify(&csrf);
 
     Ok(if let Some(ref value) = form.value {
-        if !me.is_global_admin() {
+        if !can_manage {
             form.context.push_error(form::Error::validation(
-                "You must be a global admin to create events.",
+                "You must be a global admin or an admin for this game to create events.",
             ));
         }
 
         // Parse series
         let series = match value.series.parse::<Series>() {
-            Ok(s) => Some(s),
+            Ok(s) if allowed_series.contains(&s) => Some(s),
+            Ok(_) => {
+                form.context.push_error(
+                    form::Error::validation("The selected series does not belong to this game.")
+                        .with_name("series"),
+                );
+                None
+            }
             Err(()) => {
                 form.context
                     .push_error(form::Error::validation("Invalid series.").with_name("series"));
@@ -2533,8 +2593,14 @@ pub(crate) async fn create_post(
 
         if form.context.errors().next().is_some() {
             let me = Some(me);
-            let transaction = pool.begin().await?;
-            let content = create_form_content(&me, &uri, csrf.as_ref(), form.context);
+            let content = create_form_content(
+                &me,
+                csrf.as_ref(),
+                form.context,
+                &game,
+                &allowed_series,
+                can_manage,
+            );
             return Ok(RedirectOrContent::Content(
                 page(
                     transaction,
@@ -2549,8 +2615,6 @@ pub(crate) async fn create_post(
         }
 
         let series = series.expect("series should be valid if no errors");
-
-        let mut transaction = pool.begin().await?;
 
         // Insert the new event
         sqlx::query!(r#"
@@ -2603,8 +2667,14 @@ pub(crate) async fn create_post(
         RedirectOrContent::Redirect(Redirect::to(uri!(get(series, &*value.event))))
     } else {
         let me = Some(me);
-        let transaction = pool.begin().await?;
-        let content = create_form_content(&me, &uri, csrf.as_ref(), form.context);
+        let content = create_form_content(
+            &me,
+            csrf.as_ref(),
+            form.context,
+            &game,
+            &allowed_series,
+            can_manage,
+        );
         RedirectOrContent::Content(
             page(
                 transaction,

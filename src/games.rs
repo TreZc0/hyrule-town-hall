@@ -401,6 +401,9 @@ async fn game_page<'a>(
 
             @if is_admin || me.as_ref().map_or(false, |me| me.is_global_admin()) {
                 h2 : "Admin Actions";
+                p {
+                    a(href = uri!(crate::event::setup::create_get(&game.name))) : "Create New Event";
+                }
                 @if me.as_ref().is_some_and(User::is_global_admin) {
                     p { a(href = uri!(series::get(&game.name))) : "Manage Series"; }
                 }

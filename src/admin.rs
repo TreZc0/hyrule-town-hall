@@ -145,6 +145,7 @@ pub(crate) async fn index(
                                     div(class = "actions", style = "display: flex; gap: 8px;") {
                                         button(class = "button edit-btn", onclick = format!("startEditGame('{}')", game.name)) : "Edit";
                                         a(href = uri!(crate::games::get(&game.name, _))) : "Manage";
+                                        a(href = uri!(crate::event::setup::create_get(&game.name))) : "Create Event";
                                     }
                                 }
                             }
@@ -156,11 +157,6 @@ pub(crate) async fn index(
             h2 : "Add New Game";
             p {
                 a(href = uri!(add_game_form)) : "Add New Game";
-            }
-
-            h2 : "Events";
-            p {
-                a(href = uri!(crate::event::setup::create_get)) : "Create New Event";
             }
 
             h2 : "ZSR Restreaming Backends";
