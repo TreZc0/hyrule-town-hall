@@ -228,16 +228,19 @@ async fn qualifiers_form(
                                             }
                                         }
                                         @if attempt.state != "void" {
-                                            form(action = uri!(post_pooled_result(event.series, &*event.event)).to_string(), method = "post") {
-                                                : csrf;
-                                                input(type = "hidden", name = "attempt_id", value = attempt.id);
-                                                input(type = "hidden", name = "control_version", value = attempt.control_version);
-                                                p(class = "qualifier-hint") : "DQ keeps this attempt with 0 points. Invalidate cancels it, removing it from scoring and freeing the attempt or retry it used.";
-                                                : help::label(&format!("attempt-{}-reason", attempt.id), "reason", "Reason (optional)");
-                                                textarea(id = format!("attempt-{}-reason", attempt.id), name = "reason");
-                                                fieldset {
-                                                    button(type = "submit", name = "action", value = "dq", onclick = "return confirm('Disqualify this attempt? It will remain used and count for 0 points.')") : "DQ";
-                                                    button(type = "submit", name = "action", value = "invalidate", onclick = "return confirm('Invalidate this attempt? It will be removed from scoring and its attempt or retry usage will be released. If this was a retry, the previous valid result will be restored.')") : "Invalidate";
+                                            details {
+                                                summary : "DQ / invalidate attempt";
+                                                form(action = uri!(post_pooled_result(event.series, &*event.event)).to_string(), method = "post") {
+                                                    : csrf;
+                                                    input(type = "hidden", name = "attempt_id", value = attempt.id);
+                                                    input(type = "hidden", name = "control_version", value = attempt.control_version);
+                                                    p(class = "qualifier-hint") : "DQ keeps this attempt with 0 points. Invalidate cancels it, removing it from scoring and freeing the attempt or retry it used.";
+                                                    : help::label(&format!("attempt-{}-reason", attempt.id), "reason", "Reason (optional)");
+                                                    textarea(id = format!("attempt-{}-reason", attempt.id), name = "reason");
+                                                    fieldset {
+                                                        button(type = "submit", name = "action", value = "dq", onclick = "return confirm('Disqualify this attempt? It will remain used and count for 0 points.')") : "DQ";
+                                                        button(type = "submit", name = "action", value = "invalidate", onclick = "return confirm('Invalidate this attempt? It will be removed from scoring and its attempt or retry usage will be released. If this was a retry, the previous valid result will be restored.')") : "Invalidate";
+                                                    }
                                                 }
                                             }
                                         }
