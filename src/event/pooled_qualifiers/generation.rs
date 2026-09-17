@@ -33,7 +33,7 @@ pub(crate) fn roll(
         return Err(Error::ModeUnavailable);
     }
     Ok(match kind {
-        SeedGenType::Owr { config, .. } => state.roll_pooled_owr_seed(config.clone()),
+        SeedGenType::Owr { config, build } => state.roll_pooled_owr_seed(config.clone(), *build),
         SeedGenType::AlttprDoorRando {
             source: AlttprDrSource::MutualChoices { config },
             ..

@@ -1999,11 +1999,9 @@ async fn status_page(
                         @let retry_used = sqlx::query_scalar::<_, bool>(
                             r#"SELECT EXISTS(
                                 SELECT 1 FROM qualifier_attempts WHERE team_id = $1 AND retry_of IS NOT NULL AND state <> 'void'
-                                UNION ALL
-                                SELECT 1 FROM qualifier_live_entries WHERE team_id = $1 AND retry_reserved_at IS NOT NULL
-                                  AND retry_released_at IS NULL
                             )"#
                         ).bind(i64::from(row.id)).fetch_one(&mut *transaction).await?;
+                        @let retry_declared = attempts.iter().any(|attempt| attempt.counts_for_entrant && attempt.retry_declared_at.is_some());
                         @let pooled_ctx = ctx.take_request_pooled_async();
                         @let mut pooled_errors = pooled_ctx.errors().collect_vec();
                         h3 : "Qualifier Modes";
@@ -2048,31 +2046,31 @@ async fn status_page(
                                                 a(href = format!("https://discord.com/channels/{}/{thread}", data.discord_guild.map(|guild| guild.get()).unwrap_or_default())) : "Open Discord thread";
                                             }
                                         }
-                                        @if matches!(attempt.state.as_str(), "awaiting_verification" | "finalized") && !retry_used && config.retry_limit > 0 && config.requests_open(Utc::now(), true) && attempt.retry_banned_at.is_none() {
-                                            @let errors = mem::take(&mut pooled_errors);
-                                            @let mut field_errors = Vec::new();
-                                            : full_form(uri!(event::request_pooled_async(data.series, &*data.event)), csrf, html! {
-                                                input(type = "hidden", name = "mode_id", value = mode.id);
-                                                input(type = "hidden", name = "retry_attempt_id", value = attempt.id);
-                                                : form_field("confirm", &mut field_errors, html! {
-                                                    input(type = "checkbox", name = "confirm", id = format!("retry-mode-{}", mode.id));
-                                                    label(for = format!("retry-mode-{}", mode.id)) : "I understand this permanently replaces my current result and uses my one event-wide retry.";
-                                                });
-                                            }, errors, "Request retry async");
-                                            @for (live_seed_id, _, start, _) in &mode_live_races {
+                                        @if !retry_used && attempt.retry_declared_at.is_some() && attempt.retry_banned_at.is_none() {
+                                            p : "Re-attempt declared for this result. Your next eligible live race in this pool will replace it at GO. Leaving before GO keeps your declaration and current result.";
+                                            @if config.requests_open(Utc::now(), true) {
                                                 @let errors = mem::take(&mut pooled_errors);
                                                 @let mut field_errors = Vec::new();
-                                                : full_form(uri!(event::reserve_pooled_live_retry(data.series, &*data.event)), csrf, html! {
+                                                : full_form(uri!(event::request_pooled_async(data.series, &*data.event)), csrf, html! {
                                                     input(type = "hidden", name = "mode_id", value = mode.id);
-                                                    input(type = "hidden", name = "live_seed_id", value = *live_seed_id);
                                                     : form_field("confirm", &mut field_errors, html! {
-                                                        input(type = "checkbox", name = "confirm", id = format!("retry-live-{}-{}", mode.id, live_seed_id));
-                                                        label(for = format!("retry-live-{}-{}", mode.id, live_seed_id)) {
-                                                            : "I understand this retry is reserved now and permanently replaces my current result only if I remain in the live race at GO.";
-                                                        }
+                                                        input(type = "checkbox", name = "confirm", id = format!("retry-async-{}", mode.id));
+                                                        label(for = format!("retry-async-{}", mode.id)) : "I understand requesting this async uses my re-attempt and replaces my current result.";
                                                     });
-                                                }, errors, "Reserve live retry");
+                                                }, errors, "Request re-attempt async");
                                             }
+                                        } else if matches!(attempt.state.as_str(), "awaiting_verification" | "finalized") && !retry_used && !retry_declared && config.retry_limit > 0 && config.requests_open(Utc::now(), true) && attempt.retry_banned_at.is_none() {
+                                            @let errors = mem::take(&mut pooled_errors);
+                                            @let mut field_errors = Vec::new();
+                                            p : "Declare before the live entry cutoff. Your next eligible live race in this pool will replace this result at GO, or you can request an async re-attempt after declaring.";
+                                            : full_form(uri!(event::declare_pooled_retry(data.series, &*data.event)), csrf, html! {
+                                                input(type = "hidden", name = "mode_id", value = mode.id);
+                                                input(type = "hidden", name = "original_attempt_id", value = attempt.id);
+                                                : form_field("confirm", &mut field_errors, html! {
+                                                    input(type = "checkbox", name = "confirm", id = format!("retry-mode-{}", mode.id));
+                                                    label(for = format!("retry-mode-{}", mode.id)) : "I want to replace this result using my one event-wide re-attempt in this pool.";
+                                                });
+                                            }, errors, "Declare re-attempt for this result");
                                         }
                                     } else if config.requests_open(Utc::now(), false) && !config.requests_paused {
                                         @let errors = mem::take(&mut pooled_errors);
@@ -4592,7 +4590,6 @@ pub(crate) struct RequestPooledAsyncForm {
     #[field(default = String::new())]
     csrf: String,
     mode_id: i64,
-    retry_attempt_id: Option<i64>,
     confirm: bool,
 }
 
@@ -4644,15 +4641,9 @@ pub(crate) async fn request_pooled_async(
         let value = form.value.as_ref().expect("validated form");
         let team_id = team_id.expect("validated team");
         transaction.rollback().await?;
-        let result = if value.retry_attempt_id.is_some() {
-            pooled_qualifiers::request_async_retry(pool, team_id, value.mode_id, me.id.into())
-                .await
-                .map(drop)
-        } else {
-            pooled_qualifiers::request_async(pool, team_id, value.mode_id, me.id.into())
-                .await
-                .map(drop)
-        };
+        let result = pooled_qualifiers::request_async(pool, team_id, value.mode_id, me.id.into())
+            .await
+            .map(drop);
         match result {
             Ok(()) => {
                 return Ok(RedirectOrContent::Redirect(Redirect::to(uri!(status(
@@ -4681,16 +4672,16 @@ pub(crate) async fn request_pooled_async(
 }
 
 #[derive(FromForm, CsrfForm)]
-pub(crate) struct ReservePooledLiveRetryForm {
+pub(crate) struct DeclarePooledRetryForm {
     #[field(default = String::new())]
     csrf: String,
     mode_id: i64,
-    live_seed_id: i64,
+    original_attempt_id: i64,
     confirm: bool,
 }
 
-#[rocket::post("/event/<series>/<event>/reserve-pooled-live-retry", data = "<form>")]
-pub(crate) async fn reserve_pooled_live_retry(
+#[rocket::post("/event/<series>/<event>/declare-pooled-retry", data = "<form>")]
+pub(crate) async fn declare_pooled_retry(
     pool: &State<PgPool>,
     http_client: &State<reqwest::Client>,
     me: User,
@@ -4698,7 +4689,7 @@ pub(crate) async fn reserve_pooled_live_retry(
     csrf: Option<CsrfToken>,
     series: Series,
     event: &str,
-    form: Form<Contextual<'_, ReservePooledLiveRetryForm>>,
+    form: Form<Contextual<'_, DeclarePooledRetryForm>>,
 ) -> Result<RedirectOrContent, StatusOrError<Error>> {
     let mut transaction = pool.begin().await?;
     let data = Data::new(&mut transaction, series, event)
@@ -4737,11 +4728,11 @@ pub(crate) async fn reserve_pooled_live_retry(
         let value = form.value.as_ref().expect("validated form");
         let team_id = team_id.expect("validated team");
         transaction.rollback().await?;
-        match pooled_qualifiers::reserve_live_retry(
+        match pooled_qualifiers::declare_retry(
             pool,
             team_id,
             value.mode_id,
-            value.live_seed_id,
+            value.original_attempt_id,
             me.id.into(),
         )
         .await

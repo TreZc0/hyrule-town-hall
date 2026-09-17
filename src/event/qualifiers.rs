@@ -10,6 +10,7 @@ mod editor;
 mod help;
 mod pools;
 pub(crate) mod ranks;
+mod standings;
 
 async fn qualifiers_form(
     mut transaction: Transaction<'_, Postgres>,
@@ -110,6 +111,19 @@ async fn qualifiers_form(
     } else {
         Vec::new()
     };
+    let pooled_standings = if let Some(config) = &pooled_config {
+        standings::load(
+            &mut transaction,
+            event.series,
+            &event.event,
+            config,
+            &pooled_modes,
+            &pooled_attempts,
+        )
+        .await?
+    } else {
+        html! {}
+    };
     let rank_editor = ranks::editor(&mut transaction, &event, csrf, &ctx).await?;
 
     let current_role_str = event
@@ -121,75 +135,22 @@ async fn qualifiers_form(
         script(src = static_url!("setting-help.js")) {}
         article(class = "qualifier-admin") {
             : rank_editor;
-            h2 : "Qualifier Announcement Ping";
-            : full_form(uri!(post_notification_role(event.series, &*event.event)), csrf, html! {
-                : form_field("notification_role_id", &mut ctx.errors().collect_vec(), html! {
-                    : help::label("notification_role_id", "notification_role_id", "Role ID to ping when a qualifier room opens:");
-                    input(type = "text", id = "notification_role_id", name = "notification_role_id", value = ctx.field_value("notification_role_id").unwrap_or(&current_role_str), placeholder = "Discord role ID (optional)", style = "width: 100%; max-width: 400px;");
-                });
-            }, ctx.errors().collect_vec(), "Save");
-            @if event.qualifier_notification_role_id.is_some() {
-                form(action = uri!(delete_notification_role(event.series, &*event.event)).to_string(), method = "post", style = "display: inline;") {
-                    input(type = "hidden", name = "csrf", value? = csrf.map(|token| token.authenticity_token()));
-                    button(type = "submit") : "Disable Ping";
-                }
-            }
-
-            h2 : "Qualifier Settings";
-            : full_form(uri!(post_settings(event.series, &*event.event)), csrf, html! {
-                : form_field("qualifier_score_hiding", &mut ctx.errors().collect_vec(), html! {
-                    : help::label("qualifier_score_hiding", "qualifier_score_hiding", "Qualifier Score Hiding");
-                    select(id = "qualifier_score_hiding", name = "qualifier_score_hiding") {
-                        option(value = "none", selected? = ctx.field_value("qualifier_score_hiding").map_or(event.qualifier_score_hiding == QualifierScoreHiding::None, |v| v == "none")) : "None (show all scores)";
-                        option(value = "async_only", selected? = ctx.field_value("qualifier_score_hiding").map_or(event.qualifier_score_hiding == QualifierScoreHiding::AsyncOnly, |v| v == "async_only")) : "Async only (hide async scores)";
-                        option(value = "full_points", selected? = ctx.field_value("qualifier_score_hiding").map_or(event.qualifier_score_hiding == QualifierScoreHiding::FullPoints, |v| v == "full_points")) : "Full points (hide all points)";
-                        option(value = "full_points_counts", selected? = ctx.field_value("qualifier_score_hiding").map_or(event.qualifier_score_hiding == QualifierScoreHiding::FullPointsCounts, |v| v == "full_points_counts")) : "Full points + counts";
-                        option(value = "full_complete", selected? = ctx.field_value("qualifier_score_hiding").map_or(event.qualifier_score_hiding == QualifierScoreHiding::FullComplete, |v| v == "full_complete")) : "Full complete (hide everything)";
-                    }
-                });
-                : form_field("automated_asyncs", &mut ctx.errors().collect_vec(), html! {
-                    input(type = "checkbox", id = "automated_asyncs", name = "automated_asyncs", checked? = ctx.field_value("automated_asyncs").map_or(event.automated_asyncs, |v| v == "on"));
-                    : help::label("automated_asyncs", "automated_asyncs", "Use automated Discord threads for qualifier asyncs");
-                    label(class = "help") : " (When enabled, qualifier requests create private Discord threads with READY/countdown/FINISH buttons)";
-                });
-            }, ctx.errors().collect_vec(), "Save Settings");
-
             @if let Some(ref config) = pooled_config {
                 nav(class = "qualifier-jump", aria_label = "Qualifier management sections") {
-                    a(href = "#pooled-configuration") : "Format & schedule";
-                    a(href = "#pooled-modes") : "Modes";
-                    a(href = "#pooled-seeds") : "Seed pools";
+                    a(href = "#pooled-standings") : "Standings";
                     a(href = "#pooled-attempts") : "Attempts & results";
+                    a(href = "#pooled-seeds") : "Seed pools";
                     a(href = "#pooled-live") : "Live eligibility";
+                    a(href = "#qualifier-setup") : "Setup";
                 }
-                : editor::configuration(event.series, &event.event, csrf, config, &pooled_readiness, &ctx);
-                : editor::modes(event.series, &event.event, csrf, config, &pooled_modes);
-
-                section(id = "pooled-seeds", class = "qualifier-section") {
-                    p(class = "qualifier-eyebrow") : "3 · Prepare the seeds";
-                    h2 : "Qualifier seed pools";
-                    p(class = "qualifier-intro") : "Each mode needs its own ready private seeds. Generate the pool after saving the ruleset, then create any required live qualifiers below. Counts and results reflect the last page load; reload to see generation progress.";
-                    @if pooled_modes.is_empty() { p(class = "qualifier-empty") : "Save a mode above to create its seed pool."; }
-                    @for mode in &pooled_modes {
-                        section(class = "qualifier-pool-card") {
-                            h3 { : &mode.display_name; span(class = "qualifier-badge") : if mode.enabled { "Enabled" } else { "Disabled" }; }
-                            @if mode.enabled {
-                                : editor::seed_controls(event.series, &event.event, csrf, mode, config);
-                            } else { p(class = "qualifier-hint") : "Disabled mode — historical assignments remain available below."; }
-                            p(class = "qualifier-hint") : "Assignment counts exclude void attempts. Replaced attempts remain in their original seed group and may still contribute to par. Expand a seed for its assigned entrants and results.";
-                            : pools::overview(config, mode.id, &pooled_seeds, &pooled_attempts, event.discord_guild.map(|guild| guild.get()));
-                            @if mode.enabled { : editor::import_form(event.series, &event.event, csrf, mode, config); }
-                        }
-                    }
-                }
-
+                : pooled_standings;
                 h2(id = "pooled-attempts", class = "qualifier-section-title") : "Attempts & result review";
                 p(class = "qualifier-intro") : "One row per assigned attempt. Counted marks the result used for the entrant’s mode score; Retry of links a replacement to its original attempt. Open Review / correct result to verify evidence, record a correction or review history.";
                 @if pooled_attempts.is_empty() {
                     p : "No attempts have been assigned.";
                 } else {
                     table {
-                        thead { tr { th : "ID"; th : "Entrant"; th : "Mode"; th : "Seed"; th : "Source"; th : "State"; th : "Outcome"; th : "Counted"; th : "Retry of"; th : "Review / history"; th : "VOD"; } }
+                        thead { tr { th : "ID"; th : "Entrant"; th : "Mode"; th : "Seed"; th : "Source"; th : "State"; th : "Outcome"; th : "Counted"; th : "Retry of"; th : "Re-attempt declaration"; th : "Review / history"; th : "VOD"; } }
                         tbody {
                             @for attempt in &pooled_attempts {
                                 tr(id = format!("attempt-{}", attempt.id)) {
@@ -208,11 +169,17 @@ async fn qualifiers_form(
                                     td : if attempt.counts_for_entrant { "yes" } else { "no" };
                                     td : attempt.retry_of.map(|id| id.to_string()).unwrap_or_default();
                                     td {
+                                        @if let Some(declared_at) = attempt.retry_declared_at {
+                                            : if attempt.superseded_by.is_some() { "Used — " } else if attempt.retry_banned_at.is_some() { "Blocked — " } else if attempt.counts_for_entrant && attempt.state != "void" { "Pending — " } else { "Inactive — " };
+                                            : format_datetime(declared_at, DateTimeFormat { long: true, running_text: false });
+                                        }
+                                    }
+                                    td {
                                         @if let Some(error) = &attempt.delivery_error { p : error; }
                                         @if attempt.delivery_error.is_some() {
                                             details {
                                                 summary : "Recover Discord delivery";
-                                                p : "Review the private thread first. Retrying READY or seed delivery keeps the original seed and preparation deadline. GO recovery only accepts an existing bot GO message.";
+                                                p : "Review the private thread or organizers channel first. Retrying READY or seed delivery keeps the original seed and preparation deadline. GO recovery only accepts an existing bot GO message.";
                                                 : full_form(uri!(post_pooled_recover(event.series, &*event.event)), csrf, html! {
                                                     input(type = "hidden", name = "attempt_id", value = attempt.id);
                                                     input(type = "hidden", name = "control_version", value = attempt.control_version);
@@ -222,6 +189,7 @@ async fn qualifiers_form(
                                                         option(value = "seed") : "Retry same seed delivery";
                                                         option(value = "thread") : "Connect existing private thread";
                                                         option(value = "go") : "Connect existing GO message";
+                                                        option(value = "retry-declared") : "Retry re-attempt announcement (or connect existing message)";
                                                     }
                                                     : help::label(&format!("recovery-{}-discord_id", attempt.id), "discord_id", "Discord thread/message ID (for connection actions)");
                                                     input(id = format!("recovery-{}-discord_id", attempt.id), name = "discord_id", type = "number");
@@ -271,6 +239,19 @@ async fn qualifiers_form(
                     }
                 }
 
+                section(id = "pooled-seeds", class = "qualifier-section") {
+                    h2 : "Qualifier seed pools";
+                    p(class = "qualifier-intro") : "Assignments and results grouped by mode and seed. Reload to see generation progress. Expand Setup below to generate seeds.";
+                    @if pooled_modes.is_empty() { p(class = "qualifier-empty") : "Expand Setup below to add a mode and prepare its seed pool."; }
+                    @for mode in &pooled_modes {
+                        section(class = "qualifier-pool-card") {
+                            h3 { : &mode.display_name; span(class = "qualifier-badge") : if mode.enabled { "Enabled" } else { "Disabled" }; }
+                            p(class = "qualifier-hint") : "Assignment counts exclude void attempts. Replaced attempts remain in their original seed group and may still contribute to par. Expand a seed for its assigned entrants and results.";
+                            : pools::overview(config, mode.id, &pooled_seeds, &pooled_attempts, event.discord_guild.map(|guild| guild.get()));
+                        }
+                    }
+                }
+
                 h2(id = "pooled-live", class = "qualifier-section-title") : "Live race eligibility";
                 p(class = "qualifier-intro") : "The cutoff determines who may count a live qualifier. At GO records presence at the start. Retry reservations are shown as reserved, committed or released; the attempt ID connects an eligible start to its result.";
                 @if pooled_live_entries.is_empty() {
@@ -296,95 +277,96 @@ async fn qualifiers_form(
                 }
             }
 
-            h2 : "Seeding Race";
-            @if let Some(ref sr) = seeding_race {
-                table {
-                    thead {
-                        tr {
-                            th : "Start Time";
-                            th : "Room";
-                            @if pooled_config.is_some() { th : "Mode"; }
-                            @if !is_started {
-                                th : "Actions";
-                            }
-                        }
+            details(id = "qualifier-setup", class = "qualifier-disclosure", open? = ctx.errors().next().is_some()) {
+                summary : "Setup";
+                h2 : "Qualifier Announcement Ping";
+                : full_form(uri!(post_notification_role(event.series, &*event.event)), csrf, html! {
+                    : form_field("notification_role_id", &mut ctx.errors().collect_vec(), html! {
+                        : help::label("notification_role_id", "notification_role_id", "Role ID to ping when a qualifier room opens:");
+                        input(type = "text", id = "notification_role_id", name = "notification_role_id", value = ctx.field_value("notification_role_id").unwrap_or(&current_role_str), placeholder = "Discord role ID (optional)", style = "width: 100%; max-width: 400px;");
+                    });
+                }, ctx.errors().collect_vec(), "Save");
+                @if event.qualifier_notification_role_id.is_some() {
+                    form(action = uri!(delete_notification_role(event.series, &*event.event)).to_string(), method = "post", style = "display: inline;") {
+                        input(type = "hidden", name = "csrf", value? = csrf.map(|token| token.authenticity_token()));
+                        button(type = "submit") : "Disable Ping";
                     }
-                    tbody {
-                        tr {
-                            td : sr.start.map(|dt| dt.format("%Y-%m-%d %H:%M UTC").to_string()).unwrap_or("Unscheduled".to_owned());
-                            td {
-                                @if let Some(ref room) = sr.room {
-                                    a(href = room) : room;
-                                }
-                            }
-                            @if !is_started {
-                                td {
-                                    a(class = "button", href = uri!(get_edit_seeding_race(event.series, &*event.event, sr.id)).to_string()) : "Edit";
-                                    : " | ";
-                                    form(action = uri!(delete_seeding_race(event.series, &*event.event, sr.id)).to_string(), method = "post", style = "display: inline;") {
-                                        input(type = "hidden", name = "csrf", value? = csrf.map(|token| token.authenticity_token()));
-                                        button(type = "submit", onclick = "return confirm('Are you sure you want to delete the seeding race?')") : "Delete";
-                                    }
-                                }
+                }
+
+                h2 : "Qualifier Settings";
+                : full_form(uri!(post_settings(event.series, &*event.event)), csrf, html! {
+                    : form_field("qualifier_score_hiding", &mut ctx.errors().collect_vec(), html! {
+                        : help::label("qualifier_score_hiding", "qualifier_score_hiding", "Qualifier Score Hiding");
+                        select(id = "qualifier_score_hiding", name = "qualifier_score_hiding") {
+                            option(value = "none", selected? = ctx.field_value("qualifier_score_hiding").map_or(event.qualifier_score_hiding == QualifierScoreHiding::None, |v| v == "none")) : "None (show all scores)";
+                            option(value = "async_only", selected? = ctx.field_value("qualifier_score_hiding").map_or(event.qualifier_score_hiding == QualifierScoreHiding::AsyncOnly, |v| v == "async_only")) : "Async only (hide async scores)";
+                            option(value = "full_points", selected? = ctx.field_value("qualifier_score_hiding").map_or(event.qualifier_score_hiding == QualifierScoreHiding::FullPoints, |v| v == "full_points")) : "Full points (hide all points)";
+                            option(value = "full_points_counts", selected? = ctx.field_value("qualifier_score_hiding").map_or(event.qualifier_score_hiding == QualifierScoreHiding::FullPointsCounts, |v| v == "full_points_counts")) : "Full points + counts";
+                            option(value = "full_complete", selected? = ctx.field_value("qualifier_score_hiding").map_or(event.qualifier_score_hiding == QualifierScoreHiding::FullComplete, |v| v == "full_complete")) : "Full complete (hide everything)";
+                        }
+                    });
+                    : form_field("automated_asyncs", &mut ctx.errors().collect_vec(), html! {
+                        input(type = "checkbox", id = "automated_asyncs", name = "automated_asyncs", checked? = ctx.field_value("automated_asyncs").map_or(event.automated_asyncs, |v| v == "on"));
+                        : help::label("automated_asyncs", "automated_asyncs", "Use automated Discord threads for qualifier asyncs");
+                        label(class = "help") : " (When enabled, qualifier requests create private Discord threads with READY/countdown/FINISH buttons)";
+                    });
+                }, ctx.errors().collect_vec(), "Save Settings");
+
+                @if let Some(ref config) = pooled_config {
+                    : editor::configuration(event.series, &event.event, csrf, config, &pooled_readiness, &ctx);
+                    : editor::modes(event.series, &event.event, csrf, config, &pooled_modes);
+                    section(class = "qualifier-section") {
+                        p(class = "qualifier-eyebrow") : "3 · Prepare the seeds";
+                        h2 : "Seed generation";
+                        @if pooled_modes.is_empty() { p : "Save a mode above to create its seed pool."; }
+                        @for mode in pooled_modes.iter().filter(|mode| mode.enabled) {
+                            section(class = "qualifier-pool-card") {
+                                h3 : &mode.display_name;
+                                : editor::seed_controls(event.series, &event.event, csrf, mode, config, &pooled_seeds);
                             }
                         }
                     }
                 }
-            } else if is_started {
-                p : "The event has started. A seeding race cannot be created.";
-            } else {
-                h3 : "Create Seeding Race";
-                : full_form(uri!(post_seeding_race(event.series, &*event.event)), csrf, html! {
-                    : form_field("race_start", &mut ctx.errors().collect_vec(), html! {
-                        : help::label("seeding_race_start", "race_start", "Start Time (UTC)");
-                        input(type = "datetime-local", name = "race_start", id = "seeding_race_start", value = ctx.field_value("race_start").unwrap_or(""));
-                    });
-                    : form_field("race_room", &mut ctx.errors().collect_vec(), html! {
-                        : help::label("seeding_race_room", "race_room", "Racetime.gg Room URL (optional)");
-                        input(type = "text", name = "race_room", id = "seeding_race_room", value = ctx.field_value("race_room").unwrap_or(""), placeholder = "https://racetime.gg/...", style = "width: 100%; max-width: 600px;");
-                    });
-                }, ctx.errors().collect_vec(), "Create Seeding Race");
-            }
-
-            h2 : "Live Qualifier Races";
-            @if races.is_empty() {
-                p : "No live qualifier races defined.";
-            } else {
-                table {
-                    thead {
-                        tr {
-                            th : "Number";
-                            th : "Phase";
-                            th : "Round";
-                            th : "Start Time";
-                            th : "Room";
-                            @if pooled_config.is_some() { th : "Mode"; }
-                            @if !is_started {
-                                th : "Actions";
+                h2 : "Live Qualifier Races";
+                @if races.is_empty() {
+                    p : "No live qualifier races defined.";
+                } else {
+                    table {
+                        thead {
+                            tr {
+                                @if pooled_config.is_none() { th : "Number"; }
+                                th : "Phase";
+                                th : "Round";
+                                th : "Start Time";
+                                th : "Room";
+                                @if pooled_config.is_some() { th : "Mode"; }
+                                @if !is_started {
+                                    th : "Actions";
+                                }
                             }
                         }
-                    }
-                    tbody {
-                        @for row in races {
-                            tr {
-                                td : row.qualifier_number.unwrap_or(1);
-                                td : row.phase.as_deref().unwrap_or("");
-                                td : row.round.as_deref().unwrap_or("");
-                                td : row.start.map(|dt| dt.format("%Y-%m-%d %H:%M UTC").to_string()).unwrap_or("Unscheduled".to_owned());
-                                td {
-                                    @if let Some(ref room) = row.room {
-                                        a(href = room) : room;
-                                    }
-                                }
-                                @if pooled_config.is_some() { td : row.mode_name.as_deref().unwrap_or("Unassigned");
-                                }
-                                @if !is_started {
+                        tbody {
+                            @for row in races {
+                                tr {
+                                    @if pooled_config.is_none() { td : row.qualifier_number.unwrap_or(1); }
+                                    td : row.phase.as_deref().unwrap_or("");
+                                    td : row.round.as_deref().unwrap_or("");
+                                    td : row.start.map(|dt| dt.format("%Y-%m-%d %H:%M UTC").to_string()).unwrap_or("Unscheduled".to_owned());
                                     td {
-                                        a(class = "button", href = uri!(get_edit(event.series, &*event.event, row.id)).to_string()) : "Edit";
-                                        : " | ";
-                                        form(action = uri!(delete_race(event.series, &*event.event, row.id)).to_string(), method = "post", style = "display: inline;") {
-                                            input(type = "hidden", name = "csrf", value? = csrf.map(|token| token.authenticity_token()));
-                                            button(type = "submit", onclick = "return confirm('Are you sure you want to delete this qualifier race? This will also delete all volunteer signups for this race.')") : "Delete";
+                                        @if let Some(ref room) = row.room {
+                                            a(href = room) : room;
+                                        }
+                                    }
+                                    @if pooled_config.is_some() { td : row.mode_name.as_deref().unwrap_or("Unassigned");
+                                    }
+                                    @if !is_started {
+                                        td {
+                                            a(class = "button", href = uri!(get_edit(event.series, &*event.event, row.id)).to_string()) : "Edit";
+                                            : " | ";
+                                            form(action = uri!(delete_race(event.series, &*event.event, row.id)).to_string(), method = "post", style = "display: inline;") {
+                                                input(type = "hidden", name = "csrf", value? = csrf.map(|token| token.authenticity_token()));
+                                                button(type = "submit", onclick = "return confirm('Are you sure you want to delete this qualifier race? This will also delete all volunteer signups for this race.')") : "Delete";
+                                            }
                                         }
                                     }
                                 }
@@ -392,44 +374,98 @@ async fn qualifiers_form(
                         }
                     }
                 }
-            }
 
-            @if is_started {
-                p : "The event has started. New qualifier races cannot be created.";
-            } else {
-                h3 : "Create Live Qualifier Race";
-                : full_form(uri!(post_race(event.series, &*event.event)), csrf, html! {
-                    : form_field("race_phase", &mut ctx.errors().collect_vec(), html! {
-                        : help::label("race_phase", "race_phase", "Phase display name");
-                        input(type = "text", name = "race_phase", id = "race_phase", value = ctx.field_value("race_phase").unwrap_or("Qualifier"));
-                        label(class = "help") : "This race counts as a qualifier regardless of its display name.";
-                    });
-                    : form_field("qualifier_number", &mut ctx.errors().collect_vec(), html! {
-                        : help::label("qualifier_number", "qualifier_number", "Qualifier number");
-                        input(type = "number", min = "1", name = "qualifier_number", id = "qualifier_number", value = ctx.field_value("qualifier_number").unwrap_or("1"));
-                    });
-                    : form_field("race_round", &mut ctx.errors().collect_vec(), html! {
-                        : help::label("race_round", "race_round", "Round");
-                        input(type = "text", name = "race_round", id = "race_round", value = ctx.field_value("race_round").unwrap_or(""), placeholder = "e.g. Live 1");
-                    });
-                    : form_field("race_start", &mut ctx.errors().collect_vec(), html! {
-                        : help::label("race_start", "race_start", "Start Time (UTC)");
-                        input(type = "datetime-local", name = "race_start", id = "race_start", value = ctx.field_value("race_start").unwrap_or(""));
-                    });
-                    : form_field("race_room", &mut ctx.errors().collect_vec(), html! {
-                        : help::label("race_room", "race_room", "Racetime.gg Room URL (optional)");
-                        input(type = "text", name = "race_room", id = "race_room", value = ctx.field_value("race_room").unwrap_or(""), placeholder = "https://racetime.gg/...", style = "width: 100%; max-width: 600px;");
-                    });
-                    @if pooled_config.is_some() {
-                        : help::label("qualifier_mode_id", "qualifier_mode_id", "Qualifier mode");
-                        select(name = "qualifier_mode_id", id = "qualifier_mode_id", required) {
-                            option(value = "") : "Select a mode";
-                            @for mode in pooled_modes.iter().filter(|mode| mode.enabled) {
-                                option(value = mode.id) : &mode.display_name;
+                @if is_started {
+                    p : "The event has started. New qualifier races cannot be created.";
+                } else {
+                    h3 : "Create Live Qualifier Race";
+                    : full_form(uri!(post_race(event.series, &*event.event)), csrf, html! {
+                        : form_field("race_phase", &mut ctx.errors().collect_vec(), html! {
+                            : help::label("race_phase", "race_phase", "Phase display name");
+                            input(type = "text", name = "race_phase", id = "race_phase", value = ctx.field_value("race_phase").unwrap_or("Qualifier"));
+                            label(class = "help") : "This race counts as a qualifier regardless of its display name.";
+                        });
+                        @if pooled_config.is_some() {
+                            input(type = "hidden", name = "qualifier_number", value = "1");
+                        } else {
+                            : form_field("qualifier_number", &mut ctx.errors().collect_vec(), html! {
+                                : help::label("qualifier_number", "qualifier_number", "Qualifier number");
+                                input(type = "number", min = "1", name = "qualifier_number", id = "qualifier_number", value = ctx.field_value("qualifier_number").unwrap_or("1"));
+                            });
+                        }
+                        : form_field("race_round", &mut ctx.errors().collect_vec(), html! {
+                            : help::label("race_round", "race_round", "Round");
+                            input(type = "text", name = "race_round", id = "race_round", value = ctx.field_value("race_round").unwrap_or(""), placeholder = "e.g. Live 1");
+                        });
+                        : form_field("race_start", &mut ctx.errors().collect_vec(), html! {
+                            : help::label("race_start", "race_start", "Start Time (UTC)");
+                            input(type = "datetime-local", name = "race_start", id = "race_start", value = ctx.field_value("race_start").unwrap_or(""));
+                        });
+                        : form_field("race_room", &mut ctx.errors().collect_vec(), html! {
+                            : help::label("race_room", "race_room", "Racetime.gg Room URL (optional)");
+                            input(type = "text", name = "race_room", id = "race_room", value = ctx.field_value("race_room").unwrap_or(""), placeholder = "https://racetime.gg/...", style = "width: 100%; max-width: 600px;");
+                        });
+                        @if pooled_config.is_some() {
+                            : help::label("qualifier_mode_id", "qualifier_mode_id", "Qualifier mode");
+                            select(name = "qualifier_mode_id", id = "qualifier_mode_id", required) {
+                                option(value = "") : "Select a mode";
+                                @for mode in pooled_modes.iter().filter(|mode| mode.enabled) {
+                                    option(value = mode.id) : &mode.display_name;
+                                }
+                            }
+                        }
+                    }, ctx.errors().collect_vec(), "Create Race");
+                }
+            }
+            section(id = "seeding-race", class = "qualifier-section") {
+                h2 : "Seeding Race";
+                @if let Some(ref sr) = seeding_race {
+                    table {
+                        thead {
+                            tr {
+                                th : "Start Time";
+                                th : "Room";
+                                @if !is_started {
+                                    th : "Actions";
+                                }
+                            }
+                        }
+                        tbody {
+                            tr {
+                                td : sr.start.map(|dt| dt.format("%Y-%m-%d %H:%M UTC").to_string()).unwrap_or("Unscheduled".to_owned());
+                                td {
+                                    @if let Some(ref room) = sr.room {
+                                        a(href = room) : room;
+                                    }
+                                }
+                                @if !is_started {
+                                    td {
+                                        a(class = "button", href = uri!(get_edit_seeding_race(event.series, &*event.event, sr.id)).to_string()) : "Edit";
+                                        : " | ";
+                                        form(action = uri!(delete_seeding_race(event.series, &*event.event, sr.id)).to_string(), method = "post", style = "display: inline;") {
+                                            input(type = "hidden", name = "csrf", value? = csrf.map(|token| token.authenticity_token()));
+                                            button(type = "submit", onclick = "return confirm('Are you sure you want to delete the seeding race?')") : "Delete";
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
-                }, ctx.errors().collect_vec(), "Create Race");
+                } else if is_started {
+                    p : "The event has started. A seeding race cannot be created.";
+                } else {
+                    h3 : "Create Seeding Race";
+                    : full_form(uri!(post_seeding_race(event.series, &*event.event)), csrf, html! {
+                        : form_field("race_start", &mut ctx.errors().collect_vec(), html! {
+                            : help::label("seeding_race_start", "race_start", "Start Time (UTC)");
+                            input(type = "datetime-local", name = "race_start", id = "seeding_race_start", value = ctx.field_value("race_start").unwrap_or(""));
+                        });
+                        : form_field("race_room", &mut ctx.errors().collect_vec(), html! {
+                            : help::label("seeding_race_room", "race_room", "Racetime.gg Room URL (optional)");
+                            input(type = "text", name = "race_room", id = "seeding_race_room", value = ctx.field_value("race_room").unwrap_or(""), placeholder = "https://racetime.gg/...", style = "width: 100%; max-width: 600px;");
+                        });
+                    }, ctx.errors().collect_vec(), "Create Seeding Race");
+                }
             }
         }
     }).await?)
@@ -584,6 +620,54 @@ pub(crate) async fn post_pooled_config(
     else {
         return Err(StatusOrError::Status(Status::BadRequest));
     };
+    // These checks also apply while paused: PostgreSQL enforces them on every
+    // update, before the activation readiness checks can run.
+    for (invalid, field, message) in [
+        (
+            requests_open
+                .zip(requests_close)
+                .is_some_and(|(open, close)| open >= close),
+            "requests_close_at",
+            "Last request must be after requests open.",
+        ),
+        (
+            requests_close
+                .zip(starts_close)
+                .is_some_and(|(request, start)| request > start),
+            "starts_close_at",
+            "Last start / GO must be at or after the last request.",
+        ),
+        (
+            starts_close
+                .zip(submissions_close)
+                .is_some_and(|(start, submission)| start > submission),
+            "submissions_close_at",
+            "Submission deadline must be at or after the last start / GO.",
+        ),
+    ] {
+        if invalid {
+            form.context
+                .push_error(form::Error::validation(message).with_name(field));
+        }
+    }
+    if form.context.errors().next().is_some() {
+        let data = Data::new(&mut transaction, series, event)
+            .await?
+            .ok_or(StatusOrError::Status(Status::NotFound))?;
+        let is_started = data.is_started(&mut transaction).await?;
+        return Ok(RedirectOrContent::Content(
+            qualifiers_form(
+                transaction,
+                me,
+                uri,
+                csrf.as_ref(),
+                data,
+                is_started,
+                form.context,
+            )
+            .await?,
+        ));
+    }
     let old = pooled_qualifiers::Config::load(&mut transaction, series, event)
         .await?
         .ok_or(StatusOrError::Status(Status::Conflict))?;
@@ -676,17 +760,24 @@ pub(crate) async fn post_pooled_config(
     )))))
 }
 
+fn pooled_mode_slug(series: Series, event: &str, name: &str) -> String {
+    format!("{}-{event}-{name}", series.slug())
+        .to_lowercase()
+        .split(|ch: char| !ch.is_ascii_alphanumeric())
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("-")
+}
+
 #[derive(FromForm, CsrfForm)]
 pub(crate) struct PooledModeForm {
     #[field(default = String::new())]
     csrf: String,
     mode_id: i64,
     position: i16,
-    slug: String,
     display_name: String,
     seed_gen_type: String,
     seed_config: String,
-    generator_profile: String,
     enabled: bool,
 }
 
@@ -712,9 +803,7 @@ pub(crate) async fn post_pooled_mode(
         .ok_or(StatusOrError::Status(Status::BadRequest))?;
     let seed_config: serde_json::Value = serde_json::from_str(&value.seed_config)?;
     if value.position <= 0
-        || value.slug.is_empty()
         || value.display_name.trim().is_empty()
-        || value.generator_profile.trim().is_empty()
         || !seed_config.is_object()
         || racetime_bot::seed_gen_type::SeedGenType::from_db(
             Some(&value.seed_gen_type),
@@ -727,19 +816,25 @@ pub(crate) async fn post_pooled_mode(
     let config = pooled_qualifiers::Config::load(&mut transaction, series, event)
         .await?
         .ok_or(StatusOrError::Status(Status::Conflict))?;
-    let existing: Option<(String, serde_json::Value, String, String, bool)> = if value.mode_id == 0
+    let existing: Option<(String, serde_json::Value, String, String, bool, String)> = if value
+        .mode_id
+        == 0
     {
         None
     } else {
-        sqlx::query_as("SELECT seed_gen_type, seed_config, generator_profile, slug, enabled FROM qualifier_modes WHERE id = $1 AND series = $2 AND event = $3 FOR UPDATE")
+        sqlx::query_as("SELECT seed_gen_type, seed_config, generator_profile, slug, enabled, settings_fingerprint FROM qualifier_modes WHERE id = $1 AND series = $2 AND event = $3 FOR UPDATE")
             .bind(value.mode_id).bind(series).bind(event).fetch_optional(&mut *transaction).await?
     };
+    if value.mode_id != 0 && existing.is_none() {
+        return Err(StatusOrError::Status(Status::NotFound));
+    }
+    let slug = existing.as_ref().map_or_else(
+        || pooled_mode_slug(series, event, &value.display_name),
+        |old| old.3.clone(),
+    );
+    let generator_profile = existing.as_ref().map_or("default", |old| old.2.as_str());
     let material_changed = existing.as_ref().is_none_or(|old| {
-        old.0 != value.seed_gen_type
-            || old.1 != seed_config
-            || old.2 != value.generator_profile
-            || old.3 != value.slug
-            || old.4 != value.enabled
+        old.0 != value.seed_gen_type || old.1 != seed_config || old.4 != value.enabled
     });
     if (config.settings_locked_at.is_some() || !config.requests_paused) && material_changed {
         return Err(StatusOrError::Status(Status::Conflict));
@@ -760,24 +855,28 @@ pub(crate) async fn post_pooled_mode(
             return Err(StatusOrError::Status(Status::Conflict));
         }
     }
-    let fingerprint = format!(
-        "{}:{}:{}",
-        value.seed_gen_type, value.generator_profile, seed_config
-    );
+    let fingerprint = if let Some(old) = existing.as_ref().filter(|_| !material_changed) {
+        old.5.clone()
+    } else {
+        format!(
+            "{}:{}:{}",
+            value.seed_gen_type, generator_profile, seed_config
+        )
+    };
     if value.mode_id == 0 {
         sqlx::query(r#"INSERT INTO qualifier_modes(series, event, position, slug,
             display_name, seed_gen_type, seed_config, generator_profile, settings_fingerprint, enabled)
             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)"#)
-            .bind(series).bind(event).bind(value.position).bind(&value.slug)
+            .bind(series).bind(event).bind(value.position).bind(&slug)
             .bind(value.display_name.trim()).bind(&value.seed_gen_type).bind(seed_config)
-            .bind(value.generator_profile.trim()).bind(fingerprint).bind(value.enabled)
+            .bind(generator_profile).bind(fingerprint).bind(value.enabled)
             .execute(&mut *transaction).await?;
     } else {
         let updated = sqlx::query(r#"UPDATE qualifier_modes SET position=$2, slug=$3,
             display_name=$4, seed_gen_type=$5, seed_config=$6, generator_profile=$7,
             settings_fingerprint=$8, enabled=$9, updated_at=NOW() WHERE id=$1 AND series=$10 AND event=$11"#)
-            .bind(value.mode_id).bind(value.position).bind(&value.slug).bind(value.display_name.trim())
-            .bind(&value.seed_gen_type).bind(seed_config).bind(value.generator_profile.trim())
+            .bind(value.mode_id).bind(value.position).bind(&slug).bind(value.display_name.trim())
+            .bind(&value.seed_gen_type).bind(seed_config).bind(generator_profile)
             .bind(&fingerprint).bind(value.enabled).bind(series).bind(event)
             .execute(&mut *transaction).await?;
         if updated.rows_affected() != 1 {
@@ -792,100 +891,10 @@ pub(crate) async fn post_pooled_mode(
                   WHERE attempt.seed_id = qualifier_seeds.id)"#,
         )
         .bind(value.mode_id)
-        .bind(value.generator_profile.trim())
+        .bind(generator_profile)
         .bind(&fingerprint)
         .execute(&mut *transaction)
         .await?;
-    }
-    transaction.commit().await?;
-    Ok(Redirect::to(uri!(get(series, event))))
-}
-
-#[derive(FromForm, CsrfForm)]
-pub(crate) struct PooledSeedForm {
-    #[field(default = String::new())]
-    csrf: String,
-    mode_id: i64,
-    pool_position: i16,
-    seed_data: String,
-    attest_settings: bool,
-}
-
-#[rocket::post("/event/<series>/<event>/qualifiers/pooled-seed", data = "<form>")]
-pub(crate) async fn post_pooled_seed(
-    pool: &State<PgPool>,
-    me: User,
-    csrf: Option<CsrfToken>,
-    series: Series,
-    event: &str,
-    form: Form<Contextual<'_, PooledSeedForm>>,
-) -> Result<Redirect, StatusOrError<event::Error>> {
-    let mut transaction = pool.begin().await?;
-    let _ = require_organizer(&mut transaction, &me, series, event).await?;
-    let mut form = form.into_inner();
-    form.verify(&csrf);
-    if form.context.errors().next().is_some() {
-        return Err(StatusOrError::Status(Status::BadRequest));
-    }
-    pooled_qualifiers::lock_event(&mut transaction, series, event).await?;
-    let value = form
-        .value
-        .ok_or(StatusOrError::Status(Status::BadRequest))?;
-    let seed_data: serde_json::Value = serde_json::from_str(&value.seed_data)?;
-    let physical_identity = pooled_qualifiers::physical_seed_identity(&seed_data)
-        .ok_or(StatusOrError::Status(Status::BadRequest))?;
-    if value.pool_position <= 0 || !value.attest_settings {
-        return Err(StatusOrError::Status(Status::BadRequest));
-    }
-    let config = pooled_qualifiers::Config::load(&mut transaction, series, event)
-        .await?
-        .ok_or(StatusOrError::Status(Status::Conflict))?;
-    if !config.requests_paused || value.pool_position > config.pool_seed_count {
-        return Err(StatusOrError::Status(Status::Conflict));
-    }
-    let configured_mode = pooled_qualifiers::Mode::for_event(&mut transaction, series, event)
-        .await?
-        .into_iter()
-        .find(|mode| mode.id == value.mode_id && mode.enabled)
-        .ok_or(StatusOrError::Status(Status::NotFound))?;
-    let kind = racetime_bot::seed_gen_type::SeedGenType::from_db(
-        Some(&configured_mode.seed_gen_type),
-        Some(&configured_mode.seed_config),
-    )
-    .ok_or(StatusOrError::Status(Status::BadRequest))?;
-    pooled_qualifiers::generation::validate_payload(&kind, &seed_data)
-        .await
-        .map_err(|error| event::Error::Sql(sqlx::Error::Protocol(error.to_string())))?;
-    let mode: Option<(String, String)> = sqlx::query_as(
-        "SELECT generator_profile, settings_fingerprint FROM qualifier_modes WHERE id=$1 AND series=$2 AND event=$3 AND enabled"
-    ).bind(value.mode_id).bind(series).bind(event).fetch_optional(&mut *transaction).await?;
-    let (profile, fingerprint) = mode.ok_or(StatusOrError::Status(Status::NotFound))?;
-    let result = sqlx::query(
-        r#"INSERT INTO qualifier_seeds(series,event,mode_id,source,
-        pool_position,generation_state,seed_data,generator_profile,physical_seed_identity,
-        settings_fingerprint,generated_at,settings_attested_by,settings_attested_at)
-        VALUES($1,$2,$3,'async_pool',$4,'ready',$5,$6,$7,$8,NOW(),$9,NOW())
-        ON CONFLICT(mode_id,pool_position) DO UPDATE SET generation_state='ready',
-          seed_data=EXCLUDED.seed_data,generator_profile=EXCLUDED.generator_profile,
-          physical_seed_identity=EXCLUDED.physical_seed_identity,
-          settings_fingerprint=EXCLUDED.settings_fingerprint,generated_at=NOW(),
-          settings_attested_by=EXCLUDED.settings_attested_by,settings_attested_at=NOW()
-        WHERE qualifier_seeds.released_at IS NULL AND qualifier_seeds.generation_state <> 'generating' AND NOT EXISTS(
-          SELECT 1 FROM qualifier_attempts WHERE seed_id=qualifier_seeds.id)"#,
-    )
-    .bind(series)
-    .bind(event)
-    .bind(value.mode_id)
-    .bind(value.pool_position)
-    .bind(seed_data)
-    .bind(profile)
-    .bind(physical_identity)
-    .bind(fingerprint)
-    .bind(i64::from(me.id))
-    .execute(&mut *transaction)
-    .await?;
-    if result.rows_affected() != 1 {
-        return Err(StatusOrError::Status(Status::Conflict));
     }
     transaction.commit().await?;
     Ok(Redirect::to(uri!(get(series, event))))
@@ -1064,14 +1073,31 @@ pub(crate) async fn post_pooled_recover(
     }
     let mut tx = pool.begin().await?;
     require_organizer(&mut tx, &me, series, event).await?;
-    let row: Option<(String, Option<i64>, i64)> = sqlx::query_as(r#"SELECT attempt.state, attempt.discord_thread, event.discord_async_channel
+    let row: Option<(String, Option<i64>, Option<i64>, String, bool, Option<i64>)> = sqlx::query_as(r#"SELECT attempt.state, attempt.discord_thread, event.discord_async_channel,
+        attempt.source, attempt.retry_declared_at IS NOT NULL, event.discord_organizer_channel
         FROM qualifier_attempts attempt JOIN events event USING (series, event)
-        WHERE attempt.id=$1 AND attempt.control_version=$2 AND attempt.series=$3 AND attempt.event=$4 AND attempt.source='async'"#)
+        WHERE attempt.id=$1 AND attempt.control_version=$2 AND attempt.series=$3 AND attempt.event=$4"#)
         .bind(value.attempt_id).bind(value.control_version).bind(series).bind(event).fetch_optional(&mut *tx).await?;
-    let (state, thread, parent) = row.ok_or(StatusOrError::Status(Status::Conflict))?;
+    let (state, thread, parent, source, declared, organizers_channel) = row.ok_or(StatusOrError::Status(Status::Conflict))?;
+    if source != "async" && value.action != "retry-declared" {
+        return Err(StatusOrError::Status(Status::BadRequest));
+    }
     tx.commit().await?;
     // Validate external references without holding the event lock.
     let (key, message_id, adopted_thread) = match value.action.as_str() {
+        "retry-declared" if declared && organizers_channel.is_some() => {
+            if let Some(id) = value.discord_id {
+                if id == 0 { return Err(StatusOrError::Status(Status::BadRequest)); }
+                let ctx = discord_ctx.read().await;
+                let message = ChannelId::new(organizers_channel.unwrap() as u64)
+                    .message(&*ctx, MessageId::new(id)).await?;
+                let bot = ctx.http.get_current_user().await?;
+                if message.author.id != bot.id || !message.content.ends_with(&format!("[qualifier:{}:retry-declared]", value.attempt_id)) {
+                    return Err(StatusOrError::Status(Status::BadRequest));
+                }
+            }
+            ("retry-declared".to_owned(), value.discord_id, None)
+        }
         "ready" if state == "assigned" && thread.is_some() => ("ready".to_owned(), None, None),
         "seed" if state == "revealed" && thread.is_some() => ("seed".to_owned(), None, None),
         "thread" if state == "assigned" && thread.is_none() => {
@@ -1086,7 +1112,7 @@ pub(crate) async fn post_pooled_recover(
                 .guild()
                 .ok_or(StatusOrError::Status(Status::BadRequest))?;
             let bot = ctx.http.get_current_user().await?;
-            if channel.parent_id != Some(ChannelId::new(parent as u64))
+            if channel.parent_id != parent.map(|parent| ChannelId::new(parent as u64))
                 || channel.kind != ChannelType::PrivateThread
                 || channel.owner_id != Some(bot.id)
                 || channel.name != format!("qualifier-{}", value.attempt_id)
@@ -1801,10 +1827,14 @@ async fn edit_race_form(
                     input(type = "text", name = "race_phase", id = "race_phase", value = ctx.field_value("race_phase").unwrap_or(race.phase.as_deref().unwrap_or("")));
                     label(class = "help") : "This race counts as a qualifier regardless of its display name.";
                 });
-                : form_field("qualifier_number", &mut ctx.errors().collect_vec(), html! {
-                    label(for = "qualifier_number") : "Qualifier number";
-                    input(type = "number", min = "1", name = "qualifier_number", id = "qualifier_number", value = ctx.field_value("qualifier_number").unwrap_or(&race.qualifier_number.unwrap_or(1).to_string()));
-                });
+                @if event.qualifier_mode == "pooled_by_mode" {
+                    input(type = "hidden", name = "qualifier_number", value = race.qualifier_number.unwrap_or(1));
+                } else {
+                    : form_field("qualifier_number", &mut ctx.errors().collect_vec(), html! {
+                        label(for = "qualifier_number") : "Qualifier number";
+                        input(type = "number", min = "1", name = "qualifier_number", id = "qualifier_number", value = ctx.field_value("qualifier_number").unwrap_or(&race.qualifier_number.unwrap_or(1).to_string()));
+                    });
+                }
                 : form_field("race_round", &mut ctx.errors().collect_vec(), html! {
                     label(for = "race_round") : "Round";
                     input(type = "text", name = "race_round", id = "race_round", value = ctx.field_value("race_round").unwrap_or(&race.round.unwrap_or_default()), placeholder = "e.g. Live 1");
@@ -2673,6 +2703,18 @@ pub(crate) async fn post_edit_seeding_race(
 pub(crate) mod route_tests {
     use super::*;
 
+    #[test]
+    fn mode_ids_are_generated_from_series_event_and_name() {
+        assert_eq!(
+            pooled_mode_slug(Series::Standard, "2026", "Inverted + Keysanity"),
+            "s-2026-inverted-keysanity"
+        );
+        assert_eq!(
+            pooled_mode_slug(Series::Standard, "TEST", "  Mixed_CASE -- Mode  "),
+            "s-test-mixed-case-mode"
+        );
+    }
+
     pub(crate) async fn verify_pool_assignments(
         pool: &PgPool,
         series: &str,
@@ -2752,7 +2794,6 @@ pub(crate) mod route_tests {
                     get,
                     post_pooled_config,
                     post_pooled_mode,
-                    post_pooled_seed,
                     post_pooled_result,
                     post_pooled_generate
                 ],
@@ -2777,9 +2818,51 @@ pub(crate) mod route_tests {
             .await;
         assert_eq!(private.status(), Status::Ok);
         let private = private.into_string().await.unwrap();
-        assert!(private.contains("Qualifier Seed Pools"));
+        assert!(private.contains("Qualifier seed pools"));
         assert!(private.contains("Awaiting verification"));
         assert!(private.contains("Review result / history"));
+        assert!(private.contains("Re-attempt declaration"));
+        assert!(private.contains("Used — "));
+        {
+            use kuchiki::traits::TendrilSink as _;
+            let document = kuchiki::parse_html().one(private.clone());
+            let setup = document.select_first("details#qualifier-setup").unwrap();
+            assert!(!setup.attributes.borrow().contains("open"));
+            assert!(
+                setup
+                    .as_node()
+                    .select_first("#pooled-configuration")
+                    .is_ok()
+            );
+            assert!(setup.as_node().select_first("#pooled-modes").is_ok());
+            assert!(setup.as_node().select_first("#pooled-standings").is_err());
+            assert!(setup.as_node().select_first("#seeding-race").is_err());
+            assert!(
+                document
+                    .select_first("#qualifier-setup + #seeding-race")
+                    .is_ok()
+            );
+            assert!(
+                document
+                    .select_first("input[name=qualifier_number][type=number]")
+                    .is_err()
+            );
+            assert!(
+                document
+                    .select_first("input[name=qualifier_number][type=hidden]")
+                    .is_ok()
+            );
+            assert!(!private.contains("Import an existing seed"));
+            assert!(document.select_first("textarea[name=seed_data]").is_err());
+            assert!(
+                private.find("id=\"pooled-standings\"").unwrap()
+                    < private.find("id=\"qualifier-setup\"").unwrap()
+            );
+            assert!(
+                private.find("id=\"pooled-attempts\"").unwrap()
+                    < private.find("id=\"qualifier-setup\"").unwrap()
+            );
+        }
         let outsider_view = client
             .get(&base)
             .header(rocket::http::Header::new(
@@ -2793,17 +2876,14 @@ pub(crate) mod route_tests {
         assert_ne!(anonymous_view.status(), Status::Ok);
 
         let mode_body = format!(
-            "mode_id={mode}&position=2&slug=other&display_name=Renamed&seed_gen_type=owr&seed_config=%7B%22base_settings%22%3A%7B%7D%7D&generator_profile=default&enabled=true"
+            "mode_id={mode}&position=2&display_name=Renamed&seed_gen_type=owr&seed_config=%7B%22base_settings%22%3A%7B%7D%7D&enabled=true"
         );
-        let seed_body =
-            format!("mode_id={mode}&pool_position=1&seed_data=%7B%7D&attest_settings=true");
         let generate_body = format!("mode_id={mode}&retry_failed=false");
         let config_body = "required_mode_count=1&pool_seed_count=2&live_races_per_mode=1&async_run_limit_hours=12&live_entry_close_minutes=10&retry_limit=1&allocation_spread=2&par_finishers=5&score_scale=100&score_offset=2&score_minimum=0&score_maximum=105&requests_paused=true";
         let result_body =
             "attempt_id=0&control_version=1&action=result&reason=test&outcome=forfeit";
         for (path, body) in [
             ("pooled-mode", mode_body.as_str()),
-            ("pooled-seed", seed_body.as_str()),
             ("pooled-generate", generate_body.as_str()),
             ("pooled-config", config_body),
             ("pooled-result", result_body),
@@ -2844,6 +2924,67 @@ pub(crate) mod route_tests {
                     .finish()
             )
         };
+        let saved_config: serde_json::Value = sqlx::query_scalar(
+            "SELECT to_jsonb(config) FROM pooled_qualifier_configs config WHERE series=$1 AND event=$2",
+        )
+        .bind(series)
+        .bind(event)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        for (dates, message) in [
+            (
+                "requests_open_at=2026-09-17T17:00&requests_close_at=2026-09-17T17:00",
+                "Last request must be after requests open.",
+            ),
+            (
+                "requests_open_at=2026-09-17T17:00&requests_close_at=2026-09-25T00:00&starts_close_at=2026-09-24T23:00&submissions_close_at=2026-09-24T23:59&retries_close_at=2026-09-24T23:00&results_release_at=2026-09-25T02:00",
+                "Last start / GO must be at or after the last request.",
+            ),
+            (
+                "starts_close_at=2026-09-25T00:00&submissions_close_at=2026-09-24T23:59",
+                "Submission deadline must be at or after the last start / GO.",
+            ),
+        ] {
+            for paused in [false, true] {
+                let body = config_body
+                    .replace("requests_paused=true", &format!("requests_paused={paused}"));
+                let response = client
+                    .post(format!("{base}/pooled-config"))
+                    .header(ContentType::Form)
+                    .private_cookie(rocket::http::Cookie::new(
+                        "csrf_token",
+                        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+                    ))
+                    .header(rocket::http::Header::new("x-test-user", staff.to_string()))
+                    .body(encode(&format!("{body}&{dates}")))
+                    .dispatch()
+                    .await;
+                assert_eq!(response.status(), Status::Ok);
+                let html = response.into_string().await.unwrap();
+                {
+                    use kuchiki::traits::TendrilSink as _;
+                    let document = kuchiki::parse_html().one(html.clone());
+                    assert!(document.select_first("#qualifier-setup[open]").is_ok());
+                }
+                assert!(
+                    html.contains(message),
+                    "missing schedule validation: {message}"
+                );
+                for (field, value) in url::form_urlencoded::parse(dates.as_bytes()) {
+                    assert!(html.contains(&format!("name=\"{field}\" value=\"{value}\"")));
+                }
+                let unchanged: serde_json::Value = sqlx::query_scalar(
+                    "SELECT to_jsonb(config) FROM pooled_qualifier_configs config WHERE series=$1 AND event=$2",
+                )
+                .bind(series)
+                .bind(event)
+                .fetch_one(pool)
+                .await
+                .unwrap();
+                assert_eq!(unchanged, saved_config);
+            }
+        }
         let response = client
             .post(format!("{base}/pooled-mode"))
             .header(ContentType::Form)

@@ -16,6 +16,7 @@ pub(super) struct SeedRow {
 #[derive(sqlx::FromRow)]
 #[cfg_attr(test, derive(Default))]
 pub(super) struct AttemptRow {
+    pub(super) mode_id: i64,
     pub(super) seed_id: i64,
     pub(super) par_eligible: bool,
     pub(super) superseded_by: Option<i64>,
@@ -31,6 +32,8 @@ pub(super) struct AttemptRow {
     pub(super) official_time: Option<sqlx::postgres::types::PgInterval>,
     pub(super) vod: Option<String>,
     pub(super) retry_of: Option<i64>,
+    pub(super) retry_declared_at: Option<DateTime<Utc>>,
+    pub(super) retry_banned_at: Option<DateTime<Utc>>,
     pub(super) control_version: i64,
     pub(super) delivery_error: Option<String>,
     pub(super) correction_history: serde_json::Value,
@@ -59,12 +62,12 @@ pub(super) async fn load_attempts(
     event: &str,
 ) -> Result<Vec<AttemptRow>, sqlx::Error> {
     sqlx::query_as::<_, AttemptRow>(
-            r#"SELECT attempt.id, attempt.seed_id, attempt.par_eligible, attempt.superseded_by, attempt.discord_thread, attempt.team_id,
+            r#"SELECT attempt.id, attempt.mode_id, attempt.seed_id, attempt.par_eligible, attempt.superseded_by, attempt.discord_thread, attempt.team_id,
                 COALESCE(user_account.discord_display_name, user_account.racetime_display_name,
                     'Team ' || attempt.team_id::TEXT) AS entrant_name,
                 mode.display_name AS mode_name, attempt.source, attempt.state,
                 attempt.counts_for_entrant, attempt.official_outcome,
-                attempt.official_time, attempt.vod, attempt.retry_of, attempt.control_version, attempt.delivery_error, attempt.correction_history
+                attempt.official_time, attempt.vod, attempt.retry_of, attempt.retry_declared_at, attempt.retry_banned_at, attempt.control_version, attempt.delivery_error, attempt.correction_history
             FROM qualifier_attempts attempt
             JOIN qualifier_modes mode ON mode.id = attempt.mode_id
             LEFT JOIN team_members member ON member.team = attempt.team_id
@@ -116,6 +119,7 @@ struct Population {
     active: usize,
     awaiting: usize,
     finalized: usize,
+    forfeited: usize,
     eligible_finishes: usize,
     par: Option<f64>,
 }
@@ -155,6 +159,12 @@ fn population(config: &pooled_qualifiers::Config, attempts: &[&AttemptRow]) -> P
             .iter()
             .filter(|attempt| attempt.state == "finalized")
             .count(),
+        forfeited: attempts
+            .iter()
+            .filter(|attempt| {
+                matches!(attempt.outcome(), Some(pooled_qualifiers::Outcome::Forfeit))
+            })
+            .count(),
         eligible_finishes: finishes.len(),
         par: pooled_qualifiers::seed_par(config, finishes),
     }
@@ -180,11 +190,11 @@ pub(super) fn overview(
         })
         .collect_vec();
     html! {
-        div(style = "overflow-x: auto;") {
-            table {
+        div(class = "qualifier-pool-table-scroll") {
+            table(class = "qualifier-pool-table") {
                 thead { tr {
                     th : "Seed"; th : "State"; th : "Assigned"; th : "Counted";
-                    th : "Active"; th : "Awaiting verification"; th : "Finalized";
+                    th : "Active"; th : "Awaiting verification"; th : "Finalized"; th : "Forfeits";
                     th : "Eligible finishes / par";
                 } }
                 tbody {
@@ -201,12 +211,13 @@ pub(super) fn overview(
                             td : stats.active;
                             td : stats.awaiting;
                             td : stats.finalized;
+                            td : stats.forfeited;
                             td {
                                 : format!("{} eligible finishes", stats.eligible_finishes);
                                 @if let Some(par) = stats.par {
-                                    p : format!("Par: {} (fastest {})", English.format_duration(Duration::from_secs_f64(par), false), config.par_finishers);
+                                    : format!(" · Par: {} (fastest {})", English.format_duration(Duration::from_secs_f64(par), false), config.par_finishers);
                                 } else {
-                                    p : format!("{}/{} finishes — par pending", stats.eligible_finishes, config.par_finishers);
+                                    : format!(" · {}/{} finishes — par pending", stats.eligible_finishes, config.par_finishers);
                                 }
                             }
                         }
@@ -326,6 +337,10 @@ mod tests {
         dq.official_outcome = Some("dq".into());
         dq.par_eligible = false;
         attempts.push(dq);
+        let mut forfeit = finish(11, 1);
+        forfeit.official_outcome = Some("forfeit".into());
+        forfeit.par_eligible = false;
+        attempts.push(forfeit);
         let stats = population(&config, &attempts.iter().collect_vec());
         assert_eq!(
             (
@@ -335,8 +350,9 @@ mod tests {
                 stats.awaiting,
                 stats.finalized
             ),
-            (9, 8, 1, 1, 7)
+            (10, 9, 1, 1, 8)
         );
+        assert_eq!(stats.forfeited, 1);
         assert_eq!(stats.eligible_finishes, 6);
         assert_eq!(stats.par, Some(3600.0));
         assert_eq!(
@@ -380,7 +396,7 @@ mod tests {
         );
         if let Ok(path) = std::env::var("HTH_POOL_BROWSER_FIXTURE") {
             let css = include_str!("../../../assets/static/common.css");
-            std::fs::write(path, format!("<!doctype html><html><head><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><style>{css}</style></head><body><main><h1>Qualifier Seed Pools</h1>{html}<div id=\"attempt-7\">Review attempt 7</div></main></body></html>")).unwrap();
+            std::fs::write(path, format!("<!doctype html><html><head><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><style>{css}</style></head><body><main><article class=\"qualifier-admin\"><h1>Qualifier Seed Pools</h1>{html}</article><div id=\"attempt-7\">Review attempt 7</div></main></body></html>")).unwrap();
         }
     }
 }

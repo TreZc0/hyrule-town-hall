@@ -52,10 +52,6 @@ pub(crate) enum Error {
     RetryForbidden,
     #[error("no different physical seed is available for the re-attempt")]
     NoReplacementSeed,
-    #[error("link a racetime.gg account before reserving a live qualifier retry")]
-    RacetimeRequired,
-    #[error("entry for this live qualifier has already closed")]
-    LiveEntryClosed,
     #[error("invalid pooled qualifier transition from {0}")]
     InvalidTransition(String),
     #[error("this race is not a configured pooled live qualifier")]
@@ -154,7 +150,6 @@ impl Config {
 pub(crate) struct Mode {
     pub(crate) id: i64,
     pub(crate) position: i16,
-    pub(crate) slug: String,
     pub(crate) display_name: String,
     pub(crate) seed_gen_type: String,
     pub(crate) seed_config: serde_json::Value,
@@ -170,7 +165,7 @@ impl Mode {
         event: &str,
     ) -> Result<Vec<Self>, sqlx::Error> {
         sqlx::query_as::<_, Self>(
-            r#"SELECT id, position, slug, display_name,
+            r#"SELECT id, position, display_name,
                 seed_gen_type, seed_config, generator_profile, settings_fingerprint,
                 enabled
             FROM qualifier_modes WHERE series = $1 AND event = $2
@@ -194,11 +189,12 @@ pub(crate) struct Attempt {
     pub(crate) official_outcome: Option<String>,
     pub(crate) discord_thread: Option<i64>,
     pub(crate) retry_banned_at: Option<DateTime<Utc>>,
+    pub(crate) retry_declared_at: Option<DateTime<Utc>>,
 }
 
 impl Attempt {
     const COLUMNS: &'static str = r#"id, mode_id, seed_id, source, state,
-        counts_for_entrant, official_outcome, discord_thread, retry_banned_at"#;
+        counts_for_entrant, official_outcome, discord_thread, retry_banned_at, retry_declared_at"#;
 
     pub(crate) async fn for_team(
         transaction: &mut Transaction<'_, Postgres>,
@@ -840,6 +836,10 @@ pub(crate) async fn request_async(
             transaction.commit().await?;
             return Ok(existing);
         }
+        if existing.retry_declared_at.is_some() {
+            transaction.rollback().await?;
+            return request_async_retry(pool, team_id, mode_id, created_by).await;
+        }
         return Err(Error::AlreadyAttempted);
     }
     check_requests(&config, false)?;
@@ -905,6 +905,12 @@ pub(crate) async fn request_async_retry(
         return Err(Error::RetryUnavailable);
     }
     check_retry_ban(&mut transaction, team_id, mode_id).await?;
+    let declared_mode: Option<i64> = sqlx::query_scalar(
+        "SELECT mode_id FROM qualifier_attempts WHERE team_id=$1 AND counts_for_entrant AND state <> 'void' AND retry_declared_at IS NOT NULL",
+    ).bind(team_id).fetch_optional(&mut *transaction).await?;
+    if declared_mode.is_some_and(|declared| declared != mode_id) {
+        return Err(Error::RetryUnavailable);
+    }
     let original_id: i64 = sqlx::query_scalar(
         r#"SELECT id FROM qualifier_attempts
         WHERE team_id = $1 AND mode_id = $2 AND counts_for_entrant
@@ -976,13 +982,13 @@ pub(crate) async fn request_async_retry(
     Ok(replacement)
 }
 
-/// Reserve the event-wide retry for a particular live qualifier. The counted
-/// result is left untouched until GO, so leaving beforehand releases the credit.
-pub(crate) async fn reserve_live_retry(
+/// Declare which counted result the next re-attempt should replace. The
+/// declaration survives leaving a live race before GO and is shared with asyncs.
+pub(crate) async fn declare_retry(
     pool: &PgPool,
     team_id: i64,
     mode_id: i64,
-    live_seed_id: i64,
+    original_id: i64,
     created_by: i64,
 ) -> Result<(), Error> {
     let mut transaction = pool.begin().await?;
@@ -990,99 +996,38 @@ pub(crate) async fn reserve_live_retry(
     if config.retry_limit == 0 {
         return Err(Error::RetryUnavailable);
     }
-    if sqlx::query_scalar::<_, bool>(
-        "SELECT EXISTS(SELECT 1 FROM qualifier_attempts WHERE team_id = $1 AND retry_of IS NOT NULL AND state <> 'void')",
-    )
-    .bind(team_id)
-    .fetch_one(&mut *transaction)
-    .await?
-    {
+    let used: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM qualifier_attempts WHERE team_id=$1 AND retry_of IS NOT NULL AND state <> 'void')",
+    ).bind(team_id).fetch_one(&mut *transaction).await?;
+    if used {
         return Err(Error::RetryUnavailable);
     }
-    if let Some(reserved_seed_id) = sqlx::query_scalar::<_, i64>(
-        r#"SELECT seed_id FROM qualifier_live_entries WHERE team_id = $1
-            AND retry_reserved_at IS NOT NULL AND retry_committed_at IS NULL
-            AND retry_released_at IS NULL"#,
-    )
-    .bind(team_id)
-    .fetch_optional(&mut *transaction)
-    .await?
-    {
-        if reserved_seed_id == live_seed_id {
-            transaction.commit().await?;
-            return Ok(());
-        }
-        return Err(Error::RetryUnavailable);
+    check_retry_ban(&mut transaction, team_id, mode_id).await?;
+    let original: Option<Option<DateTime<Utc>>> = sqlx::query_scalar(
+        r#"SELECT retry_declared_at FROM qualifier_attempts
+        WHERE id=$1 AND team_id=$2 AND mode_id=$3 AND counts_for_entrant
+          AND retry_banned_at IS NULL AND state IN ('awaiting_verification', 'finalized')"#,
+    ).bind(original_id).bind(team_id).bind(mode_id).fetch_optional(&mut *transaction).await?;
+    let declared_at = original.ok_or(Error::RetryForbidden)?;
+    if declared_at.is_some() {
+        transaction.commit().await?;
+        return Ok(());
     }
     check_requests(&config, true)?;
-    check_retry_ban(&mut transaction, team_id, mode_id).await?;
-    let original_id: i64 = sqlx::query_scalar(
-        r#"SELECT id FROM qualifier_attempts
-        WHERE team_id = $1 AND mode_id = $2 AND counts_for_entrant
-          AND retry_banned_at IS NULL AND state IN ('awaiting_verification', 'finalized')
-        FOR UPDATE"#,
-    )
-    .bind(team_id)
-    .bind(mode_id)
-    .fetch_optional(&mut *transaction)
-    .await?
-    .ok_or(Error::RetryForbidden)?;
-    let racetime_id: String = sqlx::query_scalar(
-        r#"SELECT users.racetime_id FROM users
-        JOIN team_members ON team_members.member = users.id
-        WHERE team_members.team = $1 AND users.id = $2 AND users.racetime_id IS NOT NULL"#,
-    )
-    .bind(team_id)
-    .bind(created_by)
-    .fetch_optional(&mut *transaction)
-    .await?
-    .ok_or(Error::RacetimeRequired)?;
-    let valid_seed: bool = sqlx::query_scalar(
-        r#"SELECT EXISTS(SELECT 1 FROM qualifier_seeds seed
-            JOIN races race ON race.id = seed.live_race_id
-            JOIN pooled_qualifier_configs config
-              ON config.series = seed.series AND config.event = seed.event
-            WHERE seed.id = $1 AND seed.mode_id = $2 AND seed.series = $3 AND seed.event = $4
-              AND seed.source = 'live' AND seed.retired_at IS NULL
-              AND race.start IS NOT NULL
-              AND NOW() < race.start - config.live_entry_close_lead
-              AND seed.entry_closed_at IS NULL)"#,
-    )
-    .bind(live_seed_id)
-    .bind(mode_id)
-    .bind(&config.series)
-    .bind(&config.event)
-    .fetch_one(&mut *transaction)
-    .await?;
-    if !valid_seed {
-        return Err(Error::LiveEntryClosed);
+    let already_declared: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM qualifier_attempts WHERE team_id=$1 AND counts_for_entrant AND state <> 'void' AND retry_declared_at IS NOT NULL)",
+    ).bind(team_id).fetch_one(&mut *transaction).await?;
+    if already_declared {
+        return Err(Error::RetryUnavailable);
     }
-    let reserved = sqlx::query_scalar::<_, i64>(
-        r#"INSERT INTO qualifier_live_entries
-            (seed_id, series, event, mode_id, racetime_entrant_id, user_id, team_id,
-             retry_original_attempt_id, retry_reserved_at, retry_declared_by)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), $6)
-        ON CONFLICT (seed_id, racetime_entrant_id) DO UPDATE SET
-            user_id = EXCLUDED.user_id, team_id = EXCLUDED.team_id,
-            retry_original_attempt_id = EXCLUDED.retry_original_attempt_id,
-            retry_reserved_at = NOW(), retry_committed_at = NULL,
-            retry_released_at = NULL, retry_declared_by = EXCLUDED.retry_declared_by
-        WHERE qualifier_live_entries.eligibility_frozen_at IS NULL
-          AND qualifier_live_entries.retry_reserved_at IS NULL
-        RETURNING id"#,
-    )
-    .bind(live_seed_id)
-    .bind(&config.series)
-    .bind(&config.event)
-    .bind(mode_id)
-    .bind(racetime_id)
-    .bind(created_by)
-    .bind(team_id)
-    .bind(original_id)
-    .fetch_optional(&mut *transaction)
-    .await?
-    .ok_or(Error::LiveEntryClosed)?;
-    let _ = reserved;
+    let member: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM team_members WHERE team=$1 AND member=$2)",
+    ).bind(team_id).bind(created_by).fetch_one(&mut *transaction).await?;
+    if !member {
+        return Err(Error::RetryForbidden);
+    }
+    sqlx::query("UPDATE qualifier_attempts SET retry_declared_at=NOW(), retry_declared_by=$2 WHERE id=$1")
+        .bind(original_id).bind(created_by).execute(&mut *transaction).await?;
     transaction.commit().await?;
     Ok(())
 }
@@ -1125,7 +1070,7 @@ async fn live_seed_for_race(
     .ok_or(Error::NotLiveQualifier)
 }
 
-/// Freeze the scoring roster at the configured generation cutoff. This is
+/// Freeze the scoring roster at the configured entry cutoff. This is
 /// idempotent so a bot restart can safely repeat the operation.
 pub(crate) async fn freeze_live_eligibility(
     pool: &PgPool,
@@ -1191,14 +1136,16 @@ pub(crate) async fn freeze_live_eligibility(
 
     type EntryRow = (i64, String, Option<i64>, Option<i64>, Option<i64>);
     let entries: Vec<EntryRow> = sqlx::query_as(
-        r#"SELECT id, racetime_entrant_id, user_id, team_id, retry_original_attempt_id
+        r#"SELECT id, racetime_entrant_id, user_id, team_id,
+            CASE WHEN retry_reserved_at IS NOT NULL AND retry_released_at IS NULL
+                AND retry_committed_at IS NULL THEN retry_original_attempt_id END
         FROM qualifier_live_entries WHERE seed_id = $1 ORDER BY id FOR UPDATE"#,
     )
     .bind(seed_id)
     .fetch_all(&mut *transaction)
     .await?;
     let mut summary = LiveFreezeSummary::default();
-    for (entry_id, racetime_id, user_id, team_id, retry_original) in entries {
+    for (entry_id, racetime_id, user_id, team_id, mut retry_original) in entries {
         let (eligible, reason) = if !present_ids.contains(racetime_id.as_str()) {
             (false, Some("not present at the entry cutoff"))
         } else if user_id.is_none() || team_id.is_none() {
@@ -1210,9 +1157,12 @@ pub(crate) async fn freeze_live_eligibility(
             let team_id = team_id.expect("checked above");
             let active: bool = sqlx::query_scalar(
                 r#"SELECT EXISTS(SELECT 1 FROM qualifier_attempts
-                WHERE team_id = $1 AND state IN ('assigned', 'revealed', 'starting', 'running'))"#,
+                WHERE team_id = $1 AND state IN ('assigned', 'revealed', 'starting', 'running')
+                UNION ALL SELECT 1 FROM qualifier_live_entries
+                WHERE team_id=$1 AND seed_id<>$2 AND eligible AND present_at_go IS NULL)"#,
             )
             .bind(team_id)
+            .bind(seed_id)
             .fetch_one(&mut *transaction)
             .await?;
             let counted: Option<i64> = sqlx::query_scalar(
@@ -1223,6 +1173,32 @@ pub(crate) async fn freeze_live_eligibility(
             .bind(mode_id)
             .fetch_optional(&mut *transaction)
             .await?;
+            if !active && retry_original.is_none() {
+                // Attach a timely declaration to this race only when the runner
+                // is actually present at its cutoff, without advance selection.
+                let declared: Option<(i64, DateTime<Utc>, i64)> = sqlx::query_as(
+                    r#"SELECT attempt.id, attempt.retry_declared_at, attempt.retry_declared_by
+                    FROM qualifier_attempts attempt
+                    JOIN races race ON race.id=$3
+                    JOIN pooled_qualifier_configs config
+                      ON config.series=attempt.series AND config.event=attempt.event
+                    WHERE attempt.team_id=$1 AND attempt.mode_id=$2 AND attempt.counts_for_entrant
+                      AND attempt.state IN ('awaiting_verification', 'finalized')
+                      AND attempt.retry_banned_at IS NULL AND config.retry_limit>0
+                      AND attempt.retry_declared_at < race.start-config.live_entry_close_lead
+                      AND NOT EXISTS(SELECT 1 FROM qualifier_attempts used
+                        WHERE used.team_id=$1 AND used.retry_of IS NOT NULL AND used.state<>'void')
+                      AND NOT EXISTS(SELECT 1 FROM qualifier_live_entries reserved
+                        WHERE reserved.team_id=$1 AND reserved.retry_reserved_at IS NOT NULL
+                          AND reserved.retry_committed_at IS NULL AND reserved.retry_released_at IS NULL)"#,
+                ).bind(team_id).bind(mode_id).bind(race_id).fetch_optional(&mut *transaction).await?;
+                if let Some((original_id, declared_at, declared_by)) = declared {
+                    sqlx::query("UPDATE qualifier_live_entries SET retry_original_attempt_id=$2, retry_reserved_at=$3, retry_declared_by=$4, retry_released_at=NULL WHERE id=$1")
+                        .bind(entry_id).bind(original_id).bind(declared_at).bind(declared_by)
+                        .execute(&mut *transaction).await?;
+                    retry_original = Some(original_id);
+                }
+            }
             if active {
                 (
                     false,
@@ -2211,6 +2187,39 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires HTH_TEST_DATABASE_URL"]
+    async fn database_pooled_retry_migration_preserves_declarations() {
+        let pool = event::configuration::test_pool().await;
+        let mut tx = pool.begin().await.unwrap();
+        sqlx::raw_sql(r#"
+            CREATE TEMP TABLE users(id BIGINT PRIMARY KEY) ON COMMIT DROP;
+            INSERT INTO users VALUES(1);
+            CREATE TEMP TABLE qualifier_attempts(id BIGINT PRIMARY KEY, team_id BIGINT,
+                counts_for_entrant BOOLEAN, state TEXT) ON COMMIT DROP;
+            INSERT INTO qualifier_attempts VALUES(1,1,TRUE,'finalized'),(2,2,TRUE,'finalized'),(3,3,TRUE,'finalized');
+            CREATE TEMP TABLE qualifier_live_entries(retry_original_attempt_id BIGINT,
+                retry_reserved_at TIMESTAMPTZ, retry_declared_by BIGINT,
+                retry_committed_at TIMESTAMPTZ, retry_released_at TIMESTAMPTZ,
+                eligibility_frozen_at TIMESTAMPTZ) ON COMMIT DROP;
+            INSERT INTO qualifier_live_entries VALUES
+                (1,NOW()-INTERVAL '1 hour',1,NULL,NULL,NULL),
+                (2,NOW()-INTERVAL '1 hour',1,NULL,NULL,NOW()),
+                (3,NOW()-INTERVAL '1 hour',1,NULL,NOW(),NULL);
+        "#).execute(&mut *tx).await.unwrap();
+        sqlx::raw_sql(include_str!("../../migrations/116_pooled_retry_declarations.sql"))
+            .execute(&mut *tx).await.unwrap();
+        let declarations: Vec<(i64, bool)> = sqlx::query_as("SELECT id,retry_declared_at IS NOT NULL FROM qualifier_attempts ORDER BY id")
+            .fetch_all(&mut *tx).await.unwrap();
+        assert_eq!(declarations, vec![(1,true),(2,true),(3,false)]);
+        let reservations: Vec<(i64, bool)> = sqlx::query_as("SELECT retry_original_attempt_id,retry_released_at IS NOT NULL FROM qualifier_live_entries ORDER BY retry_original_attempt_id")
+            .fetch_all(&mut *tx).await.unwrap();
+        assert_eq!(reservations, vec![(1,true),(2,false),(3,true)]);
+        assert!(sqlx::query("INSERT INTO qualifier_attempts VALUES(4,1,TRUE,'finalized',NOW(),1)")
+            .execute(&mut *tx).await.is_err());
+        tx.rollback().await.unwrap();
+    }
+
+    #[tokio::test]
     #[ignore = "requires HTH_TEST_DATABASE_URL pointing to a migrated production-copy *_test database"]
     async fn database_async_and_live_retry_lifecycle_is_transactional() {
         let pool = event::configuration::test_pool().await;
@@ -2262,8 +2271,8 @@ pub(crate) mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query("DELETE FROM races WHERE id = $1")
-            .bind(race_id)
+        sqlx::query("DELETE FROM races WHERE series = $1 AND event = $2")
+            .bind(series).bind(event)
             .execute(&pool)
             .await
             .unwrap();
@@ -2487,20 +2496,40 @@ pub(crate) mod tests {
         .fetch_one(&pool)
         .await
         .unwrap();
-        reserve_live_retry(
+        assert!(matches!(declare_retry(&pool, entrants[1].0, mode_id, first.id, entrants[1].1).await, Err(Error::RetryForbidden)));
+        // A prior result without a declaration excludes a second live run.
+        let undeclared = freeze_live_eligibility(&pool, race_id, &[LiveEntrant { racetime_id: entrants[1].2.clone() }]).await.unwrap();
+        assert_eq!(undeclared.excluded, 1);
+        assert_eq!(start_live(&pool, race_id, &HashSet::from([entrants[1].2.clone()])).await.unwrap(), 0);
+        sqlx::query("DELETE FROM qualifier_live_entries WHERE seed_id=$1").bind(live_seed_id).execute(&pool).await.unwrap();
+        sqlx::query("UPDATE qualifier_seeds SET entry_closed_at=NULL WHERE id=$1").bind(live_seed_id).execute(&pool).await.unwrap();
+
+        declare_retry(
             &pool,
             entrants[1].0,
             mode_id,
-            live_seed_id,
+            live_original_id,
             entrants[1].1,
         )
         .await
         .unwrap();
-        reserve_live_retry(
+        // The declaration is not bound to any race. It cannot retroactively
+        // qualify a runner for a race whose entry cutoff has already passed.
+        let reservations: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM qualifier_live_entries WHERE team_id=$1")
+            .bind(entrants[1].0).fetch_one(&pool).await.unwrap();
+        assert_eq!(reservations, 0);
+        sqlx::query("UPDATE races SET start=NOW()+INTERVAL '5 minutes' WHERE id=$1").bind(race_id).execute(&pool).await.unwrap();
+        let late = freeze_live_eligibility(&pool, race_id, &[LiveEntrant { racetime_id: entrants[1].2.clone() }]).await.unwrap();
+        assert_eq!(late.excluded, 1);
+        assert_eq!(start_live(&pool, race_id, &HashSet::from([entrants[1].2.clone()])).await.unwrap(), 0);
+        sqlx::query("UPDATE races SET start=NOW()+INTERVAL '1 hour' WHERE id=$1").bind(race_id).execute(&pool).await.unwrap();
+        sqlx::query("DELETE FROM qualifier_live_entries WHERE seed_id=$1").bind(live_seed_id).execute(&pool).await.unwrap();
+        sqlx::query("UPDATE qualifier_seeds SET entry_closed_at=NULL WHERE id=$1").bind(live_seed_id).execute(&pool).await.unwrap();
+        declare_retry(
             &pool,
             entrants[1].0,
             mode_id,
-            live_seed_id,
+            live_original_id,
             entrants[1].1,
         )
         .await
@@ -2515,6 +2544,45 @@ pub(crate) mod tests {
         .await
         .unwrap();
         assert_eq!(summary.eligible, 1);
+        // Leaving after the cutoff but before GO records no attempt and does
+        // not consume the reserved retry or replace the original result.
+        assert_eq!(start_live(&pool, race_id, &HashSet::new()).await.unwrap(), 0);
+        let departed: (Option<bool>, Option<i64>, bool) = sqlx::query_as(
+            "SELECT present_at_go, attempt_id, retry_released_at IS NOT NULL FROM qualifier_live_entries WHERE seed_id=$1 AND team_id=$2",
+        ).bind(live_seed_id).bind(entrants[1].0).fetch_one(&pool).await.unwrap();
+        assert_eq!(departed, (Some(false), None, true));
+        let original_counts: bool = sqlx::query_scalar("SELECT counts_for_entrant FROM qualifier_attempts WHERE id=$1")
+            .bind(live_original_id).fetch_one(&pool).await.unwrap();
+        assert!(original_counts);
+        let live_attempts: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM qualifier_attempts WHERE seed_id=$1")
+            .bind(live_seed_id).fetch_one(&pool).await.unwrap();
+        assert_eq!(live_attempts, 0);
+
+        // Without declaring again, join a different scheduled race in the
+        // same pool. Only GO consumes the declaration and replaces the score.
+        let next_race = race_id - 1;
+        sqlx::query("INSERT INTO races(series,event,id,start,is_qualifier) VALUES($1,$2,$3,NOW()+INTERVAL '2 hours',TRUE)")
+            .bind(series).bind(event).bind(next_race).execute(&pool).await.unwrap();
+        let next_seed: i64 = sqlx::query_scalar(r#"INSERT INTO qualifier_seeds
+            (series,event,mode_id,source,live_race_id,generation_state,seed_data,generator_profile,physical_seed_identity,settings_fingerprint)
+            VALUES($1,$2,$3,'live',$4,'ready','{"test":4}','default','test-next-live','test-settings') RETURNING id"#)
+            .bind(series).bind(event).bind(mode_id).bind(next_race).fetch_one(&pool).await.unwrap();
+        assert_eq!(freeze_live_eligibility(&pool, next_race, &[LiveEntrant { racetime_id: entrants[1].2.clone() }]).await.unwrap().eligible, 1);
+        assert_eq!(start_live(&pool, next_race, &HashSet::from([entrants[1].2.clone()])).await.unwrap(), 1);
+        let replaced: i64 = sqlx::query_scalar("SELECT retry_of FROM qualifier_attempts WHERE seed_id=$1")
+            .bind(next_seed).fetch_one(&pool).await.unwrap();
+        assert_eq!(replaced, live_original_id);
+        assert!(matches!(declare_retry(&pool, entrants[1].0, mode_id, live_original_id, entrants[1].1).await, Err(Error::RetryUnavailable)));
+        cancel_live(&pool, next_race).await.unwrap();
+        sqlx::query("DELETE FROM qualifier_live_entries WHERE seed_id=$1").bind(next_seed).execute(&pool).await.unwrap();
+        sqlx::query("DELETE FROM qualifier_attempts WHERE seed_id=$1").bind(next_seed).execute(&pool).await.unwrap();
+        sqlx::query("DELETE FROM qualifier_seeds WHERE id=$1").bind(next_seed).execute(&pool).await.unwrap();
+        sqlx::query("DELETE FROM races WHERE id=$1").bind(next_race).execute(&pool).await.unwrap();
+
+        sqlx::query("DELETE FROM qualifier_live_entries WHERE seed_id=$1").bind(live_seed_id).execute(&pool).await.unwrap();
+        sqlx::query("UPDATE qualifier_seeds SET entry_closed_at=NULL WHERE id=$1").bind(live_seed_id).execute(&pool).await.unwrap();
+        declare_retry(&pool, entrants[1].0, mode_id, live_original_id, entrants[1].1).await.unwrap();
+        freeze_live_eligibility(&pool, race_id, &[LiveEntrant { racetime_id: entrants[1].2.clone() }]).await.unwrap();
         let repeated_freeze = freeze_live_eligibility(&pool, race_id, &[]).await.unwrap();
         assert!(repeated_freeze.already_frozen);
         assert_eq!(repeated_freeze.eligible, 1);
@@ -2592,6 +2660,15 @@ pub(crate) mod tests {
             .bind(series).bind(event).bind(other_mode).fetch_one(&pool).await.unwrap();
         sqlx::query("UPDATE qualifier_seeds SET settings_attested_by=$2, settings_attested_at=NOW() WHERE id=$1")
             .bind(other_seed).bind(staff).execute(&pool).await.unwrap();
+        let other_original: i64 = sqlx::query_scalar(r#"INSERT INTO qualifier_attempts
+            (series,event,mode_id,seed_id,team_id,attempt_sequence,source,state,official_outcome,official_time,verified_at)
+            VALUES($1,$2,$3,$4,$5,1,'async','finalized','finished',INTERVAL '1 hour',NOW()) RETURNING id"#)
+            .bind(series).bind(event).bind(other_mode).bind(other_seed).bind(entrants[1].0).fetch_one(&pool).await.unwrap();
+        // A declaration belongs to the selected result/pool, and reserves the
+        // single event-wide allowance without replacing either current score.
+        assert!(matches!(declare_retry(&pool, entrants[1].0, other_mode, other_original, entrants[1].1).await, Err(Error::RetryUnavailable)));
+        assert!(matches!(request_async_retry(&pool, entrants[1].0, other_mode, entrants[1].1).await, Err(Error::RetryUnavailable)));
+        sqlx::query("DELETE FROM qualifier_attempts WHERE id=$1").bind(other_original).execute(&pool).await.unwrap();
         let mut blocker = pool.begin().await.unwrap();
         lock_event(&mut blocker, Series::from_str(series).unwrap(), event).await.unwrap();
         let gate = Arc::new(tokio::sync::Barrier::new(3));
@@ -2625,7 +2702,7 @@ pub(crate) mod tests {
             sqlx::query("DELETE FROM qualifier_live_entries WHERE seed_id=$1").bind(live_seed_id).execute(&pool).await.unwrap();
             sqlx::query("DELETE FROM qualifier_attempts WHERE seed_id=$1 AND state='void'").bind(live_seed_id).execute(&pool).await.unwrap();
             sqlx::query("UPDATE qualifier_seeds SET entry_closed_at=NULL WHERE id=$1").bind(live_seed_id).execute(&pool).await.unwrap();
-            reserve_live_retry(&pool, entrants[1].0, mode_id, live_seed_id, entrants[1].1).await.unwrap();
+            declare_retry(&pool, entrants[1].0, mode_id, live_original_id, entrants[1].1).await.unwrap();
             let mut blocker = pool.begin().await.unwrap();
             lock_event(&mut blocker, Series::from_str(series).unwrap(), event).await.unwrap();
             let request = || { let pool = pool.clone(); let entrant = entrants[1].clone(); tokio::spawn(async move {
@@ -2653,13 +2730,13 @@ pub(crate) mod tests {
         sqlx::query("DELETE FROM qualifier_live_entries WHERE seed_id=$1").bind(live_seed_id).execute(&pool).await.unwrap();
         sqlx::query("DELETE FROM qualifier_attempts WHERE seed_id=$1 AND state='void'").bind(live_seed_id).execute(&pool).await.unwrap();
         sqlx::query("UPDATE qualifier_seeds SET entry_closed_at=NULL WHERE id=$1").bind(live_seed_id).execute(&pool).await.unwrap();
-        reserve_live_retry(&pool, entrants[1].0, mode_id, live_seed_id, entrants[1].1).await.unwrap();
+        declare_retry(&pool, entrants[1].0, mode_id, live_original_id, entrants[1].1).await.unwrap();
         let active = request_async(&pool, entrants[1].0, other_mode, entrants[1].1).await.unwrap();
         let excluded = freeze_live_eligibility(&pool, race_id, &[LiveEntrant { racetime_id: entrants[1].2.clone() }]).await.unwrap();
         assert_eq!(excluded.excluded, 1);
         assert_eq!(start_live(&pool, race_id, &HashSet::from([entrants[1].2.clone()])).await.unwrap(), 0);
-        let released: bool = sqlx::query_scalar("SELECT retry_released_at IS NOT NULL FROM qualifier_live_entries WHERE seed_id=$1 AND team_id=$2").bind(live_seed_id).bind(entrants[1].0).fetch_one(&pool).await.unwrap();
-        assert!(released);
+        let reserved: bool = sqlx::query_scalar("SELECT retry_reserved_at IS NOT NULL FROM qualifier_live_entries WHERE seed_id=$1 AND team_id=$2").bind(live_seed_id).bind(entrants[1].0).fetch_one(&pool).await.unwrap();
+        assert!(!reserved);
         assert!(matches!(request_async_retry(&pool, entrants[1].0, mode_id, entrants[1].1).await, Err(Error::ActiveAsync)));
         // GO and finish intent are immutable under repeated, stale controls.
         sqlx::query("UPDATE qualifier_attempts SET state='revealed', revealed_at=NOW(), discord_thread=$2 WHERE id=$1").bind(active.id).bind(-active.id).execute(&pool).await.unwrap();
@@ -2672,10 +2749,12 @@ pub(crate) mod tests {
         assert_eq!(stored.timestamp_micros(), go.timestamp_micros());
         let done = participant_finish(&pool, active.id, 2, Utc::now(), true).await.unwrap();
         assert!(revert_finish(&pool, active.id, done).await.is_err());
-        let retry = request_async_retry(&pool, entrants[1].0, mode_id, entrants[1].1).await.unwrap();
+        let retry = request_async(&pool, entrants[1].0, mode_id, entrants[1].1).await.unwrap();
         assert!(retry.is_active_async());
+        let replaced: i64 = sqlx::query_scalar("SELECT retry_of FROM qualifier_attempts WHERE id=$1").bind(retry.id).fetch_one(&pool).await.unwrap();
+        assert_eq!(replaced, live_original_id);
         sqlx::query("UPDATE pooled_qualifier_configs SET requests_paused=TRUE WHERE series=$1 AND event=$2").bind(series).bind(event).execute(&pool).await.unwrap();
-        assert_eq!(request_async_retry(&pool, entrants[1].0, mode_id, entrants[1].1).await.unwrap().id, retry.id);
+        assert_eq!(request_async(&pool, entrants[1].0, mode_id, entrants[1].1).await.unwrap().id, retry.id);
         // Generation completion uses its claim; stale workers cannot overwrite a ready seed.
         sqlx::query("UPDATE qualifier_seeds SET generation_state='generating', generation_claim='current', generation_claim_until=NOW()+INTERVAL '1 hour' WHERE id=$1").bind(other_seed).execute(&pool).await.unwrap();
         generation::complete(&pool, other_seed, "stale", Err(Error::NoSeed)).await.unwrap();
@@ -2736,8 +2815,8 @@ pub(crate) mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query("DELETE FROM races WHERE id = $1")
-            .bind(race_id)
+        sqlx::query("DELETE FROM races WHERE series = $1 AND event = $2")
+            .bind(series).bind(event)
             .execute(&pool)
             .await
             .unwrap();

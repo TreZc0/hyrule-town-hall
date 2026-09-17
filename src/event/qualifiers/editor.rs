@@ -1,4 +1,4 @@
-use super::{help, pooled_qualifiers};
+use super::{help, pooled_qualifiers, pools};
 use crate::{event::Series, prelude::*};
 
 pub(super) fn field(
@@ -49,7 +49,7 @@ pub(super) fn configuration(
                     ]),
                     ("Run limits & retries", "These limits apply across the qualifier workflow, regardless of the mode an entrant selects.", vec![
                         ("async_run_limit_hours", "Async time limit (hours)", "Measured from GO; the submission deadline can shorten it.", config.run_limit().num_hours().to_string(), "1", None, "1"),
-                        ("live_entry_close_minutes", "Live entry cutoff (minutes before start)", "Freezes the eligible entrant list before each live race.", (i64::from(config.live_entry_close_lead.days) * 1440 + config.live_entry_close_lead.microseconds / 60_000_000).to_string(), "0", None, "1"),
+                        ("live_entry_close_minutes", "Live entry cutoff (minutes before start)", "Switches the racetime.gg room to invite-only. Seed timing is unchanged; leaving before GO does not count as an attempt.", (i64::from(config.live_entry_close_lead.days) * 1440 + config.live_entry_close_lead.microseconds / 60_000_000).to_string(), "0", None, "1"),
                         ("retry_limit", "Retries per entrant, across all modes", "0 disables retries. 1 allows one replacement in the event.", config.retry_limit.to_string(), "0", Some("1"), "1"),
                         ("allocation_spread", "Maximum assignment count difference", "Balances the number of entrants assigned to each seed.", config.allocation_spread.to_string(), "1", None, "1"),
                     ]),
@@ -119,7 +119,6 @@ pub(super) fn modes(
     let new_mode = pooled_qualifiers::Mode {
         id: 0,
         position: i16::try_from(modes.len() + 1).unwrap_or(1),
-        slug: String::new(),
         display_name: String::new(),
         seed_gen_type: String::new(),
         seed_config: json!({}),
@@ -150,15 +149,10 @@ pub(super) fn modes(
                     : full_form(uri!(super::post_pooled_mode(series, event)), csrf, html! {
                         input(type = "hidden", name = "mode_id", value = mode.id);
                         div(class = "qualifier-grid") {
-                            @for (name, title, hint, value, placeholder) in [
-                                ("display_name", "Mode name", "Shown to entrants, e.g. Inverted + Keysanity.", mode.display_name.as_str(), "Inverted + Keysanity"),
-                                ("slug", "Stable mode ID", "A distinct identifier, e.g. inverted-keysanity.", mode.slug.as_str(), "inverted-keysanity"),
-                            ] {
-                                @let id = format!("mode-{}-{name}", mode.id);
-                                : field(&id, name, title, hint, html! {
-                                    input(id = &id, type = "text", name = name, value = value, placeholder = placeholder, required? = true, aria_describedby = format!("{id}-hint"));
-                                });
-                            }
+                            @let id = format!("mode-{}-display_name", mode.id);
+                            : field(&id, "display_name", "Mode name", "Shown to entrants, e.g. Inverted + Keysanity.", html! {
+                                input(id = &id, type = "text", name = "display_name", value = &mode.display_name, placeholder = "Inverted + Keysanity", required? = true, aria_describedby = format!("{id}-hint"));
+                            });
                             @let id = format!("mode-{}-position", mode.id);
                             : field(&id, "position", "Display order", "1 appears first, followed by 2, 3, and so on.", html! {
                                 input(id = &id, type = "number", name = "position", min = "1", value = mode.position, required? = true, aria_describedby = format!("{id}-hint"));
@@ -167,7 +161,7 @@ pub(super) fn modes(
                             : field(&id, "seed_gen_type", "Seed generator", "This mode’s generator, independent of the event’s main settings.", html! {
                                 select(id = &id, name = "seed_gen_type", required? = true, aria_describedby = format!("{id}-hint")) {
                                     option(value = "", selected? = mode.seed_gen_type.is_empty(), disabled? = true) : "Choose a generator…";
-                                    @for (value, title) in [(if mode.seed_gen_type == "owr" { "owr" } else { "owr_tourney" }, "OWR · tournament build"), ("alttpr_dr", "ALTTPR Door Rando"), ("alttpr_avianart", "ALTTPR Avianart"), ("twwr", "The Wind Waker Randomizer")] {
+                                    @for (value, title) in [("owr", "ALTTPR OWR"), ("owr_tourney", "ALTTPR OWR (tourney build)"), ("alttpr_dr", "ALTTPR Door Rando"), ("alttpr_avianart", "ALTTPR Avianart"), ("twwr", "The Wind Waker Randomizer")] {
                                         option(value = value, selected? = mode.seed_gen_type == value) : title;
                                     }
                                     @if !mode.seed_gen_type.is_empty() && !["owr", "owr_tourney", "alttpr_dr", "alttpr_avianart", "twwr"].contains(&mode.seed_gen_type.as_str()) {
@@ -179,13 +173,6 @@ pub(super) fn modes(
                         @let id = format!("mode-{}-seed_config", mode.id);
                         : field(&id, "seed_config", "Baseline settings JSON", "One fixed ruleset for this mode. Open (?) for generator-specific examples and restrictions.", html! {
                             textarea(id = &id, name = "seed_config", rows = "10", class = "qualifier-code", required? = true, spellcheck = "false", aria_describedby = format!("{id}-hint")) : serde_json::to_string_pretty(&mode.seed_config).expect("stored JSON value");
-                        });
-                        @let id = format!("mode-{}-generator_profile", mode.id);
-                        : field(&id, "generator_profile", "Generator profile", "Automatic deployment profile; OWR pools use the tournament installation.", html! {
-                            select(id = &id, name = "generator_profile", aria_describedby = format!("{id}-hint")) {
-                                option(value = "default", selected? = mode.generator_profile == "default") : "Default (automatic)";
-                                @if mode.generator_profile != "default" { option(value = &mode.generator_profile, selected? = true) : format!("{} (unsupported profile)", mode.generator_profile); }
-                            }
                         });
                         div(class = "qualifier-checkbox") {
                             @let id = format!("mode-{}-enabled", mode.id);
@@ -206,6 +193,7 @@ pub(super) fn seed_controls(
     csrf: Option<&CsrfToken>,
     mode: &pooled_qualifiers::Mode,
     config: &pooled_qualifiers::Config,
+    seeds: &[pools::SeedRow],
 ) -> RawHtml<String> {
     html! {
         div(class = "qualifier-pool-actions") {
@@ -221,42 +209,18 @@ pub(super) fn seed_controls(
                     input(type = "hidden", name = "mode_id", value = mode.id);
                     input(type = "hidden", name = "retry_failed", value = "true");
                     @let id = format!("generate-{}-pool_position", mode.id);
-                    : field(&id, "pool_position", "Private pool slot", "Creates a missing slot or retries a failed, unused slot. Ready seeds are preserved.", html! {
-                        input(id = &id, type = "number", name = "pool_position", min = "1", max = config.pool_seed_count, required? = true, aria_describedby = format!("{id}-hint"));
+                    : field(&id, "pool_position", "Existing seed", "Select a failed seed to retry. Ready, queued, running and released seeds cannot be retried here. Use Generate missing slots above to create new slots.", html! {
+                        select(id = &id, name = "pool_position", required? = true, aria_describedby = format!("{id}-hint")) {
+                            option(value = "", selected, disabled) : "Select an existing seed…";
+                            @for seed in seeds.iter().filter(|seed| seed.mode_id == mode.id && seed.retired_at.is_none()) {
+                                @if let Some(slot) = seed.pool_position.filter(|slot| (1..=config.pool_seed_count).contains(slot)) {
+                                    option(value = slot, disabled? = seed.generation_state != "failed" || seed.released_at.is_some()) : format!("{} — {}", pools::seed_label(seed.id, seeds), seed.generation_state);
+                                }
+                            }
+                        }
                     });
                 }, Vec::new(), "Generate / retry this slot");
             }
-        }
-    }
-}
-
-pub(super) fn import_form(
-    series: Series,
-    event: &str,
-    csrf: Option<&CsrfToken>,
-    mode: &pooled_qualifiers::Mode,
-    config: &pooled_qualifiers::Config,
-) -> RawHtml<String> {
-    html! {
-        details(class = "qualifier-disclosure") {
-            summary : "Import an existing seed · advanced";
-            p(class = "qualifier-hint") : "Use this only for an already generated seed with canonical delivery data. Requests must be paused and the target slot unused. Normal setup can use Generate missing slots above.";
-            : full_form(uri!(super::post_pooled_seed(series, event)), csrf, html! {
-                input(type = "hidden", name = "mode_id", value = mode.id);
-                @let id = format!("import-{}-pool_position", mode.id);
-                : field(&id, "pool_position", "Destination pool slot", "The unused private slot that will hold this seed.", html! {
-                    input(id = &id, type = "number", name = "pool_position", min = "1", max = config.pool_seed_count, required? = true, aria_describedby = format!("{id}-hint"));
-                });
-                @let id = format!("import-{}-seed_data", mode.id);
-                : field(&id, "seed_data", "Canonical seed delivery JSON", "Actual generated output, including delivery identifiers. This is not the mode’s settings JSON.", html! {
-                    textarea(id = &id, name = "seed_data", rows = "8", class = "qualifier-code", required? = true, spellcheck = "false", aria_describedby = format!("{id}-hint"));
-                });
-                div(class = "qualifier-checkbox") {
-                    @let id = format!("import-{}-attest_settings", mode.id);
-                    input(id = &id, type = "checkbox", name = "attest_settings", required? = true);
-                    : help::label(&id, "attest_settings", "I verified this seed’s baseline settings and deployed generator build");
-                }
-            }, Vec::new(), "Import into unused slot");
         }
     }
 }
@@ -274,7 +238,6 @@ mod tests {
             pooled_qualifiers::Mode {
                 id: 7,
                 position: 1,
-                slug: "inverted".into(),
                 display_name: "Inverted <test>".into(),
                 seed_gen_type: "owr_tourney".into(),
                 seed_config: json!({"base_settings": {"mode": "inverted"}}),
@@ -285,7 +248,6 @@ mod tests {
             pooled_qualifiers::Mode {
                 id: 8,
                 position: 2,
-                slug: "legacy".into(),
                 display_name: "Legacy mode".into(),
                 seed_gen_type: "legacy_generator".into(),
                 seed_config: json!({}),
@@ -294,18 +256,62 @@ mod tests {
                 enabled: false,
             },
         ];
+        let seeds = [
+            pools::SeedRow {
+                id: 101,
+                mode_id: 7,
+                pool_position: Some(1),
+                generation_state: "ready".into(),
+                ..Default::default()
+            },
+            pools::SeedRow {
+                id: 102,
+                mode_id: 7,
+                pool_position: Some(2),
+                generation_state: "failed".into(),
+                ..Default::default()
+            },
+            pools::SeedRow {
+                id: 103,
+                mode_id: 8,
+                pool_position: Some(3),
+                generation_state: "failed".into(),
+                ..Default::default()
+            },
+            pools::SeedRow {
+                id: 104,
+                mode_id: 7,
+                live_race_id: Some(42),
+                generation_state: "failed".into(),
+                ..Default::default()
+            },
+        ];
         let rendered = html! {
             article(class = "qualifier-admin") {
                 : configuration(Series::Standard, "test", None, &config, &["Expected 3 enabled modes, found 1.".into()], &Context::default());
                 : modes(Series::Standard, "test", None, &config, &modes_data);
                 section(class = "qualifier-pool-card") {
                     h2 : "Inverted seed pool";
-                    : seed_controls(Series::Standard, "test", None, &modes_data[0], &config);
-                    : import_form(Series::Standard, "test", None, &modes_data[0], &config);
+                    : seed_controls(Series::Standard, "test", None, &modes_data[0], &config, &seeds);
                 }
             }
         }.0;
         let document = kuchiki::parse_html().one(rendered.clone());
+        let seed_select = document.select_first("select[name=pool_position]").unwrap();
+        assert_eq!(seed_select.as_node().select("option").unwrap().count(), 3);
+        assert!(
+            seed_select
+                .as_node()
+                .select_first("option[value='1'][disabled]")
+                .is_ok()
+        );
+        let retry = seed_select
+            .as_node()
+            .select_first("option[value='2']")
+            .unwrap();
+        assert!(!retry.attributes.borrow().contains("disabled"));
+        assert_eq!(retry.text_contents(), "Async slot 2 (seed 102) — failed");
+        assert!(document.select_first("input[name=pool_position]").is_err());
         let mut ids = HashSet::new();
         for node in document.select("[id]").unwrap() {
             let attributes = node.attributes.borrow();
@@ -322,19 +328,14 @@ mod tests {
             assert_eq!(attributes.get("type"), Some("button"));
             assert!(ids.contains(attributes.get("popovertarget").unwrap()));
         }
-        assert_eq!(document.select("form").unwrap().count(), 7);
+        assert_eq!(document.select("form").unwrap().count(), 6);
         assert!(rendered.contains("Inverted &lt;test&gt;"));
         assert!(rendered.contains("Named baselines maps are not supported"));
         for (selector, expected) in [
             ("#required_mode_count", "3"),
             ("#mode-7-position", "1"),
-            ("#mode-7-slug", "inverted"),
             ("#mode-7-seed_gen_type option[selected]", "owr_tourney"),
             ("#mode-8-seed_gen_type option[selected]", "legacy_generator"),
-            (
-                "#mode-8-generator_profile option[selected]",
-                "legacy_profile",
-            ),
         ] {
             assert_eq!(
                 document
@@ -345,6 +346,25 @@ mod tests {
                     .get("value"),
                 Some(expected)
             );
+        }
+        assert_eq!(
+            document
+                .select("[name=slug], [name=generator_profile]")
+                .unwrap()
+                .count(),
+            0
+        );
+        for select in document.select("select[name=seed_gen_type]").unwrap() {
+            for (value, label) in [
+                ("owr", "ALTTPR OWR"),
+                ("owr_tourney", "ALTTPR OWR (tourney build)"),
+            ] {
+                let option = select
+                    .as_node()
+                    .select_first(&format!("option[value={value}]"))
+                    .unwrap();
+                assert_eq!(option.text_contents(), label);
+            }
         }
         config.settings_locked_at = Some(Utc::now());
         let locked = configuration(

@@ -7,8 +7,9 @@ struct Delivery {
     id: i64,
     control_version: i64,
     state: String,
+    source: String,
     discord_thread: Option<i64>,
-    channel: i64,
+    channel: Option<i64>,
     mode_name: String,
     seed_data: serde_json::Value,
     start_due_at: Option<DateTime<Utc>>,
@@ -25,17 +26,7 @@ fn recovery_error(message: &str) -> Error {
 }
 
 pub(super) async fn sweep(pool: &PgPool, http: &Arc<Http>) -> Result<(), Error> {
-    let ids: Vec<i64> = sqlx::query_scalar(r#"SELECT id FROM qualifier_attempts WHERE source = 'async' AND
-        (delivery_claim_until IS NULL OR delivery_claim_until < NOW()) AND (
-            (state = 'assigned' AND NOT delivery_messages ? 'ready') OR
-            (state = 'revealed' AND (NOT delivery_messages ? 'seed' OR start_due_at <= NOW())) OR
-            state = 'starting' OR
-            (state = 'running' AND NOT delivery_messages ? ('run-' || control_version)) OR
-            (state = 'awaiting_verification' AND (undo_until IS NULL OR undo_until <= NOW()) AND NOT delivery_messages ? ('staff-' || control_version)) OR
-            (state = 'finalized' AND NOT delivery_messages ? ('final-' || control_version))
-        ) ORDER BY id"#)
-        .fetch_all(pool).await?;
-    stream::iter(ids)
+    stream::iter(pending_delivery_ids(pool).await?)
         .map(|id| async move {
             let _ = reconcile(pool, http, id).await;
         })
@@ -43,6 +34,22 @@ pub(super) async fn sweep(pool: &PgPool, http: &Arc<Http>) -> Result<(), Error> 
         .collect::<Vec<_>>()
         .await;
     Ok(())
+}
+
+async fn pending_delivery_ids(pool: &PgPool) -> Result<Vec<i64>, sqlx::Error> {
+    sqlx::query_scalar(r#"SELECT id FROM qualifier_attempts WHERE
+        (delivery_claim_until IS NULL OR delivery_claim_until < NOW()) AND ((source = 'async' AND (
+            (state = 'assigned' AND NOT delivery_messages ? 'ready') OR
+            (state = 'revealed' AND (NOT delivery_messages ? 'seed' OR start_due_at <= NOW())) OR
+            state = 'starting' OR
+            (state = 'running' AND NOT delivery_messages ? ('run-' || control_version)) OR
+            (state = 'awaiting_verification' AND (undo_until IS NULL OR undo_until <= NOW()) AND NOT delivery_messages ? ('staff-' || control_version)) OR
+            (state = 'finalized' AND NOT delivery_messages ? ('final-' || control_version))
+        )) OR (retry_declared_at IS NOT NULL
+            AND jsonb_typeof(delivery_messages->'retry-declared') IS DISTINCT FROM 'number'
+            AND EXISTS(SELECT 1 FROM events WHERE events.series=qualifier_attempts.series
+                AND events.event=qualifier_attempts.event AND discord_organizer_channel IS NOT NULL))) ORDER BY id"#)
+        .fetch_all(pool).await
 }
 
 pub(super) async fn reconcile(pool: &PgPool, http: &Arc<Http>, id: i64) -> Result<(), Error> {
@@ -269,7 +276,7 @@ async fn ensure_thread(
     if let Some(thread) = row.discord_thread {
         return Ok(ChannelId::new(thread as u64));
     }
-    let parent = ChannelId::new(row.channel as u64);
+    let parent = ChannelId::new(row.channel.ok_or_else(|| recovery_error("async channel is not configured"))? as u64);
     let name = format!("qualifier-{}", row.id);
     let thread = if row.delivery_messages.get("thread").is_some() {
         let candidates = transport.threads(parent).await?;
@@ -304,7 +311,7 @@ async fn ensure_thread(
 }
 
 async fn deliver(pool: &PgPool, http: &Arc<Http>, id: i64, claim: &str) -> Result<(), Error> {
-    let row: Delivery = sqlx::query_as(r#"SELECT attempt.id, attempt.control_version, attempt.state, attempt.discord_thread,
+    let row: Delivery = sqlx::query_as(r#"SELECT attempt.id, attempt.control_version, attempt.state, attempt.source, attempt.discord_thread,
         event.discord_async_channel AS channel, mode.display_name AS mode_name, seed.seed_data,
         attempt.start_due_at, config.starts_close_at, config.submissions_close_at,
         attempt.undo_until, attempt.participant_outcome, attempt.official_outcome, attempt.delivery_messages
@@ -313,8 +320,9 @@ async fn deliver(pool: &PgPool, http: &Arc<Http>, id: i64, claim: &str) -> Resul
         JOIN qualifier_modes mode ON mode.id = attempt.mode_id JOIN qualifier_seeds seed ON seed.id = attempt.seed_id
         WHERE attempt.id = $1 AND attempt.delivery_claim = $2"#)
         .bind(id).bind(claim).fetch_one(pool).await?;
-    if row.state == "void" {
-        return Ok(());
+    let retry_notification = deliver_retry_declaration(pool, &DiscordTransport(http), &row, claim).await;
+    if row.source != "async" || row.state == "void" {
+        return retry_notification;
     }
     if matches!(row.state.as_str(), "assigned" | "revealed")
         && (row.starts_close_at.is_none_or(|end| Utc::now() >= end)
@@ -495,6 +503,40 @@ async fn deliver(pool: &PgPool, http: &Arc<Http>, id: i64, claim: &str) -> Resul
         }
         _ => (),
     }
+    retry_notification
+}
+
+async fn deliver_retry_declaration(
+    pool: &PgPool,
+    transport: &impl Transport,
+    row: &Delivery,
+    claim: &str,
+) -> Result<(), Error> {
+    if row.delivery_messages.get("retry-declared").is_some_and(serde_json::Value::is_number) {
+        return Ok(());
+    }
+    let declaration: Option<(String, String, String, i64, i64, DateTime<Utc>)> = sqlx::query_as(
+        r#"SELECT attempt.series, attempt.event, event.display_name,
+            event.discord_organizer_channel, attempt.retry_declared_by, attempt.retry_declared_at
+        FROM qualifier_attempts attempt JOIN events event USING(series,event)
+        WHERE attempt.id=$1 AND attempt.retry_declared_at IS NOT NULL
+          AND event.discord_organizer_channel IS NOT NULL"#,
+    ).bind(row.id).fetch_optional(pool).await?;
+    let Some((series, event, event_name, channel, declared_by, declared_at)) = declaration else {
+        return Ok(());
+    };
+    let user = User::from_id(pool, Id::from(declared_by as u64)).await?
+        .ok_or_else(|| recovery_error("retry declarant no longer exists"))?;
+    let mut content = MessageBuilder::default();
+    content.mention_user(&user)
+        .push(" declared a qualifier re-attempt for ").push_bold_safe(&row.mode_name)
+        .push(" in ").push_safe(event_name).push(".\nOriginal result: ")
+        .push_safe(&row.source).push(" attempt ").push(row.id.to_string())
+        .push(format!(". Declared <t:{}:F>.\n", declared_at.timestamp()))
+        .push("The declaration applies to the next eligible attempt in this pool. Leaving a live race before GO keeps it pending.\n")
+        .push(format!("<{}/event/{series}/{event}/qualifiers#attempt-{}>", base_uri(), row.id));
+    deliver_message(pool, transport, row, claim, ChannelId::new(channel as u64),
+        "retry-declared", content.build(), vec![]).await?;
     Ok(())
 }
 
@@ -578,8 +620,9 @@ pub(crate) async fn test_delivery_failures(pool: &PgPool, id: i64) {
         id,
         control_version: 1,
         state: "assigned".into(),
+        source: "async".into(),
         discord_thread: Some(1),
-        channel: 1,
+        channel: Some(1),
         mode_name: "test".into(),
         seed_data: serde_json::json!({}),
         start_due_at: None,
@@ -702,6 +745,50 @@ pub(crate) async fn test_delivery_failures(pool: &PgPool, id: i64) {
             usize::from(!before)
         );
     }
+    // Retry declarations from live results must be delivered without an async
+    // thread. Recover a lost response without sending a duplicate announcement.
+    sqlx::query("UPDATE qualifier_attempts SET source='live', retry_declared_at=NOW(), retry_declared_by=created_by, delivery_messages='{}', delivery_claim=NULL, delivery_claim_until=NULL WHERE id=$1")
+        .bind(id).execute(pool).await.unwrap();
+    row.source = "live".into();
+    row.channel = None;
+    row.delivery_messages = serde_json::json!({});
+    let transport = Fake {
+        messages: std::sync::Mutex::new(Vec::new()),
+        threads: std::sync::Mutex::new(Vec::new()),
+        fail_before: false,
+        fail_after: true,
+    };
+    assert!(!pending_delivery_ids(pool).await.unwrap().contains(&id));
+    deliver_retry_declaration(pool, &transport, &row, "test").await.unwrap();
+    assert!(transport.messages.lock().unwrap().is_empty());
+    sqlx::query("UPDATE events SET discord_organizer_channel=2 WHERE (series,event)=(SELECT series,event FROM qualifier_attempts WHERE id=$1)")
+        .bind(id).execute(pool).await.unwrap();
+    assert!(pending_delivery_ids(pool).await.unwrap().contains(&id));
+    sqlx::query("UPDATE qualifier_attempts SET delivery_claim='test', delivery_claim_until=NOW()+INTERVAL '1 minute' WHERE id=$1")
+        .bind(id).execute(pool).await.unwrap();
+    assert!(deliver_retry_declaration(pool, &transport, &row, "test").await.is_err());
+    row.delivery_messages = sqlx::query_scalar("SELECT delivery_messages FROM qualifier_attempts WHERE id=$1")
+        .bind(id).fetch_one(pool).await.unwrap();
+    deliver_retry_declaration(pool, &transport, &row, "test").await.unwrap();
+    row.delivery_messages = sqlx::query_scalar("SELECT delivery_messages FROM qualifier_attempts WHERE id=$1")
+        .bind(id).fetch_one(pool).await.unwrap();
+    deliver_retry_declaration(pool, &transport, &row, "test").await.unwrap();
+    {
+        let messages = transport.messages.lock().unwrap();
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].channel_id, ChannelId::new(2));
+        assert!(messages[0].content.contains("declared a qualifier re-attempt"));
+        assert!(messages[0].content.contains(&format!("/event/casboots/pqtest/qualifiers#attempt-{id}")));
+        assert!(messages[0].content.contains("**test**"));
+    }
+    assert!(transport.threads.lock().unwrap().is_empty());
+    sqlx::query("UPDATE qualifier_attempts SET delivery_claim=NULL, delivery_claim_until=NULL WHERE id=$1")
+        .bind(id).execute(pool).await.unwrap();
+    assert!(!pending_delivery_ids(pool).await.unwrap().contains(&id));
+    sqlx::query("UPDATE events SET discord_organizer_channel=NULL WHERE (series,event)=(SELECT series,event FROM qualifier_attempts WHERE id=$1)")
+        .bind(id).execute(pool).await.unwrap();
+    sqlx::query("UPDATE qualifier_attempts SET source='async', retry_declared_at=NULL, retry_declared_by=NULL WHERE id=$1")
+        .bind(id).execute(pool).await.unwrap();
     sqlx::query("UPDATE qualifier_attempts SET discord_thread=NULL WHERE id=$1")
         .bind(id)
         .execute(pool)

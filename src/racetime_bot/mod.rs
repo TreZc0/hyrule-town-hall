@@ -1329,12 +1329,13 @@ impl GlobalState {
         }
     }
 
-    /// Preserve the tournament installation for existing pooled OWR modes.
+    /// Roll a pooled baseline using the mode’s selected OWR build.
     pub(crate) fn roll_pooled_owr_seed(
         self: Arc<Self>,
         config: seed_gen_type::OwrEventConfig,
+        build: seed_gen_type::OwrBuild,
     ) -> mpsc::Receiver<SeedRollUpdate> {
-        self.roll_owr_seed(HashMap::new(), config, None, seed_gen_type::OwrBuild::Tournament)
+        self.roll_owr_seed(HashMap::new(), config, None, build)
     }
 
     pub(crate) fn roll_mutual_choices_dr_seed(
@@ -2627,7 +2628,7 @@ impl SeedRollUpdate {
                     }
                 }
 
-                let saved_summary = if let Some(OfficialRaceData { cal_event, .. }) = official_data {
+                let saved_summary = if let Some(OfficialRaceData { cal_event, .. }) = official_data.filter(|data| !data.is_pooled_live()) {
                     choice_resolution::read(db_pool, cal_event.race.id).await.to_racetime()?
                         .map(|snapshot| snapshot.display(!matches!(cal_event.kind, cal::EventKind::Normal)))
                 } else {
@@ -3734,6 +3735,86 @@ mod compatibility_tests;
 mod configured_choice_tests {
     use super::*;
 
+    #[test]
+    fn pooled_seed_timing_uses_normal_game_lead() {
+        use seed_gen_type::{AlttprDrSource, OwrBuild, OwrEventConfig, SeedGenType};
+        for kind in [
+            SeedGenType::Owr { config: OwrEventConfig::default(), build: OwrBuild::Regular },
+            SeedGenType::Owr { config: OwrEventConfig::default(), build: OwrBuild::Tournament },
+            SeedGenType::AlttprDoorRando {
+                source: AlttprDrSource::MysteryPool { weights_url: String::new() },
+                practice_modes: Vec::new(), practice_choices: Vec::new(),
+            },
+            SeedGenType::AlttprAvianart { default_preset: None, practice_presets: Vec::new() },
+        ] {
+            assert_eq!(seed_release_lead(&kind), TimeDelta::minutes(10));
+        }
+        assert_eq!(seed_release_lead(&SeedGenType::TWWR { permalink: String::new() }), TimeDelta::minutes(15));
+    }
+
+    #[test]
+    fn pooled_live_departures_before_go_are_not_attempts() {
+        let go = Utc::now();
+        for status in [EntrantStatusValue::Requested, EntrantStatusValue::Invited, EntrantStatusValue::Declined] {
+            assert!(!pooled_live_entrant_present(status, None, Some(go)));
+        }
+        for status in [EntrantStatusValue::Dnf, EntrantStatusValue::Dq] {
+            assert!(!pooled_live_entrant_present(status, None, None));
+            assert!(!pooled_live_entrant_present(status, Some(go - TimeDelta::seconds(1)), Some(go)));
+            // Actual forfeits after GO must still count, including after a restart.
+            assert!(pooled_live_entrant_present(status, Some(go + TimeDelta::seconds(1)), Some(go)));
+        }
+        for status in [EntrantStatusValue::Ready, EntrantStatusValue::NotReady, EntrantStatusValue::InProgress] {
+            assert!(pooled_live_entrant_present(status, None, Some(go)));
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires HTH_TEST_DATABASE_URL"]
+    async fn database_pooled_live_qualifiers_bypass_main_event_drafts() {
+        let pool = event::configuration::test_pool().await;
+        let mut tx = pool.begin().await.unwrap();
+        let id: i64 = sqlx::query_scalar("SELECT id FROM races WHERE is_qualifier AND total IS NULL AND team1 IS NULL ORDER BY id LIMIT 1")
+            .fetch_one(&mut *tx).await.unwrap();
+        let race = Race::from_id(&mut tx, &reqwest::Client::new(), Id::from(id as u64))
+            .await.unwrap();
+        let mut event = race.event(&mut tx).await.unwrap();
+        event.qualifier_mode = "pooled_by_mode".into();
+        event.draft_kind_str = Some("s7".into());
+        event.draft_config = None;
+        event.round_modes = None;
+        event.seed_gen_type = None;
+        event.single_settings = None;
+        assert!(event.draft_kind().is_some());
+        let mut official = OfficialRaceData {
+            cal_event: cal::Event { race, kind: cal::EventKind::Normal },
+            event,
+            restreams: HashMap::new(),
+            entrants: Vec::new(),
+            fpa_invoked: false,
+            breaks_used: false,
+        };
+        // Room startup and retries must both use the linked qualifier mode,
+        // even when the main event has a draft and no fixed seed settings.
+        assert!(official.is_pooled_live());
+        assert!(room_draft_kind(&official.cal_event, &official.event).is_none());
+        assert!(official.draft_kind().is_none());
+        assert!(official.has_seed_configuration());
+        official.event.draft_kind_str = None;
+        assert!(official.has_seed_configuration());
+        official.event.draft_kind_str = Some("s7".into());
+
+        // Main-event matches and other qualifier formats retain their draft.
+        official.cal_event.race.is_qualifier = false;
+        assert!(!official.is_pooled_live());
+        assert!(official.draft_kind().is_some());
+        official.cal_event.race.is_qualifier = true;
+        official.event.qualifier_mode = "score".into();
+        assert!(!official.is_pooled_live());
+        assert!(official.draft_kind().is_some());
+        tx.rollback().await.unwrap();
+    }
+
     #[tokio::test]
     #[ignore = "requires HTH_TEST_DATABASE_URL"]
     async fn database_renamed_qualifiers_keep_scoring_identity_and_room_controls() {
@@ -4262,6 +4343,65 @@ struct OfficialRaceData {
     breaks_used: bool,
 }
 
+const ALTTPR_SEED_RELEASE_LEAD: TimeDelta = TimeDelta::minutes(10);
+const DEFAULT_SEED_RELEASE_LEAD: TimeDelta = TimeDelta::minutes(15);
+
+fn seed_release_lead(kind: &seed_gen_type::SeedGenType) -> TimeDelta {
+    match kind {
+        seed_gen_type::SeedGenType::Owr { .. }
+        | seed_gen_type::SeedGenType::AlttprDoorRando { .. }
+        | seed_gen_type::SeedGenType::AlttprAvianart { .. } => ALTTPR_SEED_RELEASE_LEAD,
+        _ => DEFAULT_SEED_RELEASE_LEAD,
+    }
+}
+
+fn pooled_live_entrant_present(
+    status: EntrantStatusValue,
+    finished_at: Option<DateTime<Utc>>,
+    started_at: Option<DateTime<Utc>>,
+) -> bool {
+    match status {
+        EntrantStatusValue::Ready | EntrantStatusValue::NotReady | EntrantStatusValue::InProgress => true,
+        EntrantStatusValue::Done | EntrantStatusValue::Dnf | EntrantStatusValue::Dq => {
+            started_at.is_some_and(|start| finished_at.is_none_or(|finish| finish >= start))
+        }
+        EntrantStatusValue::Requested | EntrantStatusValue::Invited | EntrantStatusValue::Declined => false,
+    }
+}
+
+// Pooled live qualifiers use their linked mode, independently of the event's
+// tournament draft, entrant choices, and main generator configuration.
+fn is_pooled_live_qualifier(cal_event: &cal::Event, event: &event::Data<'_>) -> bool {
+    event.qualifier_mode == "pooled_by_mode"
+        && cal_event.race.is_qualifier
+        && matches!(cal_event.kind, cal::EventKind::Normal)
+}
+
+fn room_draft_kind(cal_event: &cal::Event, event: &event::Data<'_>) -> Option<draft::Kind> {
+    if is_pooled_live_qualifier(cal_event, event) { None } else { event.draft_kind() }
+}
+
+fn room_has_seed_configuration(cal_event: &cal::Event, event: &event::Data<'_>) -> bool {
+    is_pooled_live_qualifier(cal_event, event)
+        || event.seed_gen_type.is_some()
+        || event.single_settings.is_some()
+        || event.draft_kind().is_some()
+}
+
+impl OfficialRaceData {
+    fn is_pooled_live(&self) -> bool {
+        is_pooled_live_qualifier(&self.cal_event, &self.event)
+    }
+
+    fn draft_kind(&self) -> Option<draft::Kind> {
+        room_draft_kind(&self.cal_event, &self.event)
+    }
+
+    fn has_seed_configuration(&self) -> bool {
+        room_has_seed_configuration(&self.cal_event, &self.event)
+    }
+}
+
 #[derive(Default, Clone)]
 struct RestreamState {
     language: Option<Language>,
@@ -4286,19 +4426,39 @@ struct Handler {
 }
 
 impl Handler {
+    async fn close_pooled_live_entries(
+        ctx: &RaceContext<GlobalState>,
+        official: &OfficialRaceData,
+    ) -> Result<(), Error> {
+        loop {
+            if !matches!(ctx.data().await.status.value,
+                RaceStatusValue::Open | RaceStatusValue::Invitational | RaceStatusValue::Pending)
+            {
+                return Ok(());
+            }
+            let cutoff: Option<DateTime<Utc>> = sqlx::query_scalar(
+                r#"SELECT race.start - config.live_entry_close_lead
+                FROM races race JOIN pooled_qualifier_configs config
+                  ON config.series = race.series AND config.event = race.event
+                WHERE race.id = $1"#,
+            )
+            .bind(i64::from(official.cal_event.race.id))
+            .fetch_optional(&ctx.global_state.db_pool).await.to_racetime()?.flatten();
+            let Some(cutoff) = cutoff else { return Ok(()) };
+            if let Ok(delay) = (cutoff - Utc::now()).to_std() {
+                // Recheck the schedule so a postponed race doesn't close early.
+                sleep(delay.min(Duration::from_secs(30))).await;
+            } else {
+                return Self::freeze_pooled_live(ctx, Some(official)).await;
+            }
+        }
+    }
+
     fn pooled_live_entrant_ids(data: &RaceData) -> Vec<event::pooled_qualifiers::LiveEntrant> {
         data.entrants
             .iter()
             .filter(|entrant| {
-                matches!(
-                    entrant.status.value,
-                    EntrantStatusValue::Ready
-                        | EntrantStatusValue::NotReady
-                        | EntrantStatusValue::InProgress
-                        | EntrantStatusValue::Done
-                        | EntrantStatusValue::Dnf
-                        | EntrantStatusValue::Dq
-                )
+                pooled_live_entrant_present(entrant.status.value, entrant.finished_at, data.started_at)
             })
             .filter_map(|entrant| entrant.user.as_ref())
             .map(|user| event::pooled_qualifiers::LiveEntrant {
@@ -4307,17 +4467,11 @@ impl Handler {
             .collect()
     }
 
-    fn is_pooled_live(official_data: &OfficialRaceData) -> bool {
-        official_data.event.qualifier_mode == "pooled_by_mode"
-            && official_data.cal_event.race.is_qualifier
-            && matches!(official_data.cal_event.kind, cal::EventKind::Normal)
-    }
-
     async fn freeze_pooled_live(
         ctx: &RaceContext<GlobalState>,
         official_data: Option<&OfficialRaceData>,
     ) -> Result<(), Error> {
-        let Some(official_data) = official_data.filter(|data| Self::is_pooled_live(data)) else {
+        let Some(official_data) = official_data.filter(|data| data.is_pooled_live()) else {
             return Ok(());
         };
         let data = ctx.data().await;
@@ -4348,7 +4502,7 @@ impl Handler {
         official_data: Option<&OfficialRaceData>,
         data: &RaceData,
     ) -> Result<(), Error> {
-        let Some(official_data) = official_data.filter(|data| Self::is_pooled_live(data)) else {
+        let Some(official_data) = official_data.filter(|data| data.is_pooled_live()) else {
             return Ok(());
         };
         Self::freeze_pooled_live(ctx, Some(official_data)).await?;
@@ -4421,7 +4575,7 @@ impl Handler {
         pool: &PgPool,
         official_data: Option<&OfficialRaceData>,
     ) -> Result<(), Error> {
-        let Some(official_data) = official_data.filter(|data| Self::is_pooled_live(data)) else {
+        let Some(official_data) = official_data.filter(|data| data.is_pooled_live()) else {
             return Ok(());
         };
         let voided =
@@ -4693,7 +4847,7 @@ impl Handler {
         if let Some(draft_kind) = self
             .official_data
             .as_ref()
-            .and_then(|OfficialRaceData { event, .. }| event.draft_kind())
+            .and_then(OfficialRaceData::draft_kind)
         {
             let available_settings = lock!(@read state = self.race_state; if let RaceState::Draft { state: ref draft, .. } = *state {
                 match draft.next_step(&draft_kind, self.official_data.as_ref().and_then(|OfficialRaceData { cal_event, .. }| cal_event.race.game), &mut draft::MessageContext::RaceTime { high_seed_name: &self.high_seed_name, low_seed_name: &self.low_seed_name, reply_to }).await.to_racetime()?.kind {
@@ -4796,7 +4950,7 @@ impl Handler {
         let draft_kind = self
             .official_data
             .as_ref()
-            .and_then(|OfficialRaceData { event, .. }| event.draft_kind())
+            .and_then(OfficialRaceData::draft_kind)
             .expect("advance_draft called without draft kind");
         let RaceState::Draft {
             state: ref draft,
@@ -4888,7 +5042,7 @@ impl Handler {
         let reply_to = sender.map_or("friend", |user| &user.name);
         if let RaceStatusValue::Open | RaceStatusValue::Invitational = ctx.data().await.status.value
         {
-            lock!(@write state = self.race_state; if let Some(draft_kind) = self.official_data.as_ref().and_then(|OfficialRaceData { event, .. }| event.draft_kind()) {
+            lock!(@write state = self.race_state; if let Some(draft_kind) = self.official_data.as_ref().and_then(OfficialRaceData::draft_kind) {
                 match *state {
                     RaceState::Init => match draft_kind {
                         draft::Kind::S7 | draft::Kind::MultiworldS3 | draft::Kind::MultiworldS4 | draft::Kind::MultiworldS5 => ctx.say(format!("Sorry {reply_to}, no draft has been started. Use \"!seed draft\" to start one.")).await?,
@@ -5015,7 +5169,6 @@ impl Handler {
                     loop {
                         select! {
                             () = &mut sleep => {
-                                Self::freeze_pooled_live(&ctx, official_data.as_ref()).await?;
                                 if let Some(update) = seed_state.take() {
                                     update.handle(&db_pool, &ctx, &state, official_data.as_ref(), language, article, &description, &roll_failed).await?;
                                 }
@@ -5028,7 +5181,6 @@ impl Handler {
                         }
                     }
                 } else {
-                    Self::freeze_pooled_live(&ctx, official_data.as_ref()).await?;
                     while let Some(update) = updates.recv().await {
                         update.handle(&db_pool, &ctx, &state, official_data.as_ref(), language, article, &description, &roll_failed).await?;
                     }
@@ -5062,7 +5214,7 @@ impl Handler {
                 .start()
                 .expect("handling room for official race without start time")
         });
-        let delay_until = official_start.map(|start| start - TimeDelta::minutes(15));
+        let delay_until = official_start.map(|start| start - DEFAULT_SEED_RELEASE_LEAD);
         self.roll_seed_inner(
             ctx,
             delay_until,
@@ -5092,7 +5244,7 @@ impl Handler {
         let official_start = cal_event
             .start()
             .expect("handling room for official race without start time");
-        let delay_until = official_start - TimeDelta::minutes(10);
+        let delay_until = official_start - ALTTPR_SEED_RELEASE_LEAD;
 
         // Get event to access round_modes for swiss events
         let mut transaction = ctx
@@ -5184,11 +5336,11 @@ impl Handler {
         let official_start = cal_event
             .start()
             .expect("handling room for official race without start time");
-        let delay_until = official_start - TimeDelta::minutes(10);
+        let delay_until = official_start - ALTTPR_SEED_RELEASE_LEAD;
         let preset_display = self
             .official_data
             .as_ref()
-            .and_then(|OfficialRaceData { event, .. }| event.draft_kind())
+            .and_then(OfficialRaceData::draft_kind)
             .and_then(|kind| match kind {
                 draft::Kind::PickOnly { options, .. }
                 | draft::Kind::BanPick { options, .. }
@@ -5221,7 +5373,7 @@ impl Handler {
         let official_start = cal_event
             .start()
             .expect("handling room for official race without start time");
-        let delay_until = official_start - TimeDelta::minutes(10);
+        let delay_until = official_start - ALTTPR_SEED_RELEASE_LEAD;
 
         let config = self
             .official_data
@@ -5302,7 +5454,7 @@ impl Handler {
         let official_start = cal_event
             .start()
             .expect("handling room for official race without start time");
-        let delay_until = official_start - TimeDelta::minutes(10);
+        let delay_until = official_start - ALTTPR_SEED_RELEASE_LEAD;
         let (config, build) = self
             .official_data
             .as_ref()
@@ -5376,7 +5528,7 @@ impl Handler {
         let official_start = cal_event
             .start()
             .expect("handling room for official race without start time");
-        let delay_until = official_start - TimeDelta::minutes(10);
+        let delay_until = official_start - ALTTPR_SEED_RELEASE_LEAD;
 
         self.roll_seed_inner(
             ctx,
@@ -5408,28 +5560,20 @@ impl Handler {
         let Some(official_data) = self.official_data.as_ref() else {
             return false;
         };
-        let mut seed_gen_type = official_data.event.seed_gen_type.clone();
-        let mut default_settings = official_data.event.single_settings.clone();
-        let mut pooled_mode_name = None;
-        let mut pooled_delay_until = None;
-        if official_data.event.qualifier_mode == "pooled_by_mode" && cal_event.race.is_qualifier {
+        if is_pooled_live_qualifier(&cal_event, &official_data.event) {
             type ModeRow = (
                 String,
                 serde_json::Value,
                 String,
                 String,
                 Option<serde_json::Value>,
-                Option<DateTime<Utc>>,
                 String,
             );
             let mode: Option<ModeRow> = sqlx::query_as(
                 r#"SELECT mode.seed_gen_type,
                 mode.seed_config, mode.generator_profile, mode.display_name, seed.seed_data,
-                race.start - config.live_entry_close_lead, mode.settings_fingerprint
+                mode.settings_fingerprint
                 FROM qualifier_seeds seed JOIN qualifier_modes mode ON mode.id = seed.mode_id
-                JOIN pooled_qualifier_configs config
-                  ON config.series = seed.series AND config.event = seed.event
-                JOIN races race ON race.id = seed.live_race_id
                 WHERE seed.live_race_id = $1 AND seed.source = 'live' AND seed.retired_at IS NULL"#,
             )
             .bind(i64::from(cal_event.race.id))
@@ -5437,12 +5581,11 @@ impl Handler {
             .await
             .ok()
             .flatten();
-            let Some((kind, config, profile, mode_name, existing_seed, entry_close, fingerprint)) =
+            let Some((kind, config, profile, mode_name, existing_seed, fingerprint)) =
                 mode
             else {
                 return false;
             };
-            pooled_delay_until = entry_close;
             if let Some(existing_seed) = existing_seed {
                 if seed::Files::from_seed_data(&existing_seed).is_some() {
                     self.queue_existing_seed(
@@ -5462,20 +5605,9 @@ impl Handler {
             if profile != "default" {
                 return false;
             }
-            seed_gen_type = seed_gen_type::SeedGenType::from_db(Some(&kind), Some(&config));
-            if seed_gen_type.is_none() {
+            let Some(kind) = seed_gen_type::SeedGenType::from_db(Some(&kind), Some(&config)) else {
                 return false;
-            }
-            default_settings = config
-                .get("settings")
-                .and_then(serde_json::Value::as_object)
-                .cloned()
-                .or_else(|| {
-                    matches!(kind.as_str(), "ootr" | "ootr_web" | "ootr_rsl" | "mmr")
-                        .then(|| config.as_object().cloned())
-                        .flatten()
-                });
-            pooled_mode_name = Some(mode_name);
+            };
             let Ok(mut transaction) = ctx.global_state.db_pool.begin().await else {
                 return false;
             };
@@ -5491,20 +5623,14 @@ impl Handler {
             {
                 return false;
             }
-        }
-
-        if let Some(mode_name) = pooled_mode_name.as_ref() {
-            let Some(kind) = seed_gen_type.as_ref() else {
-                return false;
-            };
             let Ok(updates) =
-                event::pooled_qualifiers::generation::roll(Arc::clone(&ctx.global_state), kind)
+                event::pooled_qualifiers::generation::roll(Arc::clone(&ctx.global_state), &kind)
             else {
                 return false;
             };
             self.roll_seed_inner(
                 ctx,
-                pooled_delay_until,
+                cal_event.start().map(|start| start - seed_release_lead(&kind)),
                 updates,
                 language,
                 article,
@@ -5515,11 +5641,7 @@ impl Handler {
             return true;
         }
 
-        match seed_gen_type {
-            Some(seed_gen_type::SeedGenType::AlttprDoorRando {
-                source: seed_gen_type::AlttprDrSource::Boothisman,
-                ..
-            }) if pooled_mode_name.is_some() => return false,
+        match official_data.event.seed_gen_type.clone() {
             Some(seed_gen_type::SeedGenType::AlttprDoorRando {
                 source: seed_gen_type::AlttprDrSource::Boothisman,
                 ..
@@ -5528,53 +5650,11 @@ impl Handler {
                     .await
             }
             Some(seed_gen_type::SeedGenType::AlttprDoorRando {
-                source: seed_gen_type::AlttprDrSource::MutualChoices { ref config },
-                ..
-            }) if pooled_mode_name.is_some() => {
-                let resolved = resolve_all_choices(&HashMap::new(), config);
-                let description = pooled_mode_name.clone().unwrap_or_else(|| "mode".into());
-                let start = cal_event
-                    .start()
-                    .expect("official pooled qualifier without start");
-                self.roll_seed_inner(
-                    ctx,
-                    pooled_delay_until.or(Some(start - TimeDelta::minutes(10))),
-                    ctx.global_state.clone().roll_mutual_choices_dr_seed(
-                        config.clone(),
-                        resolved,
-                        None,
-                    ),
-                    language,
-                    article,
-                    format!("{description} qualifier seed"),
-                    false,
-                )
-                .await;
-            }
-            Some(seed_gen_type::SeedGenType::AlttprDoorRando {
                 source: seed_gen_type::AlttprDrSource::MutualChoices { .. },
                 ..
             }) => {
                 self.roll_mutual_choices_dr_seed(ctx, cal_event, language, article)
                     .await
-            }
-            Some(seed_gen_type::SeedGenType::AlttprDoorRando {
-                source: seed_gen_type::AlttprDrSource::MysteryPool { weights_url },
-                ..
-            }) if pooled_mode_name.is_some() => {
-                self.roll_seed_inner(
-                    ctx,
-                    pooled_delay_until,
-                    ctx.global_state.clone().roll_mystery_pool_seed(weights_url),
-                    language,
-                    article,
-                    format!(
-                        "{} qualifier seed",
-                        pooled_mode_name.as_deref().unwrap_or("mode")
-                    ),
-                    false,
-                )
-                .await;
             }
             Some(seed_gen_type::SeedGenType::AlttprDoorRando {
                 source: seed_gen_type::AlttprDrSource::MysteryPool { weights_url },
@@ -5600,66 +5680,12 @@ impl Handler {
                     })
                     .or(default_preset);
                 let Some(preset) = preset else { return false };
-                if pooled_mode_name.is_some() {
-                    self.roll_seed_inner(
-                        ctx,
-                        pooled_delay_until,
-                        ctx.global_state.clone().roll_avianart_seed(preset),
-                        language,
-                        article,
-                        format!(
-                            "{} qualifier seed",
-                            pooled_mode_name.as_deref().unwrap_or("mode")
-                        ),
-                        false,
-                    )
+                self.roll_avianart_seed(ctx, cal_event, preset, language, article)
                     .await;
-                } else {
-                    self.roll_avianart_seed(ctx, cal_event, preset, language, article)
-                        .await;
-                }
             }
-            Some(seed_gen_type::SeedGenType::Owr { ref config, .. }) if pooled_mode_name.is_some() => {
-                let start = cal_event
-                    .start()
-                    .expect("official pooled qualifier without start");
-                self.roll_seed_inner(
-                    ctx,
-                    pooled_delay_until.or(Some(start - TimeDelta::minutes(10))),
-                    ctx.global_state
-                        .clone()
-                        .roll_pooled_owr_seed(config.clone()),
-                    language,
-                    article,
-                    format!(
-                        "{} qualifier seed",
-                        pooled_mode_name.as_deref().unwrap_or("mode")
-                    ),
-                    false,
-                )
-                .await;
-            }
+
             Some(seed_gen_type::SeedGenType::Owr { .. }) => {
                 self.roll_owr_seed(ctx, cal_event, language, article).await;
-            }
-            Some(seed_gen_type::SeedGenType::TWWR { ref permalink })
-                if pooled_mode_name.is_some() =>
-            {
-                self.roll_seed_inner(
-                    ctx,
-                    pooled_delay_until,
-                    ctx.global_state
-                        .clone()
-                        .record_twwr_permalink(permalink.clone(), unlock_spoiler_log),
-                    language,
-                    article,
-                    format!(
-                        "{} qualifier seed",
-                        pooled_mode_name.as_deref().unwrap_or("mode")
-                    ),
-                    false,
-                )
-                .await;
             }
             Some(seed_gen_type::SeedGenType::TWWR { .. }) => {
                 self.roll_twwr_seed_official(ctx, cal_event, language, article)
@@ -5682,7 +5708,7 @@ impl Handler {
                 | seed_gen_type::SeedGenType::Mmr,
             )
             | None => {
-                let Some(settings) = settings.or(default_settings) else {
+                let Some(settings) = settings.or_else(|| official_data.event.single_settings.clone()) else {
                     return false;
                 };
                 self.roll_seed(
@@ -5716,7 +5742,7 @@ impl Handler {
                 .start()
                 .expect("handling room for official race without start time")
         });
-        let delay_until = official_start.map(|start| start - TimeDelta::minutes(15));
+        let delay_until = official_start.map(|start| start - DEFAULT_SEED_RELEASE_LEAD);
         self.roll_seed_inner(
             ctx,
             delay_until,
@@ -5741,7 +5767,7 @@ impl Handler {
         let official_start = cal_event
             .start()
             .expect("handling room for official race without start time");
-        let delay_until = official_start - TimeDelta::minutes(15);
+        let delay_until = official_start - DEFAULT_SEED_RELEASE_LEAD;
         let settings_string = self
             .official_data
             .as_ref()
@@ -5782,7 +5808,7 @@ impl Handler {
                 .start()
                 .expect("handling room for official race without start time")
         });
-        let delay_until = official_start.map(|start| start - TimeDelta::minutes(15));
+        let delay_until = official_start.map(|start| start - DEFAULT_SEED_RELEASE_LEAD);
         self.roll_seed_inner(
             ctx,
             delay_until,
@@ -5815,7 +5841,7 @@ impl Handler {
                 .start()
                 .expect("handling room for official race without start time")
         });
-        let delay_until = official_start.map(|start| start - TimeDelta::minutes(15));
+        let delay_until = official_start.map(|start| start - DEFAULT_SEED_RELEASE_LEAD);
         // Triforce Blitz website's auto unlock doesn't know about async parts so has to be disabled for asyncs
         let unlock_spoiler_log = if unlock_spoiler_log == UnlockSpoilerLog::After
             && self
@@ -5863,7 +5889,7 @@ impl Handler {
                 .start()
                 .expect("handling room for official race without start time")
         });
-        let delay_until = official_start.map(|start| start - TimeDelta::minutes(15));
+        let delay_until = official_start.map(|start| start - DEFAULT_SEED_RELEASE_LEAD);
         // Triforce Blitz website's auto unlock doesn't know about async parts so has to be disabled for asyncs
         let unlock_spoiler_log = if unlock_spoiler_log == UnlockSpoilerLog::After
             && self
@@ -5911,7 +5937,14 @@ impl Handler {
                 .start()
                 .expect("handling room for official race without start time")
         });
-        let delay_until = official_start.map(|start| start - TimeDelta::minutes(15));
+        let lead = if self.official_data.as_ref().is_some_and(OfficialRaceData::is_pooled_live)
+            && matches!(seed.files(), Some(seed::Files::AlttprDoorRando { .. } | seed::Files::AvianartSeed { .. }))
+        {
+            ALTTPR_SEED_RELEASE_LEAD
+        } else {
+            DEFAULT_SEED_RELEASE_LEAD
+        };
+        let delay_until = official_start.map(|start| start - lead);
         // version is only used to announce the TWWR randomizer build; for other seed types it's not needed
         let version = match seed.files() {
             Some(seed::Files::TwwrPermalink { .. }) => Some(self.effective_rando_version()),
@@ -6076,7 +6109,7 @@ impl RaceHandler<GlobalState> for Handler {
             let result = {
                 let mut pending_sends = Vec::default();
                 let event = cal_event.race.event(&mut transaction).await.to_racetime()?;
-                if let Some(config) = event.seed_gen_type.as_ref().and_then(choice_resolution::config) {
+                if let Some(config) = event.seed_gen_type.as_ref().filter(|_| !is_pooled_live_qualifier(&cal_event, &event)).and_then(choice_resolution::config) {
                     if let Some(snapshot) = choice_resolution::ensure(&mut transaction, &cal_event.race, config, choice_resolution::Timing::RoomOpening).await.to_racetime()?
                         .filter(|snapshot| snapshot.visible_at(choice_resolution::Timing::RoomOpening)) {
                         let display_config = config.for_display(&cal_event.race, event.draft_kind_str.is_some());
@@ -6253,7 +6286,7 @@ impl RaceHandler<GlobalState> for Handler {
                     }
                 }
                 let (race_state, high_seed_name, low_seed_name) = if let Some(draft_kind) =
-                    event.draft_kind()
+                    room_draft_kind(&cal_event, &event)
                 {
                     if let Some(state) = cal_event.race.draft.clone() {
                         let [high_seed_name, low_seed_name] = if let draft::StepKind::Done(_)
@@ -6569,6 +6602,16 @@ impl RaceHandler<GlobalState> for Handler {
             low_seed_name,
             fpa_enabled,
         };
+        if let Some(official) = this.official_data.as_ref().filter(|data| data.is_pooled_live()) {
+            let official = official.clone();
+            let ctx = ctx.clone();
+            tokio::spawn(async move {
+                while let Err(error) = Self::close_pooled_live_entries(&ctx, &official).await {
+                    log::error!("failed to close pooled live qualifier entries: {error}");
+                    sleep(Duration::from_secs(5)).await;
+                }
+            });
+        }
         // Now that the room exists, refresh the Discord scheduled event's multistream link
         // in case an entrant linked their Twitch account after the event was scheduled, and
         // schedule one more check shortly before the race starts to catch a last-minute link.
@@ -6825,14 +6868,14 @@ impl RaceHandler<GlobalState> for Handler {
                     if !matches!(data.status.value, RaceStatusValue::Pending | RaceStatusValue::InProgress) {
                         this.queue_existing_seed(ctx, existing_seed, English, "a", format!("seed"), true).await; //TODO better article/description
                     }
-                } else if event.seed_gen_type.is_some() || event.single_settings.is_some() || event.draft_kind().is_some() {
+                } else if room_has_seed_configuration(&cal_event, &event) {
                     // Only roll seeds for events that have seed configuration
                     let _event_id = Some((event.series, &*event.event));
                     match *state {
                         RaceState::Init => {
                             // A configured draft is handled by the Draft state below. If its DB
                             // state is missing, room initialization already notified organizers.
-                            if event.draft_kind().is_none() {
+                            if room_draft_kind(&cal_event, &event).is_none() {
                                 let event_lang = event.language;
                                 let article = if let French = event_lang { "une" } else { "a" };
                                 if !this.roll_configured_event_seed(
@@ -6843,7 +6886,7 @@ impl RaceHandler<GlobalState> for Handler {
                                     event_lang,
                                     article,
                                     "seed".to_string(),
-                                ).await && event.seed_gen_type.is_some() {
+                                ).await && (event.seed_gen_type.is_some() || is_pooled_live_qualifier(&cal_event, &event)) {
                                     ctx.say("@entrants WARNING: This event's seed configuration is incomplete. Please contact a tournament organizer.").await.to_racetime()?;
                                 }
                             }
@@ -6851,7 +6894,7 @@ impl RaceHandler<GlobalState> for Handler {
                         RaceState::Draft { state: ref draft_state, .. } => {
                             this.advance_draft(ctx, &state).await?;
                             // Warn if draft is incomplete
-                            if let Some(draft_kind) = this.official_data.as_ref().and_then(|OfficialRaceData { event, .. }| event.draft_kind()) {
+                            if let Some(draft_kind) = this.official_data.as_ref().and_then(OfficialRaceData::draft_kind) {
                                 let step = draft_state.next_step(&draft_kind, cal_event.race.game, &mut draft::MessageContext::None).await.to_racetime()?;
                                 if !matches!(step.kind, draft::StepKind::Done(_)) {
                                     ctx.say("@entrants WARNING: The mode draft for this match is not complete! Please complete the draft as soon as possible. The seed cannot be rolled until the draft is finished.").await.to_racetime()?;
@@ -6878,6 +6921,7 @@ impl RaceHandler<GlobalState> for Handler {
         let sgt = self
             .official_data
             .as_ref()
+            .filter(|d| !d.is_pooled_live())
             .and_then(|d| d.event.seed_gen_type.clone());
         let lang = self.language();
         let reply_to = msg.user.as_ref().map_or("friend", |user| &user.name);
@@ -6901,7 +6945,7 @@ impl RaceHandler<GlobalState> for Handler {
                     ("skip", _) => self.draft_action(ctx, msg.user.as_ref(), draft::Action::Skip).await?,
                     (cmd, _) => ctx.say(format!("Sorry {reply_to}, unexpected draft command: {cmd}")).await?,
                 }
-            } else if self.official_data.as_ref().and_then(|d| d.event.draft_kind()).is_some() {
+            } else if self.official_data.as_ref().and_then(OfficialRaceData::draft_kind).is_some() {
                 // Generic event with a draft kind — parse commands directly (non-RSL convention)
                 let action = match (cmd, &args[..]) {
                     ("ban" | "block", []) => {
@@ -7304,7 +7348,7 @@ impl RaceHandler<GlobalState> for Handler {
                 }).await?;
             },
             "seed" | "spoilerseed" => if let RaceStatusValue::Open | RaceStatusValue::Invitational = ctx.data().await.status.value {
-                if self.official_data.as_ref().is_some_and(|d| d.event.seed_gen_type.is_none() && d.event.single_settings.is_none() && d.event.draft_kind().is_none()) {
+                if self.official_data.as_ref().is_some_and(|d| !d.has_seed_configuration()) {
                     ctx.say(format!("Sorry {reply_to}, this race does not use randomizer seeds. You can start the race directly without rolling a seed.")).await?;
                 } else {
                     lock!(@write state = self.race_state; match *state {
@@ -7314,6 +7358,14 @@ impl RaceHandler<GlobalState> for Handler {
                             } else {
                                 format!("Sorry {reply_to}, seed rolling is locked. Only {} may roll a seed for this race.", if self.is_official() { "race monitors or tournament organizers" } else { "race monitors" })
                             }).await?;
+                        } else if let Some(official) = self.official_data.as_ref().filter(|data| data.is_pooled_live()) {
+                            let article = if let French = lang { "une" } else { "a" };
+                            if !self.roll_configured_event_seed(
+                                ctx, official.cal_event.clone(), None, UnlockSpoilerLog::Never,
+                                lang, article, "qualifier seed".into(),
+                            ).await {
+                                ctx.say(format!("Sorry {reply_to}, this qualifier mode does not have enough seed configuration to roll. Please contact a tournament organizer.")).await?;
+                            }
                         } else if let Some(sgt) = sgt.as_ref().filter(|s| matches!(s,
                             seed_gen_type::SeedGenType::AlttprDoorRando { .. }
                             | seed_gen_type::SeedGenType::AlttprAvianart { .. }
@@ -7374,7 +7426,7 @@ impl RaceHandler<GlobalState> for Handler {
                         transaction.commit().await.to_racetime()?;
                     } else {
                         // Generic goal
-                        let event_draft_kind = self.official_data.as_ref().and_then(|d| d.event.draft_kind());
+                        let event_draft_kind = self.official_data.as_ref().and_then(OfficialRaceData::draft_kind);
                         if args.as_slice() == ["draft"] && event_draft_kind.is_some() {
                             let unlock_spoiler_log = self.effective_unlock_spoiler_log(false);
                             *state = RaceState::Draft {
@@ -7416,7 +7468,7 @@ impl RaceHandler<GlobalState> for Handler {
                 }
             }, reply_to).await?),
             "reroll" => if let RaceStatusValue::Open | RaceStatusValue::Invitational = ctx.data().await.status.value {
-                if self.official_data.as_ref().is_some_and(|d| d.event.seed_gen_type.is_none() && d.event.single_settings.is_none() && d.event.draft_kind().is_none()) {
+                if self.official_data.as_ref().is_some_and(|d| !d.has_seed_configuration()) {
                     ctx.say(format!("Sorry {reply_to}, this race does not use randomizer seeds.")).await?;
                 } else {
                     lock!(@write state = self.race_state; match *state {
@@ -7431,7 +7483,7 @@ impl RaceHandler<GlobalState> for Handler {
                                 ctx.say(format!("Sorry {reply_to}, only @entrants or race monitors may use this command.")).await?;
                             } else if !is_monitor && !self.roll_failed.load(atomic::Ordering::SeqCst) {
                                 ctx.say(format!("Sorry {reply_to}, !reroll is only available after a failed roll attempt.")).await?;
-                            } else if self.official_data.as_ref().and_then(|d| d.event.draft_kind()).is_some() {
+                            } else if self.official_data.as_ref().and_then(OfficialRaceData::draft_kind).is_some() {
                                 // Reload the draft from the DB so a configuration repair can be
                                 // retried without restarting the bot.
                                 ctx.say(format!("{reply_to} Attempting to reroll the seed, please wait...")).await?;
@@ -7904,7 +7956,7 @@ impl RaceHandler<GlobalState> for Handler {
             if let Some(draft_kind) = self
                 .official_data
                 .as_ref()
-                .and_then(|d| d.event.draft_kind())
+                .and_then(OfficialRaceData::draft_kind)
             {
                 if draft_kind.uses_button_draft() {
                     let game = self
@@ -7987,7 +8039,7 @@ pub(crate) async fn create_room(
     let is_racetime = matches!(&handle_mode, RaceHandleMode::RaceTime);
     let is_discord = matches!(&handle_mode, RaceHandleMode::Discord);
     if matches!(&handle_mode, RaceHandleMode::RaceTime | RaceHandleMode::Discord) {
-        if let Some(config) = event.seed_gen_type.as_ref().and_then(choice_resolution::config) {
+        if let Some(config) = event.seed_gen_type.as_ref().filter(|_| !is_pooled_live_qualifier(cal_event, event)).and_then(choice_resolution::config) {
             let pool = discord_ctx.data.read().await.get::<crate::discord_bot::DbPool>().expect("database pool missing").clone();
             choice_resolution::ensure(transaction, &cal_event.race, config, choice_resolution::Timing::RoomOpening).await.to_racetime()?;
             // Scheduling may already hold this race's row lock. Commit on the same
@@ -8160,7 +8212,7 @@ pub(crate) async fn create_room(
                         }
                     };
                     let info_user = if let Some(snapshot) = choice_resolution::read(&mut **transaction, cal_event.race.id).await.to_racetime()?
-                        .filter(|snapshot| snapshot.visible_at(choice_resolution::Timing::RoomOpening)) {
+                        .filter(|snapshot| !is_pooled_live_qualifier(cal_event, event) && snapshot.visible_at(choice_resolution::Timing::RoomOpening)) {
                         let is_async = !matches!(cal_event.kind, cal::EventKind::Normal);
                         let summary = event.seed_gen_type.as_ref().and_then(choice_resolution::config)
                             .map(|config| snapshot.display_for_config(is_async, &config.for_display(&cal_event.race, event.draft_kind_str.is_some())))
@@ -8608,6 +8660,11 @@ async fn prepare_seeds(
             let mut transaction = global_state.db_pool.begin().await?;
             let race = Race::from_id(&mut transaction, &global_state.http_client, id).await?;
             let event = race.event(&mut transaction).await?;
+            // Pooled qualifier seeds are generated from their linked modes when
+            // the live room opens, never from the main event's fixed settings.
+            if event.qualifier_mode == "pooled_by_mode" && race.is_qualifier {
+                continue;
+            }
             if event.seed_gen_type.is_some() && event.preroll_mode == "long" {
                 if let Some(settings) = race.single_settings(&mut transaction).await? {
                     let unlock_spoiler_log = match event.spoiler_unlock.as_str() {
@@ -8844,7 +8901,7 @@ async fn create_rooms(
 
                             if let Some((is_room_url, mut msg, notification_channel)) = result {
                                 // Add warning if draft is incomplete
-                                if let Some(draft_kind) = event.draft_kind() {
+                                if let Some(draft_kind) = room_draft_kind(&cal_event, &event) {
                                     if let Some(draft) = &cal_event.race.draft {
                                         if let Ok(step) = draft.next_step(&draft_kind, cal_event.race.game, &mut draft::MessageContext::None).await {
                                             if !matches!(step.kind, draft::StepKind::Done(_)) {

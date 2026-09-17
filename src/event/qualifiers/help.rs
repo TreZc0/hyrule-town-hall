@@ -51,14 +51,14 @@ pub(super) fn label(id: &str, field: &str, title: &str) -> RawHtml<String> {
             "The actual deadline is the earlier of GO plus this limit and the global submission deadline. Seed-request time is not the start of this clock. Changing this structural limit is blocked after settings lock.",
         ],
         "live_entry_close_minutes" => &[
-            "How many minutes before the scheduled live race start the eligible entrant list is frozen. For a 19:00 UTC race and a value of 10, the cutoff is 18:50 UTC.",
-            "The live eligibility ledger records the cutoff decision and whether the entrant was present at GO. Joining the room is not sufficient by itself to guarantee a counted qualifier attempt.",
+            "How many minutes before the scheduled live race start the racetime.gg room switches to invite-only and the eligible entrant list is frozen. For a 19:00 UTC race and a value of 10, the cutoff is 18:50 UTC. Seeds follow the normal game/event timing independently of this cutoff.",
+            "An attempt is recorded only for an eligible entrant still participating at GO. Leaving between the cutoff and GO records no attempt; a declared re-attempt remains available for the next eligible race in that pool.",
             "Zero places the cutoff at the scheduled start. This is distinct from the private async request deadline and is locked with the structural configuration.",
         ],
         "retry_limit" => &[
             "Choose 0 to disable replacement attempts or 1 to allow one retry per entrant across the entire event. It is not one retry for each mode, seed or source. Larger values are not supported.",
             "A retry replaces the counted attempt in the same mode; it is not a best-of-two result. An async retry uses a different physical seed. The original attempt remains in the ledger and an eligible earlier finish can still contribute to its seed’s par.",
-            "Live retry reservations are recorded separately as reserved, committed or released. The retry deadline, eligibility checks and disclosure sanctions can prevent a retry even when the allowance is otherwise unused.",
+            "Entrants declare the result they want to replace on their status page. The declaration applies to their next eligible live race in that pool, or their next requested async in that pool. No future live race selection is required. A live declaration must predate that race's entry cutoff; leaving before GO preserves it.",
         ],
         "allocation_spread" => &[
             "Controls how far apart the most-used and least-used private pool seeds may be when assigning entrants. A smaller number favors more even cohort sizes. Enter an integer of at least 1; the initial configuration uses 2.",
@@ -85,10 +85,6 @@ pub(super) fn label(id: &str, field: &str, title: &str) -> RawHtml<String> {
             "Display order of this mode in the qualifier workflow. Use positive integers such as 1, 2 and 3. This is not a seed count, mode identifier or score multiplier.",
             "Reordering and renaming are presentation changes. They can be saved without changing the mode’s generator configuration or existing seed assignments.",
         ],
-        "slug" => &[
-            "A stable identifier for this mode within the event, for example inverted or mc-boss. Use a short, recognizable slug and keep it distinct from the other modes. Entrants see the display name.",
-            "Changing the slug is a material mode change. Material changes are blocked while requests are unpaused, after settings lock, or once the mode already has generated/failed seed material, releases, eligibility cutoffs or attempts. Finalize it before generating seeds.",
-        ],
         "display_name" => &[
             "The human-readable title shown for this qualifier mode, for example Inverted + Keysanity. Include enough information that entrants can distinguish the rulesets.",
             "Each card represents one complete qualifier ruleset and one required mode result, not a Yes/No preference or a private seed slot. A mode has its own pool and can also have linked live races.",
@@ -96,18 +92,14 @@ pub(super) fn label(id: &str, field: &str, title: &str) -> RawHtml<String> {
         ],
         "seed_gen_type" => &[
             "Selects the generator for this mode’s private seeds and linked live qualifier races. It is independent of the main event generator in Setup.",
-            "For pooled qualifiers, both OWR identifiers use the deployed OWR tournament build. Door Rando supports mutual_choices with one baseline or mystery_pool with a weights URL; its boothisman preset source is not supported here. Avianart needs a default preset, and TWWR needs a settings permalink.",
-            "Every selection needs matching Baseline settings JSON. Choose the generator first, use the examples in that field’s help, and verify your intended settings before generating the pool. The default profile selects the configured installation; a branch field in JSON cannot select another build.",
+            "ALTTPR OWR uses the regular build; ALTTPR OWR (tourney build) uses the tournament installation. Door Rando supports mutual_choices with one baseline or mystery_pool with a weights URL; its boothisman preset source is not supported here. Avianart needs a default preset, and TWWR needs a settings permalink.",
+            "Every selection needs matching Baseline settings JSON. Choose the generator first, use the examples in that field’s help, and verify your intended settings before generating the pool. The generator selection chooses the installation; a branch field in JSON cannot select another build.",
         ],
         "seed_config" => &[
             "This is the generator configuration for one complete qualifier mode. Enter a JSON object with double-quoted keys and strings; comments and trailing commas are not valid JSON.",
             "For OWR and Door Rando mutual choices, define one base_settings object plus optional base_placements and start_inventory. Named baselines maps are not supported for pooled modes: create a separate mode card for each ruleset instead. Entrant choice patches and match drafts are not used when rolling pooled qualifiers.",
             "An empty object is not a description of your intended ruleset. Expand a matching example below and replace the sample settings with values supported by the deployed generator. The examples explain the structure and do not validate your tournament rules.",
-            "Finish this configuration before generating seed material. Generator, JSON, profile, slug and enabled-state changes are protected once the mode is in use. Display name and order can still be edited.",
-        ],
-        "generator_profile" => &[
-            "Selects the deployment’s configured generation profile. This installation currently supports only default. For pooled OWR, that means the tournament build; other generators use their respective configured installation.",
-            "This is not a settings preset or a branch selector. Rules belong in Baseline settings JSON. Readiness rejects unsupported profile names, and existing seeds must match the mode’s recorded profile and settings fingerprint.",
+            "Finish this configuration before generating seed material. Generator, JSON and enabled-state changes are protected once the mode is in use. Display name and order can still be edited.",
         ],
         "enabled" => &[
             "An enabled mode participates in qualifier readiness and new assignments. The number of enabled cards must exactly equal Required modes. Disabled modes retain their historical assignments and results for organizer review.",
@@ -116,17 +108,7 @@ pub(super) fn label(id: &str, field: &str, title: &str) -> RawHtml<String> {
         ],
         "pool_position" => &[
             "The numbered private seed slot within this mode, starting at 1 and ending at Private seeds per mode. Slots in different modes are independent.",
-            "Generate missing slots queues absent slots. Generating a specific slot creates it if missing or retries a failed, unused, unreleased slot. It does not reroll a ready seed or replace an entrant’s assignment. Reload the page to see worker progress.",
-            "For manual import, choose an unused slot while requests are paused. Existing seed assignments and released seed material cannot be silently replaced.",
-        ],
-        "seed_data" => &[
-            "Canonical delivery data for an already generated seed. This is different from Baseline settings JSON: settings describe how to roll a seed; seed data identifies the actual output and includes the information needed to deliver it.",
-            "The payload must match the selected generator. OWR and Door Rando require a valid UUID, five hash icons and an existing nonempty patch on this deployment; Avianart and TWWR require their supported delivery identifiers and hash data. A generator settings object or a pasted download URL alone is insufficient.",
-            "Prefer Generate missing slots for normal setup. Import requires requests to be paused, an enabled mode, an in-range unused slot, matching generator payload and your settings/build attestation. Duplicate physical seeds are protected against reuse. Do not invent a payload to bypass validation.",
-        ],
-        "attest_settings" => &[
-            "Confirms that you checked this imported seed against the mode’s baseline settings and the actual generator build deployed for this event.",
-            "Payload validation can check delivery data and patch availability; it cannot prove that every gameplay setting is correct. Your attestation is recorded with the imported seed and checked by readiness. Leave this unchecked until that review is complete.",
+            "Generate missing slots queues absent slots. The existing-seed dropdown lists this mode’s private seeds and their generation status. Select a failed, unused, unreleased seed to retry it. Ready seeds and existing assignments are preserved. Reload the page to see worker progress.",
         ],
         "notification_role_id" => &[
             "Optional Discord role to mention when a qualifier room opens. Enter the numeric role ID, copied with Discord Developer Mode enabled, rather than a role name or channel ID.",
@@ -143,6 +125,7 @@ pub(super) fn label(id: &str, field: &str, title: &str) -> RawHtml<String> {
         "recovery_action" => &[
             "Repairs a failed Discord delivery for this attempt. Retrying READY or seed delivery keeps the original seed and preparation deadline. It does not create a new attempt or grant a retry.",
             "Use connection actions only after reviewing the existing private thread or bot GO message. Supply its numeric Discord ID and explain the evidence. GO recovery uses an existing bot message; it does not let an organizer invent a replacement start time.",
+            "For a re-attempt announcement, check the organizers channel first. Enter an existing bot announcement's message ID to reconnect it, or leave the ID empty to retry after confirming no announcement was posted.",
         ],
         "discord_id" => &[
             "For Connect existing private thread, enter that thread’s numeric Discord ID. For Connect existing GO message, enter the existing bot GO message ID. It is not a URL or entrant account ID.",
@@ -175,11 +158,11 @@ pub(super) fn label(id: &str, field: &str, title: &str) -> RawHtml<String> {
         ],
         "qualifier_number" => &[
             "Positive qualifier sequence number used to identify this race, for example 1, 2 or 3. It is separate from a private pool slot and from a mode’s display order.",
-            "The optional round text can provide a readable name such as Live 1. For pooled qualification, the selected mode links this live race to the appropriate ruleset and readiness count.",
+            "Score-based qualifier formats use this number to label live results in score breakdowns. The optional round text can provide a readable name such as Live 1.",
         ],
         "race_round" => &[
             "Optional round label for the race, for example Live 1 or Friday evening. Use it to distinguish multiple races with the same phase.",
-            "This is separate from the numeric qualifier number, scheduled start and pooled mode selection. A round label alone does not link a race to its qualifier mode.",
+            "A round label is only a display name. Select the scheduled start and qualifier mode separately so the race uses the correct ruleset and counts toward that mode’s required live races.",
         ],
         "race_start" => &[
             "Scheduled race start, entered directly in UTC. The date picker does not convert your local time. The live entry cutoff is calculated by subtracting the configured cutoff lead from this scheduled start.",

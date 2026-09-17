@@ -1622,6 +1622,15 @@ p.error {
 .qualifier-admin td:has(form) { min-width: 19rem; }
 .qualifier-admin td form { margin-inline: 0; }
 .qualifier-admin pre { max-width: 100%; white-space: pre-wrap; overflow-wrap: anywhere; }
+.qualifier-pool-table-scroll { max-width: 100%; overflow-x: auto; }
+.qualifier-admin table.qualifier-pool-table {
+  display: table;
+  width: max-content;
+  max-width: none;
+  table-layout: auto;
+}
+.qualifier-pool-table th:last-child,
+.qualifier-pool-table td:last-child { white-space: nowrap; }
 .qualifier-jump {
   display: flex;
   flex-wrap: wrap;

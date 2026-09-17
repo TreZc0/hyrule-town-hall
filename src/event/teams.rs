@@ -2618,8 +2618,10 @@ pub(crate) async fn list(
                                 @for requirement in enter_flow.iter_requirements() {
                                     @match requirement {
                                         enter::Requirement::BooleanChoice { key, .. } => td {
-                                            @if custom_choices.get(key).is_some_and(|v| v == "yes") {
-                                                : "✓";
+                                            @match custom_choices.get(key).map(String::as_str) {
+                                                Some("yes") => : "✓";
+                                                Some("no") => : "✗";
+                                                _ => {}
                                             }
                                         }
                                         enter::Requirement::RadioChoice { key, .. } => td {
