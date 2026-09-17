@@ -42,6 +42,43 @@ document.addEventListener('DOMContentLoaded', function () {
         panel.querySelector('.setting-help-close').addEventListener('click', function () {
             trigger.focus({preventScroll: true});
         });
+        if (trigger.hasAttribute('data-hover-help')) {
+            let hoverOpened = false;
+            let hideTimer;
+            trigger.addEventListener('pointerenter', function (event) {
+                clearTimeout(hideTimer);
+                if (event.pointerType === 'mouse' && !panel.matches(':popover-open')) {
+                    hoverOpened = true;
+                    panel.showPopover();
+                }
+            });
+            // Clicking a hover preview pins it open; touch and keyboard retain
+            // the normal popover button behavior.
+            trigger.addEventListener('click', function (event) {
+                if (hoverOpened) {
+                    event.preventDefault();
+                    hoverOpened = false;
+                }
+            });
+            function leave() {
+                clearTimeout(hideTimer);
+                hideTimer = setTimeout(function () {
+                    if (hoverOpened && !trigger.matches(':hover') && !panel.matches(':hover')
+                        && !panel.contains(document.activeElement)) {
+                        panel.hidePopover();
+                    }
+                }, 180);
+            }
+            trigger.addEventListener('pointerleave', leave);
+            panel.addEventListener('pointerleave', leave);
+            panel.addEventListener('pointerenter', () => clearTimeout(hideTimer));
+            panel.addEventListener('toggle', function (event) {
+                if (event.newState === 'closed') {
+                    hoverOpened = false;
+                    clearTimeout(hideTimer);
+                }
+            });
+        }
     }
 
     window.addEventListener('resize', queuePosition);

@@ -1631,6 +1631,22 @@ p.error {
 }
 .qualifier-pool-table th:last-child,
 .qualifier-pool-table td:last-child { white-space: nowrap; }
+.qualifier-admin .seed-meta-trigger {
+  cursor: pointer;
+  width: auto;
+  height: auto;
+  padding: 0;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  font-size: 0.75rem;
+  white-space: nowrap;
+  text-decoration: underline dotted;
+}
+.seed-meta-trigger:hover::after { content: none; }
+.seed-meta-panel[popover] { width: min(28rem, calc(100vw - 24px)); }
+.seed-meta-panel code { user-select: all; }
 .qualifier-jump {
   display: flex;
   flex-wrap: wrap;

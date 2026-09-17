@@ -2013,17 +2013,17 @@ async fn status_page(
                                     h4 : &mode.display_name;
                                     @let mode_live_races = live_races.iter().filter(|(_, mode_id, _, _)| *mode_id == mode.id).collect_vec();
                                     @if !mode_live_races.is_empty() {
-                                        p {
-                                            : "Upcoming live opportunities: ";
-                                            @for (index, (_, _, start, room)) in mode_live_races.iter().enumerate() {
-                                                @if index > 0 { : ", "; }
-                                                @if let Some(room) = room {
-                                                    a(href = room) : format_datetime(*start, DateTimeFormat { long: true, running_text: true });
-                                                } else {
-                                                    : format_datetime(*start, DateTimeFormat { long: true, running_text: true });
+                                        p : "Upcoming live qualifiers";
+                                        ul {
+                                            @for (_, _, start, room) in mode_live_races {
+                                                li {
+                                                    @if let Some(room) = room {
+                                                        a(href = room) : format_datetime(*start, DateTimeFormat { long: true, running_text: true });
+                                                    } else {
+                                                        : format_datetime(*start, DateTimeFormat { long: true, running_text: true });
+                                                    }
                                                 }
                                             }
-                                            : ".";
                                         }
                                     }
                                     @if let Some(attempt) = attempt {

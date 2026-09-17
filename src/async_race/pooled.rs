@@ -1,6 +1,6 @@
 //! Recovery of the pooled Discord workflow. Database transactions never span Discord calls.
 use super::*;
-use serenity::all::{GetMessages, Message, MessageId};
+use serenity::all::{EditThread, GetMessages, Message, MessageId};
 
 #[derive(sqlx::FromRow)]
 struct Delivery {
@@ -8,10 +8,13 @@ struct Delivery {
     control_version: i64,
     state: String,
     source: String,
+    series: String,
+    event: String,
     discord_thread: Option<i64>,
     channel: Option<i64>,
     mode_name: String,
     seed_data: serde_json::Value,
+    revealed_at: Option<DateTime<Utc>>,
     start_due_at: Option<DateTime<Utc>>,
     starts_close_at: Option<DateTime<Utc>>,
     submissions_close_at: Option<DateTime<Utc>>,
@@ -39,12 +42,20 @@ pub(super) async fn sweep(pool: &PgPool, http: &Arc<Http>) -> Result<(), Error> 
 async fn pending_delivery_ids(pool: &PgPool) -> Result<Vec<i64>, sqlx::Error> {
     sqlx::query_scalar(r#"SELECT id FROM qualifier_attempts WHERE
         (delivery_claim_until IS NULL OR delivery_claim_until < NOW()) AND ((source = 'async' AND (
-            (state = 'assigned' AND NOT delivery_messages ? 'ready') OR
-            (state = 'revealed' AND (NOT delivery_messages ? 'seed' OR start_due_at <= NOW())) OR
+            (state = 'assigned' AND (NOT delivery_messages ? 'ready' OR NOT delivery_messages ? 'welcome-v3')) OR
+            (state = 'revealed' AND (
+                jsonb_typeof(delivery_messages->'seed') IS DISTINCT FROM 'number' OR start_due_at <= NOW()
+                OR (start_due_at > revealed_at + INTERVAL '2 minutes'
+                    AND start_due_at <= NOW() + INTERVAL '2 minutes' AND start_due_at > NOW() + INTERVAL '30 seconds'
+                    AND jsonb_typeof(delivery_messages->'warn-2min') IS DISTINCT FROM 'number')
+                OR (start_due_at > revealed_at + INTERVAL '30 seconds'
+                    AND start_due_at <= NOW() + INTERVAL '30 seconds' AND start_due_at > NOW()
+                    AND jsonb_typeof(delivery_messages->'warn-30s') IS DISTINCT FROM 'number')
+            )) OR
             state = 'starting' OR
-            (state = 'running' AND NOT delivery_messages ? ('run-' || control_version)) OR
-            (state = 'awaiting_verification' AND (undo_until IS NULL OR undo_until <= NOW()) AND NOT delivery_messages ? ('staff-' || control_version)) OR
-            (state = 'finalized' AND NOT delivery_messages ? ('final-' || control_version))
+            (state = 'running' AND jsonb_typeof(delivery_messages->('run-' || control_version)) IS DISTINCT FROM 'number') OR
+            (state = 'awaiting_verification' AND (undo_until IS NULL OR undo_until <= NOW()) AND jsonb_typeof(delivery_messages->('staff-' || control_version)) IS DISTINCT FROM 'number') OR
+            (state = 'finalized' AND jsonb_typeof(delivery_messages->('final-' || control_version)) IS DISTINCT FROM 'number')
         )) OR (retry_declared_at IS NOT NULL
             AND jsonb_typeof(delivery_messages->'retry-declared') IS DISTINCT FROM 'number'
             AND EXISTS(SELECT 1 FROM events WHERE events.series=qualifier_attempts.series
@@ -110,7 +121,10 @@ trait Transport: Send + Sync {
         Err(recovery_error("thread creation unavailable"))
     }
     async fn get(&self, channel: ChannelId, id: MessageId) -> Result<Message, Error>;
-    async fn find(&self, channel: ChannelId, marker: &str) -> Result<Option<Message>, Error>;
+    async fn find(&self, channel: ChannelId, attempt: i64, key: &str) -> Result<Option<Message>, Error>;
+    async fn edit_content(&self, _channel: ChannelId, _id: MessageId, _content: String) -> Result<Message, Error> {
+        Err(recovery_error("message editing unavailable"))
+    }
     async fn send(
         &self,
         channel: ChannelId,
@@ -169,7 +183,7 @@ impl Transport for DiscordTransport<'_> {
     async fn get(&self, channel: ChannelId, id: MessageId) -> Result<Message, Error> {
         Ok(channel.message(self.0, id).await?)
     }
-    async fn find(&self, channel: ChannelId, marker: &str) -> Result<Option<Message>, Error> {
+    async fn find(&self, channel: ChannelId, attempt: i64, key: &str) -> Result<Option<Message>, Error> {
         let bot = self.0.get_current_user().await?.id;
         let mut before = None;
         loop {
@@ -180,7 +194,7 @@ impl Transport for DiscordTransport<'_> {
             let messages = channel.messages(self.0, query).await?;
             if let Some(message) = messages
                 .iter()
-                .find(|message| message.author.id == bot && message.content.ends_with(marker))
+                .find(|message| message.author.id == bot && has_delivery_marker(&message.content, attempt, key))
             {
                 return Ok(Some(message.clone()));
             }
@@ -189,6 +203,9 @@ impl Transport for DiscordTransport<'_> {
             }
             before = messages.last().map(|message| message.id);
         }
+    }
+    async fn edit_content(&self, channel: ChannelId, id: MessageId, content: String) -> Result<Message, Error> {
+        Ok(channel.edit_message(self.0, id, EditMessage::new().content(content)).await?)
     }
     async fn send(
         &self,
@@ -243,19 +260,64 @@ async fn deliver_message(
         .get(key)
         .and_then(serde_json::Value::as_u64)
     {
-        return transport.get(channel, MessageId::new(id)).await;
+        let message = transport.get(channel, MessageId::new(id)).await?;
+        if let Some(content) = refreshed_content(row, key, &content, &message.content) {
+            return transport.edit_content(channel, message.id, content).await;
+        }
+        return Ok(message);
     }
-    let marker = format!("[qualifier:{}:{key}]", row.id);
     let sent = if row.delivery_messages.get(key).is_some() {
-        transport.find(channel, &marker).await?.ok_or_else(|| recovery_error("uncertain Discord send could not be recovered; staff must review the delivery operation"))?
+        transport.find(channel, row.id, key).await?.ok_or_else(|| recovery_error("uncertain Discord send could not be recovered; staff must review the delivery operation"))?
     } else {
         remember(pool, row, claim, key, serde_json::json!("pending")).await?;
         transport
-            .send(channel, format!("{content}\n-# {marker}"), components)
+            .send(channel, with_delivery_link(row, key, &content), components)
             .await?
     };
     remember(pool, row, claim, key, serde_json::json!(sent.id.get())).await?;
+    if let Some(content) = refreshed_content(row, key, &content, &sent.content) {
+        return transport.edit_content(channel, sent.id, content).await;
+    }
     Ok(sent)
+}
+
+fn refreshed_content(row: &Delivery, key: &str, requested: &str, current: &str) -> Option<String> {
+    let content = if key == "ready" {
+        Some(with_delivery_link(row, key, requested))
+    } else {
+        current.strip_suffix(&format!("\n-# [qualifier:{}:{key}]", row.id))
+            .map(|content| with_delivery_link(row, key, content))
+    };
+    content.filter(|content| content != current)
+}
+
+pub(crate) fn has_delivery_marker(content: &str, attempt: i64, key: &str) -> bool {
+    content.ends_with(&format!("[qualifier:{attempt}:{key}]"))
+        || content.ends_with(&format!("#qualifier:{attempt}:{key})"))
+}
+
+fn with_delivery_link(row: &Delivery, key: &str, content: &str) -> String {
+    let (label, page) = if key == "retry-declared" {
+        ("Qualifier management", "qualifiers")
+    } else {
+        ("My status", "status")
+    };
+    format!("{content}\n-# [{label}]({}/event/{}/{}/{page}#qualifier:{}:{key})", base_uri(), row.series, row.event, row.id)
+}
+
+fn preparation_warning(row: &Delivery, now: DateTime<Utc>) -> Option<(&'static str, &'static str)> {
+    let due = row.start_due_at?;
+    let allowance = due - row.revealed_at?;
+    let remaining = due - now;
+    if remaining <= chrono::Duration::zero() { return None; }
+    let warning = if remaining <= chrono::Duration::seconds(30) && allowance > chrono::Duration::seconds(30) {
+        ("warn-30s", "**30 seconds remaining** before the seed is force started!")
+    } else if remaining <= chrono::Duration::minutes(2) && allowance > chrono::Duration::minutes(2) {
+        ("warn-2min", "**2 minutes remaining** before the seed is force started!")
+    } else {
+        return None;
+    };
+    (!row.delivery_messages.get(warning.0).is_some_and(serde_json::Value::is_number)).then_some(warning)
 }
 
 #[derive(Clone)]
@@ -310,10 +372,60 @@ async fn ensure_thread(
     Ok(thread.id)
 }
 
+async fn thread_details(pool: &PgPool, row: &Delivery) -> Result<(String, String), Error> {
+    let mut tx = pool.begin().await?;
+    let (team_id, retry): (i64, bool) = sqlx::query_as("SELECT team_id, retry_of IS NOT NULL FROM qualifier_attempts WHERE id=$1")
+        .bind(row.id).fetch_one(&mut *tx).await?;
+    let team = Team::from_id(&mut tx, Id::from(team_id as u64)).await?.ok_or(Error::NoTeamFound)?;
+    let event = EventData::new(&mut tx, team.series, &team.event).await
+        .map_err(|error| Error::Event(event::Error::Data(error)))?.ok_or(Error::EventNotFound)?;
+    let name = team.name(&mut tx).await?.map(Cow::into_owned).unwrap_or_else(|| "Unknown entrant".into());
+    let short = |text: &str| text.split_whitespace().join(" ").chars().take(38).collect::<String>();
+    let thread_name = format!("Qualifier: {} — {}{}", short(&name), short(&row.mode_name), if retry { " (retry)" } else { "" });
+    let config = pooled_qualifiers::Config::load(&mut tx, team.series, &team.event).await?
+        .ok_or(pooled_qualifiers::Error::NotConfigured)?;
+    let members = team.members(&mut tx).await?;
+    let mut content = MessageBuilder::default();
+    content.push("Welcome ");
+    for (index, member) in members.iter().enumerate() {
+        if index > 0 { content.push(", "); }
+        content.mention_user(member);
+    }
+    content.push("!\n\nThis thread is for your ").push_bold_safe(&row.mode_name)
+        .push(if retry { " qualifier re-attempt in " } else { " qualifier async in " })
+        .push_safe(&event.display_name).push(".\n\n**Instructions:**\n")
+        .push("1. Have your recording setup ready, then click **READY!** to receive your assigned seed.\n")
+        .push("2. Download and prepare the seed. ");
+    match event.async_start_delay {
+        Some(delay) if delay > 0 => {
+            content.push(format!("You have **{delay} minutes** after READY before the countdown starts automatically.\n"));
+        }
+        Some(_) => { content.push("The countdown starts automatically immediately after READY.\n"); }
+        None => { content.push("No automatic force-start is configured; click **START COUNTDOWN** when ready.\n"); }
+    }
+    content.push("3. Click **START COUNTDOWN** to start sooner. Your timer starts at **GO**, after the six-second countdown.\n")
+        .push("4. Click **FINISH** when you finish, or **FORFEIT** if you stop. An accidental FINISH can be reverted for 30 seconds, within your run deadline.\n")
+        .push("5. Post your VOD/recording link and the required screenshot in this thread.\n")
+        .push("6. Organizers will review your evidence and confirm your result using the thread’s staff controls.\n\n");
+    AsyncRaceManager::append_qualifier_recording_requirements(&mut tx, &event, &mut content).await?;
+    content.push("\n**Timing:**\nRun limit: ")
+        .push(English.format_duration(config.run_limit().to_std().unwrap_or_default(), false))
+        .push(" from GO, or the submission deadline below, whichever comes first.\n");
+    if let Some(end) = row.starts_close_at {
+        content.push(format!("Latest GO: <t:{}:F>.\n", end.timestamp()));
+    }
+    if let Some(end) = row.submissions_close_at {
+        content.push(format!("Submission deadline: <t:{}:F>.\n", end.timestamp()));
+    }
+    content.push("\nIf you need help, ask the organizers in this thread.");
+    tx.commit().await?;
+    Ok((thread_name, content.build()))
+}
+
 async fn deliver(pool: &PgPool, http: &Arc<Http>, id: i64, claim: &str) -> Result<(), Error> {
-    let row: Delivery = sqlx::query_as(r#"SELECT attempt.id, attempt.control_version, attempt.state, attempt.source, attempt.discord_thread,
+    let row: Delivery = sqlx::query_as(r#"SELECT attempt.id, attempt.control_version, attempt.state, attempt.source, attempt.series, attempt.event, attempt.discord_thread,
         event.discord_async_channel AS channel, mode.display_name AS mode_name, seed.seed_data,
-        attempt.start_due_at, config.starts_close_at, config.submissions_close_at,
+        attempt.revealed_at, attempt.start_due_at, config.starts_close_at, config.submissions_close_at,
         attempt.undo_until, attempt.participant_outcome, attempt.official_outcome, attempt.delivery_messages
         FROM qualifier_attempts attempt JOIN events event USING (series, event)
         JOIN pooled_qualifier_configs config USING (series, event)
@@ -339,6 +451,13 @@ async fn deliver(pool: &PgPool, http: &Arc<Http>, id: i64, claim: &str) -> Resul
         ));
     }
     let channel = ensure_thread(pool, &DiscordTransport(http), &row, claim).await?;
+    let (thread_name, welcome) = thread_details(pool, &row).await?;
+    if row.delivery_messages.get("thread-name").and_then(serde_json::Value::as_str) != Some(&thread_name) {
+        // The unique temporary name is used only until the thread ID is stored,
+        // so a lost creation response can still be recovered without duplicates.
+        channel.edit_thread(http, EditThread::new().name(&thread_name)).await?;
+        remember(pool, &row, claim, "thread-name", serde_json::json!(thread_name)).await?;
+    }
     // Retrying membership delivery is safe; never swallow failure and strand an entrant.
     let users: Vec<i64> = sqlx::query_scalar(r#"SELECT DISTINCT users.discord_id FROM users WHERE users.discord_id IS NOT NULL AND users.id IN (
         SELECT member FROM team_members WHERE team = (SELECT team_id FROM qualifier_attempts WHERE id = $1)
@@ -386,7 +505,8 @@ async fn deliver(pool: &PgPool, http: &Arc<Http>, id: i64, claim: &str) -> Resul
     }
     match row.state.as_str() {
         "assigned" => {
-            message(pool, http, &row, claim, channel, "ready", format!("Welcome to your **{}** qualifier. Click READY! when you are ready to receive the seed.", row.mode_name), vec![CreateActionRow::Buttons(vec![CreateButton::new(run.button_id("ready")).label("READY!").style(ButtonStyle::Primary)])]).await?;
+            message(pool, http, &row, claim, channel, "ready", welcome, vec![CreateActionRow::Buttons(vec![CreateButton::new(run.button_id("ready")).label("READY!").style(ButtonStyle::Primary)])]).await?;
+            remember(pool, &row, claim, "welcome-v3", serde_json::json!(true)).await?;
         }
         "revealed" => {
             let mut content = pooled_seed_message(&row.seed_data)?.build();
@@ -412,29 +532,52 @@ async fn deliver(pool: &PgPool, http: &Arc<Http>, id: i64, claim: &str) -> Resul
             )
             .await?;
             if row.start_due_at.is_some_and(|due| due <= Utc::now()) {
-                if pooled_qualifiers::request_start(pool, id, row.control_version).await? {
+                if pooled_qualifiers::request_start(pool, id, row.control_version, true).await? {
                     Box::pin(deliver(pool, http, id, claim)).await?;
                 }
+            } else if let Some((key, text)) = preparation_warning(&row, Utc::now()) {
+                let players: Vec<i64> = sqlx::query_scalar(r#"SELECT users.discord_id FROM users
+                    JOIN team_members member ON member.member=users.id
+                    JOIN qualifier_attempts attempt ON attempt.team_id=member.team
+                    WHERE attempt.id=$1 AND users.discord_id IS NOT NULL ORDER BY users.id"#)
+                    .bind(id).fetch_all(pool).await?;
+                let mentions = players.iter().map(|id| format!("<@{id}>")).join(" ");
+                message(pool, http, &row, claim, channel, key, format!("{mentions} {text}"), vec![]).await?;
             }
         }
         "starting" => {
             let key = format!("go-{}", row.control_version);
             // An existing or uncertain GO is reconciled even after the last-GO boundary.
             if row.delivery_messages.get(&key).is_none() {
-                message(
+                let countdown_key = format!("countdown-{}", row.control_version);
+                let announcement = if row.delivery_messages.get("forced-start").and_then(serde_json::Value::as_bool) == Some(true) {
+                    "@here **The seed is being force started right now!**\n**Your async is about to start!**"
+                } else {
+                    "**Your async is about to start!**"
+                };
+                let countdown = message(
                     pool,
                     http,
                     &row,
                     claim,
                     channel,
-                    &format!("countdown-{}", row.control_version),
-                    "**Your async is about to start! GO follows in six seconds.**".into(),
+                    &countdown_key,
+                    announcement.into(),
                     vec![],
                 )
                 .await?;
-                let due = row
-                    .start_due_at
-                    .ok_or_else(|| recovery_error("countdown has no due time"))?;
+                // Anchor to the actual announcement, so Discord setup latency
+                // cannot shorten the countdown. Recovery uses the same message.
+                let due = *countdown.timestamp + chrono::Duration::seconds(6);
+                for seconds in (1..=5).rev() {
+                    let at = due - chrono::Duration::seconds(seconds);
+                    let now = Utc::now();
+                    if now >= at + chrono::Duration::seconds(1) { continue; }
+                    if at > now { sleep((at - now).to_std().unwrap_or_default()).await; }
+                    channel.edit_message(http, countdown.id, EditMessage::new().content(
+                        with_delivery_link(&row, &countdown_key, &format!("{announcement}\n**{seconds}**")),
+                    )).await?;
+                }
                 if due > Utc::now() {
                     sleep((due - Utc::now()).to_std().unwrap_or_default()).await;
                 }
@@ -584,20 +727,26 @@ pub(crate) async fn test_delivery_failures(pool: &PgPool, id: i64) {
                 .cloned()
                 .ok_or_else(|| recovery_error("missing message"))
         }
-        async fn find(&self, _: ChannelId, marker: &str) -> Result<Option<Message>, Error> {
+        async fn find(&self, _: ChannelId, attempt: i64, key: &str) -> Result<Option<Message>, Error> {
             Ok(self
                 .messages
                 .lock()
                 .unwrap()
                 .iter()
-                .find(|message| message.content.ends_with(marker))
+                .find(|message| has_delivery_marker(&message.content, attempt, key))
                 .cloned())
+        }
+        async fn edit_content(&self, _: ChannelId, id: MessageId, content: String) -> Result<Message, Error> {
+            let mut messages = self.messages.lock().unwrap();
+            let message = messages.iter_mut().find(|message| message.id == id).ok_or_else(|| recovery_error("missing message"))?;
+            message.content = content;
+            Ok(message.clone())
         }
         async fn send(
             &self,
             channel: ChannelId,
             content: String,
-            _: Vec<CreateActionRow>,
+            components: Vec<CreateActionRow>,
         ) -> Result<Message, Error> {
             if self.fail_before {
                 return Err(recovery_error("failure before send"));
@@ -606,7 +755,8 @@ pub(crate) async fn test_delivery_failures(pool: &PgPool, id: i64) {
                 "id": "123456", "channel_id": channel.to_string(),
                 "author": {"id":"1234", "username":"fake", "discriminator":"0001", "avatar":null, "bot":true},
                 "content":content, "timestamp":"2026-09-10T10:00:00Z", "edited_timestamp":null,
-                "tts":false, "mention_everyone":false, "mentions":[], "mention_roles":[], "attachments":[], "embeds":[], "pinned":false, "type":0
+                "tts":false, "mention_everyone":false, "mentions":[], "mention_roles":[], "attachments":[], "embeds":[], "pinned":false, "type":0,
+                "components": components
             })).unwrap();
             self.messages.lock().unwrap().push(message.clone());
             if self.fail_after {
@@ -621,10 +771,13 @@ pub(crate) async fn test_delivery_failures(pool: &PgPool, id: i64) {
         control_version: 1,
         state: "assigned".into(),
         source: "async".into(),
+        series: "casboots".into(),
+        event: "pqtest".into(),
         discord_thread: Some(1),
         channel: Some(1),
         mode_name: "test".into(),
         seed_data: serde_json::json!({}),
+        revealed_at: None,
         start_due_at: None,
         starts_close_at: None,
         submissions_close_at: None,
@@ -633,6 +786,53 @@ pub(crate) async fn test_delivery_failures(pool: &PgPool, id: i64) {
         official_outcome: None,
         delivery_messages: serde_json::json!({}),
     };
+    let (name, welcome) = thread_details(pool, &row).await.unwrap();
+    assert!(name.starts_with("Qualifier: "));
+    assert!(name.ends_with(" — test"));
+    assert!(!name.contains("Unknown entrant"));
+    assert!(name.chars().count() <= 100);
+    for instruction in ["Welcome", "**test**", "**READY!**", "**START COUNTDOWN**", "six-second", "**FINISH**", "**FORFEIT**", "30 seconds", "YouTube", "collection rate", "Organizers", "Run limit:"] {
+        assert!(welcome.contains(instruction), "missing qualifier instruction: {instruction}");
+    }
+    assert!(with_delivery_link(&row, "ready", &welcome).chars().count() <= 2000);
+    assert!(welcome.contains("No automatic force-start is configured"));
+    let now = Utc::now();
+    row.revealed_at = Some(now);
+    row.start_due_at = Some(now + chrono::Duration::minutes(5));
+    for (seconds, expected) in [(0, None), (180, Some("warn-2min")), (270, Some("warn-30s")), (300, None)] {
+        assert_eq!(preparation_warning(&row, now + chrono::Duration::seconds(seconds)).map(|(key, _)| key), expected);
+    }
+    row.delivery_messages["warn-2min"] = serde_json::json!(123);
+    assert!(preparation_warning(&row, now + chrono::Duration::minutes(3)).is_none());
+    row.delivery_messages["warn-2min"] = serde_json::json!("pending");
+    assert!(preparation_warning(&row, now + chrono::Duration::minutes(3)).is_some());
+    row.start_due_at = None;
+    assert!(preparation_warning(&row, now).is_none());
+    row.revealed_at = None;
+    row.delivery_messages = serde_json::json!({});
+    // The recovery worker must wake for each warning, including uncertain sends,
+    // and stop waking once that warning has a confirmed Discord message ID.
+    for (remaining, key) in [(119, "warn-2min"), (29, "warn-30s")] {
+        sqlx::query("UPDATE qualifier_attempts SET state='revealed', revealed_at=NOW()-INTERVAL '5 minutes', start_due_at=NOW()+make_interval(secs=>$2), delivery_messages='{\"seed\":123}' WHERE id=$1")
+            .bind(id).bind(f64::from(remaining)).execute(pool).await.unwrap();
+        assert!(pending_delivery_ids(pool).await.unwrap().contains(&id));
+        sqlx::query("UPDATE qualifier_attempts SET delivery_messages=jsonb_set(delivery_messages, ARRAY[$2], '123') WHERE id=$1")
+            .bind(id).bind(key).execute(pool).await.unwrap();
+        assert!(!pending_delivery_ids(pool).await.unwrap().contains(&id));
+        sqlx::query("UPDATE qualifier_attempts SET delivery_messages=jsonb_set(delivery_messages, ARRAY[$2], '\"pending\"') WHERE id=$1")
+            .bind(id).bind(key).execute(pool).await.unwrap();
+        assert!(pending_delivery_ids(pool).await.unwrap().contains(&id));
+    }
+    for (state, key) in [("running", "run-1"), ("awaiting_verification", "staff-1"), ("finalized", "final-1")] {
+        sqlx::query("UPDATE qualifier_attempts SET state=$2, official_outcome=CASE WHEN $2='finalized' THEN 'forfeit' ELSE NULL END, delivery_messages=jsonb_build_object($3::TEXT,'pending') WHERE id=$1")
+            .bind(id).bind(state).bind(key).execute(pool).await.unwrap();
+        assert!(pending_delivery_ids(pool).await.unwrap().contains(&id), "recover uncertain {key} delivery");
+        sqlx::query("UPDATE qualifier_attempts SET delivery_messages=jsonb_build_object($2::TEXT,123) WHERE id=$1")
+            .bind(id).bind(key).execute(pool).await.unwrap();
+        assert!(!pending_delivery_ids(pool).await.unwrap().contains(&id), "do not resend confirmed {key}");
+    }
+    sqlx::query("UPDATE qualifier_attempts SET state='assigned', official_outcome=NULL, revealed_at=NULL, start_due_at=NULL, delivery_messages='{}' WHERE id=$1")
+        .bind(id).execute(pool).await.unwrap();
     for (key, before, after) in [
         ("test-before", true, false),
         ("test-after", false, true),
@@ -681,6 +881,10 @@ pub(crate) async fn test_delivery_failures(pool: &PgPool, id: i64) {
             usize::from(!before)
         );
         if let Ok(message) = recovered {
+            assert!(!message.content.contains("[qualifier:"));
+            assert!(message.content.contains("[My status]("));
+            assert!(has_delivery_marker(&message.content, id, key));
+            assert!(!has_delivery_marker(&message.content, id + 1, key));
             assert_eq!(
                 message.timestamp.unix_timestamp(),
                 DateTime::parse_from_rfc3339("2026-09-10T10:00:00Z")
@@ -710,6 +914,24 @@ pub(crate) async fn test_delivery_failures(pool: &PgPool, id: i64) {
         .is_err()
     );
     assert!(transport.messages.lock().unwrap().is_empty());
+    // Recover a pre-upgrade READY message, then update its introduction in place.
+    // Its original timestamp and buttons must survive, with no duplicate send.
+    let legacy = transport.send(ChannelId::new(1), format!("Old introduction\n-# [qualifier:{id}:ready]"), vec![CreateActionRow::Buttons(vec![
+        CreateButton::new("async:pooled:ready:test").label("READY!").style(ButtonStyle::Primary),
+    ])]).await.unwrap();
+    remember(pool, &row, "test", "ready", serde_json::json!("pending")).await.unwrap();
+    row.delivery_messages = sqlx::query_scalar("SELECT delivery_messages FROM qualifier_attempts WHERE id=$1")
+        .bind(id).fetch_one(pool).await.unwrap();
+    let adopted = deliver_message(pool, &transport, &row, "test", ChannelId::new(1), "ready", welcome.clone(), vec![]).await.unwrap();
+    assert_eq!(adopted.id, legacy.id);
+    row.delivery_messages = sqlx::query_scalar("SELECT delivery_messages FROM qualifier_attempts WHERE id=$1")
+        .bind(id).fetch_one(pool).await.unwrap();
+    let updated = deliver_message(pool, &transport, &row, "test", ChannelId::new(1), "ready", welcome, vec![]).await.unwrap();
+    assert!(!updated.content.contains("[qualifier:"));
+    assert!(updated.content.contains("**Instructions:**"));
+    assert_eq!(updated.timestamp, legacy.timestamp);
+    assert_eq!(updated.components.len(), 1);
+    assert_eq!(transport.messages.lock().unwrap().len(), 1);
     for (before, after) in [(true, false), (false, true), (false, false)] {
         sqlx::query("UPDATE qualifier_attempts SET discord_thread=NULL, delivery_claim='test', delivery_claim_until=NOW()+INTERVAL '1 minute', delivery_messages='{}' WHERE id=$1").bind(id).execute(pool).await.unwrap();
         row.discord_thread = None;

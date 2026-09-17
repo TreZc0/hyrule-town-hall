@@ -132,17 +132,13 @@ pub(super) fn label(id: &str, field: &str, title: &str) -> RawHtml<String> {
             "Retry READY delivery and Retry same seed delivery do not need a connection ID. Inspect the private thread before reconnecting anything, and record what you checked in the reason field.",
         ],
         "reason" => &[
-            "Required explanation of the organizer action and the evidence reviewed. Include enough context for another organizer to understand the decision, such as the relevant VOD timestamp or the Discord delivery issue.",
-            "Result corrections and sanctions retain before/after history. Saving a result can change a seed’s par and other entrants’ scores, so describe both the issue and the corrected outcome. Reload before acting if another organizer has changed this attempt.",
-        ],
-        "result_action" => &[
-            "Verify or correct result records the official outcome for this attempt. Select a finish time and VOD for a valid finish, or the appropriate zero-point outcome. Changes are retained in the review history.",
-            "Apply mode disclosure sanction is a distinct disciplinary action for disclosure of that mode’s seed information. It affects the entrant’s mode attempts and retry eligibility. Reverse mode disclosure sanction restores the saved state for that sanction; it is not a general undo for arbitrary edits.",
-            "Use the event’s published rules and reviewed evidence to choose the action. The reason field is mandatory, and stale controls are rejected if the attempt has changed since this page loaded.",
+            "Optional note explaining the correction, DQ, invalidation or delivery recovery. You can leave this blank. Any note you enter is retained in the review history.",
+            "DQ gives this attempt zero points and excludes its time from par, while keeping the attempt used. Invalidate cancels the attempt entirely: it no longer affects scoring or uses an attempt or retry. Invalidating a retry restores the previous result if it is still valid.",
+            "After invalidation, a new async in this pool must use a different seed. If no eligible alternative remains, the request cannot proceed until another seed is available.",
         ],
         "outcome" => &[
             "Finished is a verified completed run and requires an official duration and VOD. Its points depend on the par for that physical seed and may remain pending until enough eligible finishes exist.",
-            "Forfeit / missing evidence, Disqualified and Invalid receive zero points and do not supply a finished time for par. The separate result action selects whether you are recording a result or applying/reversing a disclosure sanction.",
+            "Forfeit / missing evidence records zero points and keeps the attempt used. The separate DQ and Invalidate buttons apply only to this attempt. Manage entrant bans on the entrants page.",
         ],
         "finish_time" => &[
             "Official elapsed run duration, not a clock time or a UTC timestamp. Use HH:MM:SS, for example 01:23:45 for one hour, 23 minutes and 45 seconds.",

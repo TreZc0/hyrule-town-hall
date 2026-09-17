@@ -52,7 +52,11 @@ pub(crate) enum Error {
     RetryForbidden,
     #[error("no different physical seed is available for the re-attempt")]
     NoReplacementSeed,
-    #[error("invalid pooled qualifier transition from {0}")]
+    #[error("you cannot review your own qualifier attempt; another event organizer must review it")]
+    SelfReview,
+    #[error("only an event organizer can review qualifier attempts")]
+    NotOrganizer,
+    #[error("invalid pooled qualifier transition: {0}")]
     InvalidTransition(String),
     #[error("this race is not a configured pooled live qualifier")]
     NotLiveQualifier,
@@ -221,7 +225,6 @@ impl Attempt {
 pub(crate) struct RevealedSeed {
     pub(crate) data: serde_json::Value,
     pub(crate) next_control_version: i64,
-    pub(crate) start_delay_minutes: i32,
 }
 
 /// Persist the reveal before Discord delivery. Repeated or stale controls cannot
@@ -252,7 +255,6 @@ pub(crate) async fn reveal(
         return Ok(RevealedSeed {
             data: row.2.ok_or(Error::NoSeed)?,
             next_control_version: row.1,
-            start_delay_minutes: row.4.unwrap_or_default(),
         });
     }
     if row.0 != "assigned" || row.1 != control_version {
@@ -264,7 +266,7 @@ pub(crate) async fn reveal(
     let data = row.2.ok_or(Error::NoSeed)?;
     let next_control_version: i64 = sqlx::query_scalar(
         r#"UPDATE qualifier_attempts attempt SET state = 'revealed', revealed_at = NOW(),
-            start_due_at = NOW() + make_interval(mins => $2::INT),
+            start_due_at = CASE WHEN $2::INT IS NULL THEN NULL ELSE NOW() + make_interval(mins => $2::INT) END,
             control_version = attempt.control_version + 1
         FROM pooled_qualifier_configs config
         WHERE attempt.id = $1 AND config.series = attempt.series AND config.event = attempt.event
@@ -272,7 +274,7 @@ pub(crate) async fn reveal(
         RETURNING attempt.control_version"#,
     )
     .bind(attempt_id)
-    .bind(row.4.unwrap_or_default().max(0))
+    .bind(row.4.map(|delay| delay.max(0)))
     .fetch_optional(&mut *transaction)
     .await?
     .ok_or(Error::WindowClosed)?;
@@ -294,7 +296,6 @@ pub(crate) async fn reveal(
     Ok(RevealedSeed {
         data,
         next_control_version,
-        start_delay_minutes: row.4.unwrap_or_default(),
     })
 }
 
@@ -302,16 +303,19 @@ pub(crate) async fn request_start(
     pool: &PgPool,
     attempt_id: i64,
     version: i64,
+    forced: bool,
 ) -> Result<bool, Error> {
     let mut tx = pool.begin().await?;
     lock_attempt(&mut tx, attempt_id).await?;
-    let changed = sqlx::query(r#"UPDATE qualifier_attempts attempt SET state = 'starting', start_due_at = NOW() + INTERVAL '6 seconds'
+    let changed = sqlx::query(r#"UPDATE qualifier_attempts attempt SET state = 'starting', start_due_at = NOW() + INTERVAL '6 seconds',
+        delivery_messages = jsonb_set(attempt.delivery_messages, '{forced-start}', to_jsonb($3::BOOL))
         FROM pooled_qualifier_configs config
         WHERE attempt.id = $1 AND attempt.control_version = $2 AND attempt.state = 'revealed'
+          AND (NOT $3 OR (attempt.start_due_at IS NOT NULL AND attempt.start_due_at <= NOW()))
           AND config.series = attempt.series AND config.event = attempt.event
           AND NOW() + INTERVAL '6 seconds' < config.starts_close_at
           AND NOW() + INTERVAL '6 seconds' < config.submissions_close_at"#)
-        .bind(attempt_id).bind(version).execute(&mut *tx).await?.rows_affected() == 1;
+        .bind(attempt_id).bind(version).bind(forced).execute(&mut *tx).await?.rows_affected() == 1;
     tx.commit().await?;
     Ok(changed)
 }
@@ -446,15 +450,16 @@ async fn check_verifier(
         EXISTS(SELECT 1 FROM organizers WHERE organizer = $2 AND (series, event) = (SELECT series, event FROM qualifier_attempts WHERE id = $1)),
         EXISTS(SELECT 1 FROM team_members WHERE member = $2 AND team = (SELECT team_id FROM qualifier_attempts WHERE id = $1))"#)
         .bind(attempt_id).bind(actor).fetch_one(&mut **tx).await?;
-    if participant || (!organizer && !User::GLOBAL_ADMIN_USER_IDS.contains(&(actor as u64))) {
-        return Err(Error::InvalidTransition(
-            "a different event organizer must verify this attempt".into(),
-        ));
+    if !organizer && !User::GLOBAL_ADMIN_USER_IDS.contains(&(actor as u64)) {
+        return Err(Error::NotOrganizer);
+    }
+    if participant {
+        return Err(Error::SelfReview);
     }
     Ok(())
 }
 
-/// A result edit never changes seed, retry credit, counted status, or the run clock.
+/// Ordinary result edits keep the attempt used; invalidation cancels it instead.
 pub(crate) async fn correct_result(
     tx: &mut Transaction<'_, Postgres>,
     attempt_id: i64,
@@ -464,13 +469,11 @@ pub(crate) async fn correct_result(
     outcome: Outcome,
     vod: Option<&str>,
 ) -> Result<(), Error> {
+    if matches!(outcome, Outcome::Invalid) {
+        return invalidate_attempt(tx, attempt_id, version, actor, reason).await;
+    }
     lock_attempt(tx, attempt_id).await?;
     check_verifier(tx, attempt_id, actor).await?;
-    if reason.trim().is_empty() {
-        return Err(Error::InvalidTransition(
-            "a correction reason is required".into(),
-        ));
-    }
     let before: serde_json::Value = sqlx::query_scalar("SELECT to_jsonb(attempt) - 'correction_history' - 'delivery_messages' FROM qualifier_attempts attempt WHERE id = $1 AND control_version = $2 AND (state IN ('awaiting_verification', 'finalized') OR ($3 AND state IN ('assigned', 'revealed', 'starting', 'running'))) AND retry_banned_at IS NULL")
         .bind(attempt_id).bind(version).bind(!matches!(outcome, Outcome::Finished(_))).fetch_optional(&mut **tx).await?
         .ok_or_else(|| Error::InvalidTransition("stale result, unfinished attempt, or active disclosure sanction".into()))?;
@@ -532,50 +535,61 @@ fn outcome_values(
     })
 }
 
-pub(crate) async fn disclosure(
+/// Cancel one attempt while retaining its audit history. Cancelling a replacement
+/// restores the previous result; cancelling its original makes the replacement
+/// an ordinary first attempt. Either case releases the event-wide retry credit.
+pub(crate) async fn invalidate_attempt(
     tx: &mut Transaction<'_, Postgres>,
     attempt_id: i64,
     version: i64,
     actor: i64,
     reason: &str,
-    reverse: bool,
 ) -> Result<(), Error> {
     lock_attempt(tx, attempt_id).await?;
     check_verifier(tx, attempt_id, actor).await?;
-    if reason.trim().is_empty() {
-        return Err(Error::InvalidTransition(
-            "a sanction reason is required".into(),
-        ));
-    }
-    let (team, mode): (i64, i64) = sqlx::query_as("SELECT team_id, mode_id FROM qualifier_attempts WHERE id = $1 AND control_version = $2 AND state <> 'void'")
+    let (original, replacement, before): (Option<i64>, Option<i64>, serde_json::Value) = sqlx::query_as(
+        "SELECT retry_of, superseded_by, to_jsonb(attempt) - 'correction_history' - 'delivery_messages' FROM qualifier_attempts attempt WHERE id=$1 AND control_version=$2 AND state <> 'void'",
+    )
         .bind(attempt_id).bind(version).fetch_optional(&mut **tx).await?
-        .ok_or_else(|| Error::InvalidTransition("stale sanction action".into()))?;
-    if reverse {
-        // The saved official result is restored; an unfinished run stays pending review.
-        sqlx::query(r#"UPDATE qualifier_attempts attempt SET
-            state = CASE WHEN saved.value->'before'->>'official_outcome' IS NULL THEN 'awaiting_verification' ELSE 'finalized' END,
-            official_outcome = saved.value->'before'->>'official_outcome',
-            official_time = (saved.value->'before'->>'official_time')::INTERVAL,
-            vod = saved.value->'before'->>'vod', par_eligible = (saved.value->'before'->>'par_eligible')::BOOLEAN,
-            retry_banned_at = NULL, retry_banned_by = NULL, retry_ban_reason = NULL,
-            control_version = control_version + 1,
-            correction_history = correction_history || jsonb_build_array(jsonb_build_object('action', 'disclosure_reversed', 'actor', $3::BIGINT, 'at', NOW(), 'reason', $4::TEXT,
-                'before', to_jsonb(attempt) - 'correction_history' - 'delivery_messages', 'after', saved.value->'before'))
-            FROM (SELECT id, (SELECT value FROM jsonb_array_elements(correction_history) WITH ORDINALITY AS history(value, position)
-                WHERE value->>'action' = 'disclosure' ORDER BY position DESC LIMIT 1) AS value
-                FROM qualifier_attempts WHERE team_id = $1 AND mode_id = $2 AND retry_banned_at IS NOT NULL AND state <> 'void') saved
-            WHERE attempt.id = saved.id AND saved.value IS NOT NULL"#)
-            .bind(team).bind(mode).bind(actor).bind(reason.trim()).execute(&mut **tx).await?;
-    } else {
-        sqlx::query(r#"UPDATE qualifier_attempts attempt SET state = 'finalized', official_outcome = 'dq', official_time = NULL,
-            par_eligible = FALSE, verified_at = NOW(), verified_by = $3, retry_banned_at = NOW(), retry_banned_by = $3,
-            retry_ban_reason = $4, player_finished_at = COALESCE(player_finished_at, NOW()), undo_until = NULL,
-            control_version = control_version + 1,
-            correction_history = correction_history || jsonb_build_array(jsonb_build_object('action', 'disclosure', 'actor', $3::BIGINT, 'at', NOW(), 'reason', $4::TEXT,
-                'before', to_jsonb(attempt) - 'correction_history' - 'delivery_messages', 'after', jsonb_build_object('outcome', 'dq', 'par_eligible', FALSE)))
-            WHERE team_id = $1 AND mode_id = $2 AND state <> 'void' AND retry_banned_at IS NULL"#)
-            .bind(team).bind(mode).bind(actor).bind(reason.trim()).execute(&mut **tx).await?;
+        .ok_or_else(|| Error::InvalidTransition("this attempt has changed or is already invalidated; reload the page".into()))?;
+    sqlx::query(r#"UPDATE qualifier_attempts SET state='void', counts_for_entrant=FALSE,
+        par_eligible=FALSE, official_outcome=NULL, official_time=NULL,
+        verified_at=NULL, verified_by=NULL, voided_at=NOW(), voided_by=$3, void_reason=$4,
+        retry_declared_at=NULL, retry_declared_by=NULL, superseded_by=NULL,
+        start_due_at=NULL, undo_until=NULL, control_version=control_version+1,
+        correction_history=correction_history || jsonb_build_array(jsonb_build_object(
+            'action','invalidate','actor',$3::BIGINT,'at',NOW(),'reason',$4::TEXT,'before',$5::JSONB,
+            'after',jsonb_build_object('state','void','counts_for_entrant',FALSE,'par_eligible',FALSE)))
+        WHERE id=$1 AND control_version=$2"#)
+        .bind(attempt_id).bind(version).bind(actor).bind(reason.trim()).bind(before)
+        .execute(&mut **tx).await?;
+    if let Some(original) = original {
+        sqlx::query(r#"UPDATE qualifier_attempts attempt SET counts_for_entrant=TRUE,
+            superseded_by=NULL, control_version=control_version+1,
+            correction_history=correction_history || jsonb_build_array(jsonb_build_object(
+                'action','retry_invalidated','attempt',$2::BIGINT,'actor',$3::BIGINT,'at',NOW(),'reason',$4::TEXT,
+                'before',to_jsonb(attempt)-'correction_history'-'delivery_messages',
+                'after',jsonb_build_object('counts_for_entrant',TRUE,'superseded_by',NULL)))
+            WHERE id=$1 AND superseded_by=$2 AND state <> 'void'"#)
+            .bind(original).bind(attempt_id).bind(actor).bind(reason.trim()).execute(&mut **tx).await?;
     }
+    if let Some(replacement) = replacement {
+        // Its running controls and countdown still belong to the same attempt.
+        sqlx::query(r#"UPDATE qualifier_attempts attempt SET retry_of=NULL,
+            correction_history=correction_history || jsonb_build_array(jsonb_build_object(
+                'action','original_invalidated','attempt',$2::BIGINT,'actor',$3::BIGINT,'at',NOW(),'reason',$4::TEXT,
+                'before',to_jsonb(attempt)-'correction_history'-'delivery_messages',
+                'after',jsonb_build_object('retry_of',NULL)))
+            WHERE id=$1 AND retry_of=$2 AND state <> 'void'"#)
+            .bind(replacement).bind(attempt_id).bind(actor).bind(reason.trim()).execute(&mut **tx).await?;
+        sqlx::query("UPDATE qualifier_live_entries SET retry_committed_at=NULL, retry_released_at=NOW() WHERE attempt_id=$1 AND retry_committed_at IS NOT NULL")
+            .bind(replacement).execute(&mut **tx).await?;
+    }
+    sqlx::query(r#"UPDATE qualifier_live_entries SET eligible=FALSE,
+        exclusion_reason='attempt invalidated by organizer', retry_committed_at=NULL,
+        retry_released_at=CASE WHEN retry_reserved_at IS NOT NULL THEN NOW() ELSE retry_released_at END
+        WHERE attempt_id=$1"#)
+        .bind(attempt_id).execute(&mut **tx).await?;
     Ok(())
 }
 
@@ -690,6 +704,7 @@ fn choose_balanced_seed(seeds: &[SeedLoad], spread: i16, excluded: Option<i64>) 
 async fn allocation_candidates(
     transaction: &mut Transaction<'_, Postgres>,
     mode_id: i64,
+    team_id: i64,
 ) -> Result<Vec<SeedLoad>, sqlx::Error> {
     let rows: Vec<(i64, i64, serde_json::Value, String)> = sqlx::query_as(
         r#"SELECT seed.id,
@@ -702,9 +717,16 @@ async fn allocation_candidates(
           AND seed.seed_data->>'type' = (SELECT CASE WHEN seed_gen_type IN ('owr', 'owr_tourney') THEN 'alttpr_owr' ELSE seed_gen_type END FROM qualifier_modes WHERE id = $1)
           AND seed.generator_profile = (SELECT generator_profile FROM qualifier_modes WHERE id = $1)
           AND seed.settings_fingerprint = (SELECT settings_fingerprint FROM qualifier_modes WHERE id = $1)
+          AND NOT EXISTS (
+              SELECT 1 FROM qualifier_attempts previous
+              JOIN qualifier_seeds previous_seed ON previous_seed.id = previous.seed_id
+              WHERE previous.team_id = $2 AND previous.mode_id = $1 AND previous.state = 'void'
+                AND (previous.seed_id = seed.id OR previous_seed.physical_seed_identity = seed.physical_seed_identity)
+          )
         GROUP BY seed.id ORDER BY seed.id"#,
     )
     .bind(mode_id)
+    .bind(team_id)
     .fetch_all(&mut **transaction)
     .await?;
     Ok(rows
@@ -844,7 +866,7 @@ pub(crate) async fn request_async(
     }
     check_requests(&config, false)?;
     check_overlap(&mut transaction, team_id).await?;
-    let seeds = allocation_candidates(&mut transaction, mode_id).await?;
+    let seeds = allocation_candidates(&mut transaction, mode_id, team_id).await?;
     let seed_id =
         choose_balanced_seed(&seeds, config.allocation_spread, None).ok_or(Error::NoSeed)?;
     let attempt_id: i64 = sqlx::query_scalar(
@@ -925,7 +947,7 @@ pub(crate) async fn request_async_retry(
     if original.retry_banned_at.is_some() {
         return Err(Error::RetryForbidden);
     }
-    let seeds = allocation_candidates(&mut transaction, mode_id).await?;
+    let seeds = allocation_candidates(&mut transaction, mode_id, team_id).await?;
     let seed_id = choose_balanced_seed(&seeds, config.allocation_spread, Some(original.seed_id))
         .or_else(|| {
             seeds
@@ -2402,13 +2424,13 @@ pub(crate) mod tests {
         for generator in ["owr", "owr_tourney"] {
             sqlx::query("UPDATE qualifier_modes SET seed_gen_type=$2 WHERE id=$1")
                 .bind(mode_id).bind(generator).execute(&mut *allocation_tx).await.unwrap();
-            let candidates = allocation_candidates(&mut allocation_tx, mode_id).await.unwrap();
+            let candidates = allocation_candidates(&mut allocation_tx, mode_id, entrants[0].0).await.unwrap();
             assert_eq!(candidates.len(), 2, "allocation for {generator}");
             assert!(candidates.iter().all(|seed| seed_ids.contains(&seed.id)));
         }
         sqlx::query("UPDATE qualifier_seeds SET seed_data=jsonb_set(seed_data, '{type}', '\"alttpr_dr\"') WHERE id=$1")
             .bind(seed_ids[0]).execute(&mut *allocation_tx).await.unwrap();
-        assert_eq!(allocation_candidates(&mut allocation_tx, mode_id).await.unwrap().len(), 1);
+        assert_eq!(allocation_candidates(&mut allocation_tx, mode_id, entrants[0].0).await.unwrap().len(), 1);
         allocation_tx.rollback().await.unwrap();
         let first = request_async(&pool, entrants[0].0, mode_id, entrants[0].1)
             .await
@@ -2426,6 +2448,26 @@ pub(crate) mod tests {
             .execute(&pool)
             .await
             .unwrap();
+        // None disables force-start, zero starts immediately, and a positive
+        // allowance is fixed at READY and cannot be reset by another click.
+        for delay in [Some(10_i32), Some(0), None] {
+            sqlx::query("UPDATE events SET async_start_delay=$3 WHERE series=$1 AND event=$2")
+                .bind(series).bind(event).bind(delay).execute(&pool).await.unwrap();
+            sqlx::query("UPDATE qualifier_attempts SET state='assigned', control_version=1, revealed_at=NULL, start_due_at=NULL WHERE id=$1")
+                .bind(first.id).execute(&pool).await.unwrap();
+            let revealed = reveal(&pool, first.id, 1, discord_thread).await.unwrap();
+            let timing: (DateTime<Utc>, Option<DateTime<Utc>>) = sqlx::query_as("SELECT revealed_at,start_due_at FROM qualifier_attempts WHERE id=$1")
+                .bind(first.id).fetch_one(&pool).await.unwrap();
+            assert_eq!(timing.1.map(|due| (due - timing.0).num_seconds()), delay.map(|delay| i64::from(delay) * 60));
+            reveal(&pool, first.id, 1, discord_thread).await.unwrap();
+            let repeated: Option<DateTime<Utc>> = sqlx::query_scalar("SELECT start_due_at FROM qualifier_attempts WHERE id=$1")
+                .bind(first.id).fetch_one(&pool).await.unwrap();
+            assert_eq!(repeated, timing.1);
+            assert_eq!(request_start(&pool, first.id, revealed.next_control_version, true).await.unwrap(), delay == Some(0));
+            if delay == Some(10) {
+                assert!(request_start(&pool, first.id, revealed.next_control_version, false).await.unwrap());
+            }
+        }
         let revealed = reveal(&pool, first.id, 1, discord_thread).await.unwrap();
         let repeated_reveal = reveal(&pool, first.id, 1, discord_thread).await.unwrap();
         assert_eq!(revealed.next_control_version, repeated_reveal.next_control_version);
@@ -2629,26 +2671,65 @@ pub(crate) mod tests {
             .bind(series).bind(event).bind(staff).execute(&pool).await.unwrap();
         let version: i64 = sqlx::query_scalar("SELECT control_version FROM qualifier_attempts WHERE id=$1").bind(first.id).fetch_one(&pool).await.unwrap();
         let mut tx = pool.begin().await.unwrap();
-        assert!(correct_result(&mut tx, first.id, version, entrants[0].1, "self verify", Outcome::Forfeit, None).await.is_err());
+        assert!(matches!(correct_result(&mut tx, first.id, version, -1, "", Outcome::Forfeit, None).await, Err(Error::NotOrganizer)));
+        sqlx::query("INSERT INTO organizers(series,event,organizer) VALUES($1,$2,$3)")
+            .bind(series).bind(event).bind(entrants[0].1).execute(&mut *tx).await.unwrap();
+        assert!(matches!(correct_result(&mut tx, first.id, version, entrants[0].1, "", Outcome::Forfeit, None).await, Err(Error::SelfReview)));
+        assert!(matches!(invalidate_attempt(&mut tx, first.id, version, entrants[0].1, "").await, Err(Error::SelfReview)));
         tx.rollback().await.unwrap();
         let mut tx = pool.begin().await.unwrap();
-        correct_result(&mut tx, first.id, version, staff, "Correct timer from evidence", Outcome::Finished(Duration::from_secs(3550)), Some("https://example.invalid/corrected")).await.unwrap();
+        correct_result(&mut tx, first.id, version, staff, "", Outcome::Finished(Duration::from_secs(3550)), Some("https://example.invalid/corrected")).await.unwrap();
         assert!(correct_result(&mut tx, first.id, version, staff, "Stale editor", Outcome::Forfeit, None).await.is_err());
         tx.commit().await.unwrap();
         let unchanged: (bool, bool) = sqlx::query_as("SELECT counts_for_entrant, par_eligible FROM qualifier_attempts WHERE id=$1").bind(first.id).fetch_one(&pool).await.unwrap();
         assert_eq!(unchanged, (false, true));
+        // DQ affects only this attempt, keeps its usage, and accepts no reason.
+        let replacement_version: i64 = sqlx::query_scalar("SELECT control_version FROM qualifier_attempts WHERE id=$1")
+            .bind(replacement.id).fetch_one(&pool).await.unwrap();
         let mut tx = pool.begin().await.unwrap();
-        disclosure(&mut tx, first.id, version + 1, staff, "Shared seed before release", false).await.unwrap();
-        tx.commit().await.unwrap();
-        let sanctioned: (bool, bool, bool) = sqlx::query_as("SELECT counts_for_entrant, par_eligible, retry_banned_at IS NOT NULL FROM qualifier_attempts WHERE id=$1").bind(replacement.id).fetch_one(&pool).await.unwrap();
-        assert_eq!(sanctioned, (true, false, true));
+        correct_result(&mut tx, replacement.id, replacement_version, staff, "", Outcome::Dq, None).await.unwrap();
+        let dq: (String, bool, bool, bool) = sqlx::query_as("SELECT official_outcome, counts_for_entrant, par_eligible, retry_banned_at IS NULL FROM qualifier_attempts WHERE id=$1")
+            .bind(replacement.id).fetch_one(&mut *tx).await.unwrap();
+        assert_eq!(dq, ("dq".into(), true, false, true));
+        let config = Config::load(&mut tx, Series::from_str(series).unwrap(), event).await.unwrap().unwrap();
+        let scores = standings(&mut tx, &config).await.unwrap();
+        assert!(scores.iter().find(|row| row.team_id == entrants[0].0).unwrap().mode_scores.iter().any(|(_, score, _)| *score == ModeScore::Score(0.0)));
+        let original_outcome: String = sqlx::query_scalar("SELECT official_outcome FROM qualifier_attempts WHERE id=$1")
+            .bind(first.id).fetch_one(&mut *tx).await.unwrap();
+        assert_eq!(original_outcome, "finished");
+        tx.rollback().await.unwrap();
+
+        // Invalidating a retry cancels its score and usage, restoring the original.
         let mut tx = pool.begin().await.unwrap();
-        assert!(check_retry_ban(&mut tx, entrants[0].0, mode_id).await.is_err());
-        disclosure(&mut tx, first.id, version + 2, staff, "Evidence disproved disclosure", true).await.unwrap();
-        tx.commit().await.unwrap();
-        let restored: (bool, bool, String) = sqlx::query_as("SELECT counts_for_entrant, retry_banned_at IS NULL, state FROM qualifier_attempts WHERE id=$1").bind(replacement.id).fetch_one(&pool).await.unwrap();
-        assert_eq!(restored, (true, true, "awaiting_verification".into()));
-        assert!(matches!(request_async_retry(&pool, entrants[0].0, mode_id, entrants[0].1).await, Err(Error::RetryUnavailable)));
+        invalidate_attempt(&mut tx, replacement.id, replacement_version, staff, "").await.unwrap();
+        assert!(invalidate_attempt(&mut tx, replacement.id, replacement_version, staff, "").await.is_err());
+        let cancelled: (String, bool, bool, Option<String>, String) = sqlx::query_as("SELECT state, counts_for_entrant, par_eligible, official_outcome, void_reason FROM qualifier_attempts WHERE id=$1")
+            .bind(replacement.id).fetch_one(&mut *tx).await.unwrap();
+        assert_eq!(cancelled, ("void".into(), false, false, None, "".into()));
+        let restored: (bool, Option<i64>, String) = sqlx::query_as("SELECT counts_for_entrant, superseded_by, official_outcome FROM qualifier_attempts WHERE id=$1")
+            .bind(first.id).fetch_one(&mut *tx).await.unwrap();
+        assert_eq!(restored, (true, None, "finished".into()));
+        let used_retry: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM qualifier_attempts WHERE team_id=$1 AND retry_of IS NOT NULL AND state<>'void')")
+            .bind(entrants[0].0).fetch_one(&mut *tx).await.unwrap();
+        assert!(!used_retry);
+        tx.rollback().await.unwrap();
+
+        // Invalidating an original keeps its replacement as a first attempt.
+        let mut tx = pool.begin().await.unwrap();
+        invalidate_attempt(&mut tx, first.id, version + 1, staff, "").await.unwrap();
+        let retained: (bool, Option<i64>, i64) = sqlx::query_as("SELECT counts_for_entrant, retry_of, control_version FROM qualifier_attempts WHERE id=$1")
+            .bind(replacement.id).fetch_one(&mut *tx).await.unwrap();
+        assert_eq!(retained, (true, None, replacement_version));
+        tx.rollback().await.unwrap();
+
+        // A cancelled first attempt is absent from standings, rather than zero.
+        let live_version: i64 = sqlx::query_scalar("SELECT control_version FROM qualifier_attempts WHERE id=$1")
+            .bind(live_original_id).fetch_one(&pool).await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        invalidate_attempt(&mut tx, live_original_id, live_version, staff, "").await.unwrap();
+        assert!(standings(&mut tx, &config).await.unwrap().iter().all(|row| row.team_id != entrants[1].0));
+        tx.rollback().await.unwrap();
+        assert_eq!(request_async_retry(&pool, entrants[0].0, mode_id, entrants[0].1).await.unwrap().id, replacement.id);
 
         // Two connections compete while an event lock keeps both pending.
         // Only one mode may allocate; the other observes the committed active run.
@@ -2739,9 +2820,13 @@ pub(crate) mod tests {
         assert!(!reserved);
         assert!(matches!(request_async_retry(&pool, entrants[1].0, mode_id, entrants[1].1).await, Err(Error::ActiveAsync)));
         // GO and finish intent are immutable under repeated, stale controls.
-        sqlx::query("UPDATE qualifier_attempts SET state='revealed', revealed_at=NOW(), discord_thread=$2 WHERE id=$1").bind(active.id).bind(-active.id).execute(&pool).await.unwrap();
-        let (manual, forced) = tokio::join!(request_start(&pool, active.id, 1), request_start(&pool, active.id, 1));
-        assert_ne!(manual.unwrap(), forced.unwrap());
+        sqlx::query("UPDATE qualifier_attempts SET state='revealed', revealed_at=NOW(), start_due_at=NOW()-INTERVAL '1 second', discord_thread=$2 WHERE id=$1").bind(active.id).bind(-active.id).execute(&pool).await.unwrap();
+        let (manual, forced) = tokio::join!(request_start(&pool, active.id, 1, false), request_start(&pool, active.id, 1, true));
+        let (manual, forced) = (manual.unwrap(), forced.unwrap());
+        assert_ne!(manual, forced);
+        let recorded_force: bool = sqlx::query_scalar("SELECT (delivery_messages->>'forced-start')::BOOL FROM qualifier_attempts WHERE id=$1")
+            .bind(active.id).fetch_one(&pool).await.unwrap();
+        assert_eq!(recorded_force, forced);
         let go = Utc::now();
         record_go(&pool, active.id, 1, go, None).await.unwrap();
         assert!(record_go(&pool, active.id, 1, go + chrono::Duration::seconds(10), None).await.is_err());
@@ -2772,6 +2857,43 @@ pub(crate) mod tests {
         let reset: bool = sqlx::query_scalar("SELECT generation_state='pending' AND seed_data IS NULL AND generation_error IS NULL AND generation_claim IS NULL FROM qualifier_seeds WHERE id=$1")
             .bind(reset_seed).fetch_one(&pool).await.unwrap();
         assert!(reset);
+        // The HTTP test invalidated the retry. Its seed stays unavailable to
+        // this entrant, including when all unused alternatives are exhausted.
+        sqlx::query("UPDATE pooled_qualifier_configs SET requests_paused=FALSE, pool_seed_count=4 WHERE series=$1 AND event=$2")
+            .bind(series).bind(event).execute(&pool).await.unwrap();
+        for position in [3_i16, 4] {
+            if position == 3 {
+                assert!(matches!(request_async_retry(&pool, entrants[0].0, mode_id, entrants[0].1).await, Err(Error::NoReplacementSeed)));
+            } else {
+                assert!(matches!(request_async(&pool, entrants[0].0, mode_id, entrants[0].1).await, Err(Error::NoSeed)));
+            }
+            let uuid = format!("00000000-0000-0000-0000-00000000010{position}");
+            let fresh_seed: i64 = sqlx::query_scalar(r#"INSERT INTO qualifier_seeds
+                (series,event,mode_id,source,pool_position,generation_state,seed_data,generator_profile,physical_seed_identity,settings_fingerprint,settings_attested_by,settings_attested_at)
+                SELECT series,event,mode_id,'async_pool',$2,'ready',jsonb_set(seed_data,'{uuid}',to_jsonb($3::TEXT)),generator_profile,
+                    'alttpr_owr:' || $3,settings_fingerprint,$4,NOW()
+                FROM qualifier_seeds WHERE id=$1 RETURNING id"#)
+                .bind(first.seed_id).bind(position).bind(uuid).bind(staff).fetch_one(&pool).await.unwrap();
+            let next = if position == 3 {
+                request_async_retry(&pool, entrants[0].0, mode_id, entrants[0].1).await.unwrap()
+            } else {
+                request_async(&pool, entrants[0].0, mode_id, entrants[0].1).await.unwrap()
+            };
+            assert_eq!(next.seed_id, fresh_seed);
+            assert_eq!(request_async(&pool, entrants[0].0, mode_id, entrants[0].1).await.unwrap().id, next.id);
+            let mut tx = pool.begin().await.unwrap();
+            invalidate_attempt(&mut tx, next.id, 1, staff, "").await.unwrap();
+            if position == 3 {
+                let version: i64 = sqlx::query_scalar("SELECT control_version FROM qualifier_attempts WHERE id=$1")
+                    .bind(first.id).fetch_one(&mut *tx).await.unwrap();
+                invalidate_attempt(&mut tx, first.id, version, staff, "").await.unwrap();
+            }
+            // These seeds are still available to other entrants in the pool.
+            let other_candidates = allocation_candidates(&mut tx, mode_id, entrants[1].0).await.unwrap();
+            assert!(other_candidates.iter().any(|seed| seed.id == fresh_seed));
+            tx.commit().await.unwrap();
+        }
+        assert!(matches!(request_async(&pool, entrants[0].0, mode_id, entrants[0].1).await, Err(Error::NoSeed)));
         }).catch_unwind().await;
 
         sqlx::query("DELETE FROM qualifier_live_entries WHERE series = $1 AND event = $2")

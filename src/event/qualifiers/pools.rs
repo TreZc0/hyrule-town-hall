@@ -10,6 +10,7 @@ pub(super) struct SeedRow {
     pub(super) pool_position: Option<i16>,
     pub(super) generation_state: String,
     pub(super) physical_seed_identity: Option<String>,
+    pub(super) seed_data: Option<serde_json::Value>,
     pub(super) released_at: Option<DateTime<Utc>>,
     pub(super) generation_error: Option<String>,
 }
@@ -46,7 +47,7 @@ pub(super) async fn load_seeds(
 ) -> Result<Vec<SeedRow>, sqlx::Error> {
     sqlx::query_as::<_, SeedRow>(
         r#"SELECT id, live_race_id, retired_at, mode_id, pool_position,
-            generation_state, physical_seed_identity, released_at, generation_error
+            generation_state, physical_seed_identity, seed_data, released_at, generation_error
             FROM qualifier_seeds WHERE series = $1 AND event = $2
             ORDER BY mode_id, source, pool_position, live_race_id"#,
     )
@@ -90,6 +91,42 @@ pub(super) fn seed_label(id: i64, seeds: &[SeedRow]) -> String {
             _ => format!("Seed {id}"),
         },
     )
+}
+
+fn seed_metadata(seed: &SeedRow) -> RawHtml<String> {
+    let Some(payload) = seed.seed_data.as_ref() else {
+        return html! { : "—"; };
+    };
+    let data = seed::Data::from_seed_data_only(Some(payload.clone()), None, false);
+    let hash = data.file_hash.as_ref().map(|hash| hash.join(" · ")).or_else(|| {
+        match data.files() {
+            Some(seed::Files::AvianartSeed { seed_hash: Some(hash), .. }) => Some(hash.join(" · ")),
+            Some(seed::Files::TwwrPermalink { seed_hash, .. }) => Some(seed_hash),
+            _ => None,
+        }
+    });
+    let uuid = payload.get("uuid").and_then(serde_json::Value::as_str);
+    let id = format!("pool-seed-meta-{}", seed.id);
+    html! {
+        button(type = "button", class = "settings-link setting-help-trigger seed-meta-trigger",
+            popovertarget = &id, aria_controls = &id, aria_expanded = "false",
+            data_hover_help = "true", aria_label = format!("Seed metadata for seed {}", seed.id)) : "Seed meta";
+        div(id = &id, class = "setting-help seed-meta-panel", popover = "auto",
+            role = "dialog", aria_labelledby = format!("{id}-title")) {
+            div(class = "setting-help-header") {
+                h4(id = format!("{id}-title")) : format!("Seed {} metadata", seed.id);
+                button(type = "button", class = "setting-help-close", popovertarget = &id,
+                    popovertargetaction = "hide", aria_label = "Close seed metadata") : "×";
+            }
+            div(class = "setting-help-body") {
+                p {
+                    strong : if uuid.is_some() { "UUID: " } else { "Seed ID: " };
+                    code : uuid.or(seed.physical_seed_identity.as_deref()).unwrap_or("Not available");
+                }
+                p { strong : "Seed hash: "; : hash.as_deref().unwrap_or("Not available"); }
+            }
+        }
+    }
 }
 
 impl AttemptRow {
@@ -193,7 +230,7 @@ pub(super) fn overview(
         div(class = "qualifier-pool-table-scroll") {
             table(class = "qualifier-pool-table") {
                 thead { tr {
-                    th : "Seed"; th : "State"; th : "Assigned"; th : "Counted";
+                    th : "Seed"; th : "Metadata"; th : "State"; th : "Assigned"; th : "Counted";
                     th : "Active"; th : "Awaiting verification"; th : "Finalized"; th : "Forfeits";
                     th : "Eligible finishes / par";
                 } }
@@ -201,6 +238,7 @@ pub(super) fn overview(
                     @for (seed, _, stats) in &groups {
                         tr {
                             td { a(href = format!("#pool-seed-{}", seed.id)) : seed_label(seed.id, seeds); }
+                            td : seed_metadata(seed);
                             td {
                                 : &seed.generation_state;
                                 @if seed.retired_at.is_some() { : " (retired)"; }
@@ -365,6 +403,11 @@ mod tests {
                 mode_id: 1,
                 pool_position: Some(2),
                 generation_state: "ready".into(),
+                seed_data: Some(json!({
+                    "type": "alttpr_owr", "uuid": "00000000-0000-0000-0000-000000000001",
+                    "hash1": "Bow", "hash2": "Hookshot", "hash3": "Boots",
+                    "hash4": "Hammer", "hash5": "Mirror",
+                })),
                 ..Default::default()
             },
             SeedRow {
@@ -383,6 +426,9 @@ mod tests {
             "105.00 points",
             "eligible for par",
             "#attempt-7",
+            "Seed meta",
+            "00000000-0000-0000-0000-000000000001",
+            "Bow · Hookshot · Boots · Hammer · Mirror",
         ] {
             assert!(html.contains(text), "missing {text}");
         }
@@ -396,7 +442,8 @@ mod tests {
         );
         if let Ok(path) = std::env::var("HTH_POOL_BROWSER_FIXTURE") {
             let css = include_str!("../../../assets/static/common.css");
-            std::fs::write(path, format!("<!doctype html><html><head><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><style>{css}</style></head><body><main><article class=\"qualifier-admin\"><h1>Qualifier Seed Pools</h1>{html}</article><div id=\"attempt-7\">Review attempt 7</div></main></body></html>")).unwrap();
+            let script = include_str!("../../../assets/static/setting-help.js");
+            std::fs::write(path, format!("<!doctype html><html><head><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><style>{css}</style></head><body><main><article class=\"qualifier-admin\"><h1>Qualifier Seed Pools</h1>{html}</article><div id=\"attempt-7\">Review attempt 7</div></main><script>{script}</script></body></html>")).unwrap();
         }
     }
 }

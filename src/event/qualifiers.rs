@@ -194,38 +194,52 @@ async fn qualifiers_form(
                                                     }
                                                     : help::label(&format!("recovery-{}-discord_id", attempt.id), "discord_id", "Discord thread/message ID (for connection actions)");
                                                     input(id = format!("recovery-{}-discord_id", attempt.id), name = "discord_id", type = "number");
-                                                    : help::label(&format!("recovery-{}-reason", attempt.id), "reason", "Reason and reviewed evidence");
-                                                    textarea(id = format!("recovery-{}-reason", attempt.id), name = "reason", required? = true);
+                                                    : help::label(&format!("recovery-{}-reason", attempt.id), "reason", "Reason (optional)");
+                                                    textarea(id = format!("recovery-{}-reason", attempt.id), name = "reason");
                                                 }, Vec::new(), "Save recovery");
                                             }
                                         }
 
                                         details {
-                                            summary : "Review / correct result";
-                                            : full_form(uri!(post_pooled_result(event.series, &*event.event)), csrf, html! {
+                                            summary : if attempt.state == "void" { "Review history" } else { "Review / correct result" };
+                                            @if attempt.state == "void" {
+                                                p : "This attempt was invalidated and does not count.";
+                                            } else {
+                                                p(class = "qualifier-hint") : "Verify this run’s evidence or correct its recorded result. For a finish, enter the official time and recording URL.";
+                                                : full_form(uri!(post_pooled_result(event.series, &*event.event)), csrf, html! {
+                                                    input(type = "hidden", name = "attempt_id", value = attempt.id);
+                                                    input(type = "hidden", name = "control_version", value = attempt.control_version);
+                                                    input(type = "hidden", name = "action", value = "result");
+                                                    : help::label(&format!("review-{}-outcome", attempt.id), "outcome", "Official outcome");
+                                                    select(id = format!("review-{}-outcome", attempt.id), name = "outcome") {
+                                                        option(value = "finished") : "Finished";
+                                                        option(value = "forfeit") : "Forfeit / missing evidence";
+                                                    }
+                                                    : help::label(&format!("review-{}-finish_time", attempt.id), "finish_time", "Time (HH:MM:SS, required for a finish)");
+                                                    input(id = format!("review-{}-finish_time", attempt.id), name = "finish_time", placeholder = "01:23:45");
+                                                    : help::label(&format!("review-{}-vod", attempt.id), "vod", "VOD URL (required for a finish)");
+                                                    input(id = format!("review-{}-vod", attempt.id), name = "vod", type = "url", value = attempt.vod.as_deref().unwrap_or(""));
+                                                    : help::label(&format!("review-{}-reason", attempt.id), "reason", "Reason (optional)");
+                                                    textarea(id = format!("review-{}-reason", attempt.id), name = "reason");
+                                                }, Vec::new(), "Save reviewed change");
+                                            }
+                                            @if attempt.correction_history.as_array().is_some_and(|history| !history.is_empty()) {
+                                                pre : serde_json::to_string_pretty(&attempt.correction_history).unwrap_or_default();
+                                            }
+                                        }
+                                        @if attempt.state != "void" {
+                                            form(action = uri!(post_pooled_result(event.series, &*event.event)).to_string(), method = "post") {
+                                                : csrf;
                                                 input(type = "hidden", name = "attempt_id", value = attempt.id);
                                                 input(type = "hidden", name = "control_version", value = attempt.control_version);
-                                                : help::label(&format!("review-{}-action", attempt.id), "result_action", "Action");
-                                                select(id = format!("review-{}-action", attempt.id), name = "action") {
-                                                    option(value = "result") : "Verify or correct result";
-                                                    option(value = "disclosure") : "Apply mode disclosure sanction";
-                                                    option(value = "reverse_disclosure") : "Reverse mode disclosure sanction";
+                                                p(class = "qualifier-hint") : "DQ keeps this attempt with 0 points. Invalidate cancels it, removing it from scoring and freeing the attempt or retry it used.";
+                                                : help::label(&format!("attempt-{}-reason", attempt.id), "reason", "Reason (optional)");
+                                                textarea(id = format!("attempt-{}-reason", attempt.id), name = "reason");
+                                                fieldset {
+                                                    button(type = "submit", name = "action", value = "dq", onclick = "return confirm('Disqualify this attempt? It will remain used and count for 0 points.')") : "DQ";
+                                                    button(type = "submit", name = "action", value = "invalidate", onclick = "return confirm('Invalidate this attempt? It will be removed from scoring and its attempt or retry usage will be released. If this was a retry, the previous valid result will be restored.')") : "Invalidate";
                                                 }
-                                                : help::label(&format!("review-{}-outcome", attempt.id), "outcome", "Official outcome");
-                                                select(id = format!("review-{}-outcome", attempt.id), name = "outcome") {
-                                                    option(value = "finished") : "Finished";
-                                                    option(value = "forfeit") : "Forfeit / missing evidence";
-                                                    option(value = "dq") : "Disqualified";
-                                                    option(value = "invalid") : "Invalid";
-                                                }
-                                                : help::label(&format!("review-{}-finish_time", attempt.id), "finish_time", "Time (HH:MM:SS, required for a finish)");
-                                                input(id = format!("review-{}-finish_time", attempt.id), name = "finish_time", placeholder = "01:23:45");
-                                                : help::label(&format!("review-{}-vod", attempt.id), "vod", "VOD URL (required for a finish)");
-                                                input(id = format!("review-{}-vod", attempt.id), name = "vod", type = "url", value = attempt.vod.as_deref().unwrap_or(""));
-                                                : help::label(&format!("review-{}-reason", attempt.id), "reason", "Reason");
-                                                textarea(id = format!("review-{}-reason", attempt.id), name = "reason", required? = true);
-                                            }, Vec::new(), "Save reviewed change");
-                                            pre : serde_json::to_string_pretty(&attempt.correction_history).unwrap_or_default();
+                                            }
                                         }
                                     }
 
@@ -977,6 +991,7 @@ pub(crate) struct PooledResultForm {
     attempt_id: i64,
     control_version: i64,
     action: String,
+    #[field(default = String::new())]
     reason: String,
     #[field(default = String::new())]
     outcome: String,
@@ -1047,17 +1062,13 @@ pub(crate) async fn post_pooled_result(
             )
             .await
         }
-        "disclosure" | "reverse_disclosure" => {
-            pooled_qualifiers::disclosure(
-                &mut tx,
-                value.attempt_id,
-                value.control_version,
-                me.id.into(),
-                &value.reason,
-                value.action == "reverse_disclosure",
-            )
-            .await
-        }
+        "dq" => pooled_qualifiers::correct_result(
+            &mut tx, value.attempt_id, value.control_version, me.id.into(),
+            &value.reason, pooled_qualifiers::Outcome::Dq, None,
+        ).await,
+        "invalidate" => pooled_qualifiers::invalidate_attempt(
+            &mut tx, value.attempt_id, value.control_version, me.id.into(), &value.reason,
+        ).await,
         _ => return Err(StatusOrError::Status(Status::BadRequest)),
     };
     result.map_err(|error| {
@@ -1074,6 +1085,7 @@ pub(crate) struct PooledRecoveryForm {
     attempt_id: i64,
     control_version: i64,
     action: String,
+    #[field(default = String::new())]
     reason: String,
     discord_id: Option<u64>,
 }
@@ -1096,9 +1108,6 @@ pub(crate) async fn post_pooled_recover(
     let value = form
         .value
         .ok_or(StatusOrError::Status(Status::BadRequest))?;
-    if value.reason.trim().is_empty() {
-        return Err(StatusOrError::Status(Status::BadRequest));
-    }
     let mut tx = pool.begin().await?;
     require_organizer(&mut tx, &me, series, event).await?;
     let row: Option<(String, Option<i64>, Option<i64>, String, bool, Option<i64>)> = sqlx::query_as(r#"SELECT attempt.state, attempt.discord_thread, event.discord_async_channel,
@@ -1120,7 +1129,7 @@ pub(crate) async fn post_pooled_recover(
                 let message = ChannelId::new(organizers_channel.unwrap() as u64)
                     .message(&*ctx, MessageId::new(id)).await?;
                 let bot = ctx.http.get_current_user().await?;
-                if message.author.id != bot.id || !message.content.ends_with(&format!("[qualifier:{}:retry-declared]", value.attempt_id)) {
+                if message.author.id != bot.id || !crate::async_race::pooled::has_delivery_marker(&message.content, value.attempt_id, "retry-declared") {
                     return Err(StatusOrError::Status(Status::BadRequest));
                 }
             }
@@ -1162,9 +1171,7 @@ pub(crate) async fn post_pooled_recover(
             let bot = ctx.http.get_current_user().await?;
             let key = format!("go-{}", value.control_version);
             if message.author.id != bot.id
-                || !message
-                    .content
-                    .ends_with(&format!("[qualifier:{}:{key}]", value.attempt_id))
+                || !crate::async_race::pooled::has_delivery_marker(&message.content, value.attempt_id, &key)
             {
                 return Err(StatusOrError::Status(Status::BadRequest));
             }
@@ -3137,6 +3144,23 @@ pub(crate) mod route_tests {
         assert_eq!(settings, json!({"base_settings": {"mode": "inverted"}}));
         sqlx::query("UPDATE pooled_qualifier_configs SET settings_locked_at=$3 WHERE series=$1 AND event=$2")
             .bind(series).bind(event).bind(old_lock).execute(pool).await.unwrap();
+        // Both per-attempt controls accept an omitted reason through the real form.
+        let (attempt_id, mut version): (i64, i64) = sqlx::query_as(
+            "SELECT id, control_version FROM qualifier_attempts WHERE series=$1 AND event=$2 AND state<>'void' AND counts_for_entrant AND team_id IN (SELECT team FROM team_members WHERE member=$3) ORDER BY id DESC LIMIT 1",
+        ).bind(series).bind(event).bind(outsider).fetch_one(pool).await.unwrap();
+        for action in ["dq", "invalidate"] {
+            let response = client.post(format!("{base}/pooled-result"))
+                .header(ContentType::Form)
+                .private_cookie(rocket::http::Cookie::new("csrf_token", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="))
+                .header(rocket::http::Header::new("x-test-user", staff.to_string()))
+                .body(encode(&format!("attempt_id={attempt_id}&control_version={version}&action={action}")))
+                .dispatch().await;
+            assert_eq!(response.status(), Status::SeeOther, "{action} without a reason");
+            let row: (String, bool, Option<String>, String) = sqlx::query_as("SELECT state, counts_for_entrant, official_outcome, correction_history->-1->>'reason' FROM qualifier_attempts WHERE id=$1")
+                .bind(attempt_id).fetch_one(pool).await.unwrap();
+            assert_eq!(row, if action == "dq" { ("finalized".into(), true, Some("dq".into()), "".into()) } else { ("void".into(), false, None, "".into()) });
+            version += 1;
+        }
         private_seeds[1]
     }
 }

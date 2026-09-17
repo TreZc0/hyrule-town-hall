@@ -1024,6 +1024,15 @@ impl AsyncRaceManager {
         content.push_line("");
         content.push_line("");
 
+        Self::append_qualifier_recording_requirements(transaction, event, &mut content).await?;
+        Ok(content)
+    }
+
+    async fn append_qualifier_recording_requirements(
+        transaction: &mut Transaction<'_, Postgres>,
+        event: &EventData<'_>,
+        content: &mut MessageBuilder,
+    ) -> Result<(), Error> {
         content.push("**Recording Requirements:**");
         content.push_line("");
         content.push("• Upload your recording to YouTube (unlisted is fine).");
@@ -1059,7 +1068,7 @@ impl AsyncRaceManager {
         }
         content.push_line("");
 
-        Ok(content)
+        Ok(())
     }
 
     pub(crate) async fn handle_ready_button(
@@ -1849,7 +1858,7 @@ pub(crate) async fn run_countdown(
         control_version,
     } = *run
     {
-        let claimed = pooled_qualifiers::request_start(pool, attempt_id, control_version).await?;
+        let claimed = pooled_qualifiers::request_start(pool, attempt_id, control_version, false).await?;
         if claimed {
             pooled::reconcile(pool, http, attempt_id).await?;
         }
@@ -2376,10 +2385,6 @@ pub(crate) async fn handle_ready_pooled(
             ctx,
             CreateInteractionResponse::UpdateMessage(
                 CreateInteractionResponseMessage::new()
-                    .content(format!(
-                        "Seed assigned. Preparation allowance: {} minutes.",
-                        revealed.start_delay_minutes
-                    ))
                     .components(vec![]),
             ),
         )
