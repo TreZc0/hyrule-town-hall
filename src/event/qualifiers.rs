@@ -42,7 +42,7 @@ async fn qualifiers_form(
         LEFT JOIN qualifier_seeds seed ON seed.live_race_id = race.id AND seed.source = 'live'
         LEFT JOIN qualifier_modes mode ON mode.id = seed.mode_id
         WHERE race.series = $1 AND race.event = $2 AND race.is_qualifier
-        ORDER BY race.start NULLS LAST, race.round"#,
+        ORDER BY race.start ASC NULLS LAST, race.round, race.id"#,
         event.series as _,
         &event.event
     )
@@ -133,6 +133,7 @@ async fn qualifiers_form(
     Ok(page(transaction, &Some(me), &uri, PageStyle { chests: event.chests().await?, ..PageStyle::default() }, &format!("Qualifiers — {}", event.display_name), html! {
         : header;
         script(src = static_url!("setting-help.js")) {}
+        script(defer, src = static_url!("qualifier-race-edit.js")) {}
         article(class = "qualifier-admin") {
             : rank_editor;
             @if let Some(ref config) = pooled_config {
@@ -141,7 +142,7 @@ async fn qualifiers_form(
                     a(href = "#pooled-attempts") : "Attempts & results";
                     a(href = "#pooled-seeds") : "Seed pools";
                     a(href = "#pooled-live") : "Live eligibility";
-                    a(href = "#qualifier-setup") : "Setup";
+                    a(href = "#qualifier-setup", class = "qualifier-setup-link") : "Setup";
                 }
                 : pooled_standings;
                 h2(id = "pooled-attempts", class = "qualifier-section-title") : "Attempts & result review";
@@ -244,8 +245,8 @@ async fn qualifiers_form(
                     p(class = "qualifier-intro") : "Assignments and results grouped by mode and seed. Reload to see generation progress. Expand Setup below to generate seeds.";
                     @if pooled_modes.is_empty() { p(class = "qualifier-empty") : "Expand Setup below to add a mode and prepare its seed pool."; }
                     @for mode in &pooled_modes {
-                        section(class = "qualifier-pool-card") {
-                            h3 { : &mode.display_name; span(class = "qualifier-badge") : if mode.enabled { "Enabled" } else { "Disabled" }; }
+                        details(class = "qualifier-pool-card") {
+                            summary { : &mode.display_name; span(class = "qualifier-badge") : if mode.enabled { "Enabled" } else { "Disabled" }; }
                             p(class = "qualifier-hint") : "Assignment counts exclude void attempts. Replaced attempts remain in their original seed group and may still contribute to par. Expand a seed for its assigned entrants and results.";
                             : pools::overview(config, mode.id, &pooled_seeds, &pooled_attempts, event.discord_guild.map(|guild| guild.get()));
                         }
@@ -253,12 +254,13 @@ async fn qualifiers_form(
                 }
 
                 h2(id = "pooled-live", class = "qualifier-section-title") : "Live race eligibility";
-                p(class = "qualifier-intro") : "The cutoff determines who may count a live qualifier. At GO records presence at the start. Retry reservations are shown as reserved, committed or released; the attempt ID connects an eligible start to its result.";
+                p(class = "qualifier-intro") : "At the entry cutoff, the bot makes the room invite-only and checks who can earn a score. A racer only uses an attempt if they are still in the race when it starts.";
+                p(class = "qualifier-intro") : "Racers with an existing result in this pool must declare a re-attempt on their event status page before the entry cutoff for their new score to count. Leaving before the start keeps that declaration pending. The Reason column explains why a racer is excluded.";
                 @if pooled_live_entries.is_empty() {
-                    p : "No live entry cutoff has been recorded.";
+                    p : "Entrants will appear here when a live race reaches its entry cutoff.";
                 } else {
                     table {
-                        thead { tr { th : "Race"; th : "Mode"; th : "Racetime entrant"; th : "Eligible"; th : "At GO"; th : "Retry"; th : "Attempt"; th : "Reason"; } }
+                        thead { tr { th : "Race"; th : "Mode"; th : "Racetime entrant"; th : "Eligible"; th : "Present at start"; th : "Re-attempt"; th : "Attempt"; th : "Reason"; } }
                         tbody {
                             @for entry in &pooled_live_entries {
                                 tr {
@@ -267,7 +269,7 @@ async fn qualifiers_form(
                                     td : &entry.racetime_entrant_id;
                                     td : entry.eligible.map(|value| if value { "yes" } else { "no" }).unwrap_or("pending");
                                     td : entry.present_at_go.map(|value| if value { "yes" } else { "no" }).unwrap_or("pending");
-                                    td : if entry.retry_committed_at.is_some() { "committed" } else if entry.retry_released_at.is_some() { "released" } else if entry.retry_reserved_at.is_some() { "reserved" } else { "" };
+                                    td : if entry.retry_committed_at.is_some() { "Used" } else if entry.retry_released_at.is_some() { "Not used" } else if entry.retry_reserved_at.is_some() { "Pending" } else { "" };
                                     td : entry.attempt_id.map(|id| id.to_string()).unwrap_or_default();
                                     td : entry.exclusion_reason.as_deref().unwrap_or("");
                                 }
@@ -277,8 +279,11 @@ async fn qualifiers_form(
                 }
             }
 
-            details(id = "qualifier-setup", class = "qualifier-disclosure", open? = ctx.errors().next().is_some()) {
-                summary : "Setup";
+            details(id = "qualifier-setup", class = "qualifier-disclosure qualifier-setup-panel", open? = ctx.errors().next().is_some()) {
+                summary {
+                    : "Setup";
+                    span(class = "qualifier-setup-description") : "Settings, modes, seed generation and live races";
+                }
                 h2 : "Qualifier Announcement Ping";
                 : full_form(uri!(post_notification_role(event.series, &*event.event)), csrf, html! {
                     : form_field("notification_role_id", &mut ctx.errors().collect_vec(), html! {
@@ -337,7 +342,7 @@ async fn qualifiers_form(
                                 @if pooled_config.is_none() { th : "Number"; }
                                 th : "Phase";
                                 th : "Round";
-                                th : "Start Time";
+                                th : "Start Time (UTC)";
                                 th : "Room";
                                 @if pooled_config.is_some() { th : "Mode"; }
                                 @if !is_started {
@@ -347,21 +352,21 @@ async fn qualifiers_form(
                         }
                         tbody {
                             @for row in races {
-                                tr {
-                                    @if pooled_config.is_none() { td : row.qualifier_number.unwrap_or(1); }
-                                    td : row.phase.as_deref().unwrap_or("");
-                                    td : row.round.as_deref().unwrap_or("");
-                                    td : row.start.map(|dt| dt.format("%Y-%m-%d %H:%M UTC").to_string()).unwrap_or("Unscheduled".to_owned());
-                                    td {
+                                tr(data_qualifier_race = row.id.to_string()) {
+                                    @if pooled_config.is_none() { td(data_race_field = "qualifier_number") : row.qualifier_number.unwrap_or(1); }
+                                    td(data_race_field = "race_phase") : row.phase.as_deref().unwrap_or("");
+                                    td(data_race_field = "race_round") : row.round.as_deref().unwrap_or("");
+                                    td(data_race_field = "race_start") : row.start.map(|dt| dt.format("%Y-%m-%d %H:%M UTC").to_string()).unwrap_or("Unscheduled".to_owned());
+                                    td(data_race_field = "race_room") {
                                         @if let Some(ref room) = row.room {
                                             a(href = room) : room;
                                         }
                                     }
-                                    @if pooled_config.is_some() { td : row.mode_name.as_deref().unwrap_or("Unassigned");
+                                    @if pooled_config.is_some() { td(data_race_field = "qualifier_mode_id") : row.mode_name.as_deref().unwrap_or("Unassigned");
                                     }
                                     @if !is_started {
-                                        td {
-                                            a(class = "button", href = uri!(get_edit(event.series, &*event.event, row.id)).to_string()) : "Edit";
+                                        td(class = "qualifier-race-actions") {
+                                            a(class = "button qualifier-race-edit", href = uri!(get_edit(event.series, &*event.event, row.id)).to_string()) : "Edit";
                                             : " | ";
                                             form(action = uri!(delete_race(event.series, &*event.event, row.id)).to_string(), method = "post", style = "display: inline;") {
                                                 input(type = "hidden", name = "csrf", value? = csrf.map(|token| token.authenticity_token()));
@@ -417,8 +422,9 @@ async fn qualifiers_form(
                     }, ctx.errors().collect_vec(), "Create Race");
                 }
             }
-            section(id = "seeding-race", class = "qualifier-section") {
-                h2 : "Seeding Race";
+            hr(class = "qualifier-seeding-divider");
+            details(id = "seeding-race", class = "qualifier-disclosure", open? = ctx.errors().next().is_some() && uri.0.path().as_str().ends_with("/create-seeding-race")) {
+                summary : "Seeding Race";
                 @if let Some(ref sr) = seeding_race {
                     table {
                         thead {
@@ -1819,7 +1825,7 @@ async fn edit_race_form(
 
     Ok(page(transaction, &Some(me), &uri, PageStyle { chests: event.chests().await?, ..PageStyle::default() }, &format!("Edit Qualifier Race — {}", event.display_name), html! {
         : header;
-        article {
+        article(class = "qualifier-admin") {
             h2 : "Edit Live Qualifier Race";
             : full_form(uri!(post_edit_race(event.series, &*event.event, race_id)), csrf, html! {
                 : form_field("race_phase", &mut ctx.errors().collect_vec(), html! {
@@ -1848,13 +1854,15 @@ async fn edit_race_form(
                     input(type = "text", name = "race_room", id = "race_room", value = ctx.field_value("race_room").unwrap_or(&race.room.unwrap_or_default()), placeholder = "https://racetime.gg/...", style = "width: 100%; max-width: 600px;");
                 });
                 @if event.qualifier_mode == "pooled_by_mode" {
-                    label(for = "qualifier_mode_id") : "Qualifier mode";
-                    select(name = "qualifier_mode_id", id = "qualifier_mode_id", required) {
-                        option(value = "") : "Select a mode";
-                        @for mode in modes.iter().filter(|mode| mode.enabled || Some(mode.id) == race.mode_id) {
-                            option(value = mode.id, selected? = Some(mode.id) == race.mode_id) : &mode.display_name;
+                    : form_field("qualifier_mode_id", &mut ctx.errors().collect_vec(), html! {
+                        label(for = "qualifier_mode_id") : "Qualifier mode";
+                        select(name = "qualifier_mode_id", id = "qualifier_mode_id", required) {
+                            option(value = "") : "Select a mode";
+                            @for mode in modes.iter().filter(|mode| mode.enabled || Some(mode.id) == race.mode_id) {
+                                option(value = mode.id, selected? = ctx.field_value("qualifier_mode_id").map_or(Some(mode.id) == race.mode_id, |value| value == mode.id.to_string())) : &mode.display_name;
+                            }
                         }
-                    }
+                    });
                 }
             }, ctx.errors().collect_vec(), "Update Race");
             p {
@@ -2839,7 +2847,7 @@ pub(crate) mod route_tests {
             assert!(setup.as_node().select_first("#seeding-race").is_err());
             assert!(
                 document
-                    .select_first("#qualifier-setup + #seeding-race")
+                    .select_first("#qualifier-setup + hr + details#seeding-race")
                     .is_ok()
             );
             assert!(
