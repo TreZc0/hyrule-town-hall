@@ -144,7 +144,7 @@ pub(super) fn modes(
                     @if config.settings_locked_at.is_some() || !config.requests_paused {
                         p(class = "qualifier-notice") : "Mode settings are protected while requests are enabled or after settings lock. Existing modes can still be renamed or reordered; adding modes or changing their rulesets is blocked.";
                     } else if !is_new {
-                        p(class = "qualifier-hint") : "If seed material already exists, only the name and display order can change. Finalize the ruleset before generating its pool.";
+                        p(class = "qualifier-hint") : "Correcting the baseline settings replaces this mode’s unused private seeds and queues them for generation again. This is only allowed before any seed is assigned or released, and before a live room opens or its seed generation starts. Generator and enabled-state changes remain locked once seeds exist.";
                     }
                     : full_form(uri!(super::post_pooled_mode(series, event)), csrf, html! {
                         input(type = "hidden", name = "mode_id", value = mode.id);
@@ -179,7 +179,7 @@ pub(super) fn modes(
                             input(id = &id, type = "checkbox", name = "enabled", checked? = mode.enabled);
                             : help::label(&id, "enabled", "Enable this mode");
                         }
-                        p(class = "qualifier-hint") : "Enabled modes count toward the required total. Saving a mode does not generate its seeds.";
+                        p(class = "qualifier-hint") : "Enabled modes count toward the required total. New modes need their seeds generated separately. Correcting an unused pool’s baseline automatically regenerates its existing private seed slots.";
                     }, Vec::new(), if is_new { "Add qualifier mode" } else { "Save mode changes" });
                 }
             }

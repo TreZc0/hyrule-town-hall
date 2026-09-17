@@ -2764,7 +2764,14 @@ pub(crate) mod tests {
         let state: String = sqlx::query_scalar("SELECT generation_state FROM qualifier_seeds WHERE id=$1").bind(other_seed).fetch_one(&pool).await.unwrap();
         assert_eq!(state, "failed");
 
-        event::qualifiers::route_tests::verify_pooled_routes(&pool, staff, entrants[0].1, series, event, other_mode).await;
+        let reset_seed = event::qualifiers::route_tests::verify_pooled_routes(&pool, staff, entrants[0].1, series, event, other_mode).await;
+        // Neither a late success nor a late failure from the old baseline may
+        // overwrite a private slot queued with corrected settings.
+        generation::complete(&pool, reset_seed, "old-baseline-worker", Ok(json!({"type":"alttpr_owr","uuid":"00000000-0000-0000-0000-000000000099"}))).await.unwrap();
+        generation::complete(&pool, reset_seed, "old-baseline-worker", Err(Error::NoSeed)).await.unwrap();
+        let reset: bool = sqlx::query_scalar("SELECT generation_state='pending' AND seed_data IS NULL AND generation_error IS NULL AND generation_claim IS NULL FROM qualifier_seeds WHERE id=$1")
+            .bind(reset_seed).fetch_one(&pool).await.unwrap();
+        assert!(reset);
         }).catch_unwind().await;
 
         sqlx::query("DELETE FROM qualifier_live_entries WHERE series = $1 AND event = $2")

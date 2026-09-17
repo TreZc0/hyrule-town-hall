@@ -842,6 +842,9 @@ pub(crate) async fn post_pooled_mode(
     let material_changed = existing.as_ref().is_none_or(|old| {
         old.0 != value.seed_gen_type || old.1 != seed_config || old.4 != value.enabled
     });
+    let baseline_correction = existing.as_ref().is_some_and(|old| {
+        old.0 == value.seed_gen_type && old.1 != seed_config && old.4 == value.enabled
+    });
     if (config.settings_locked_at.is_some() || !config.requests_paused) && material_changed {
         return Err(StatusOrError::Status(Status::Conflict));
     }
@@ -849,12 +852,17 @@ pub(crate) async fn post_pooled_mode(
         let has_seed_material: bool = sqlx::query_scalar(
             r#"SELECT EXISTS(SELECT 1 FROM qualifier_seeds seed
             WHERE seed.mode_id = $1 AND (
-                seed.generation_state <> 'pending' OR seed.seed_data IS NOT NULL
+                (NOT $2 OR seed.source = 'live') AND (
+                    seed.generation_state <> 'pending' OR seed.seed_data IS NOT NULL)
                 OR seed.released_at IS NOT NULL OR seed.entry_closed_at IS NOT NULL
                 OR EXISTS(SELECT 1 FROM qualifier_attempts attempt WHERE attempt.seed_id = seed.id)
+                OR EXISTS(SELECT 1 FROM qualifier_live_entries entry WHERE entry.seed_id = seed.id)
+                OR EXISTS(SELECT 1 FROM races race WHERE race.id = seed.live_race_id
+                    AND (race.room IS NOT NULL OR race.seed_data IS NOT NULL))
             ))"#,
         )
         .bind(value.mode_id)
+        .bind(baseline_correction)
         .fetch_one(&mut *transaction)
         .await?;
         if has_seed_material {
@@ -887,6 +895,20 @@ pub(crate) async fn post_pooled_mode(
             .execute(&mut *transaction).await?;
         if updated.rows_affected() != 1 {
             return Err(StatusOrError::Status(Status::NotFound));
+        }
+        if baseline_correction {
+            // The event lock serializes this with allocation and generation completion.
+            // Clearing the claim also prevents an old worker from publishing stale output.
+            sqlx::query(
+                r#"UPDATE qualifier_seeds SET generation_state = 'pending', seed_data = NULL,
+                    physical_seed_identity = NULL, generated_at = NULL,
+                    generation_claim = NULL, generation_claim_until = NULL, generation_error = NULL,
+                    settings_attested_by = NULL, settings_attested_at = NULL
+                WHERE mode_id = $1 AND source = 'async_pool' AND retired_at IS NULL"#,
+            )
+            .bind(value.mode_id)
+            .execute(&mut *transaction)
+            .await?;
         }
         sqlx::query(
             r#"UPDATE qualifier_seeds SET generator_profile = $2,
@@ -2776,7 +2798,7 @@ pub(crate) mod route_tests {
         series: &str,
         event: &str,
         mode: i64,
-    ) {
+    ) -> i64 {
         use rocket::{fairing::AdHoc, http::ContentType, local::asynchronous::Client};
         let auth_pool = pool.clone();
         let rocket = rocket::build()
@@ -3039,5 +3061,82 @@ pub(crate) mod route_tests {
             .dispatch()
             .await;
         assert_eq!(response.status(), Status::SeeOther);
+
+        // Correcting an unused baseline must replace all private slots atomically,
+        // while keeping live links and rejecting any already-used pool.
+        let old_lock: Option<DateTime<Utc>> = sqlx::query_scalar(
+            "SELECT settings_locked_at FROM pooled_qualifier_configs WHERE series=$1 AND event=$2",
+        ).bind(series).bind(event).fetch_one(pool).await.unwrap();
+        sqlx::query("UPDATE pooled_qualifier_configs SET settings_locked_at=NULL, requests_paused=TRUE WHERE series=$1 AND event=$2")
+            .bind(series).bind(event).execute(pool).await.unwrap();
+        let unused_mode: i64 = sqlx::query_scalar(r#"INSERT INTO qualifier_modes
+            (series,event,position,slug,display_name,seed_gen_type,seed_config,generator_profile,settings_fingerprint)
+            VALUES($1,$2,9,'unused-baseline','Unused baseline','owr','{"base_settings":{}}','default','old-baseline') RETURNING id"#)
+            .bind(series).bind(event).fetch_one(pool).await.unwrap();
+        let private_seeds: Vec<i64> = sqlx::query_scalar(r#"INSERT INTO qualifier_seeds
+            (series,event,mode_id,source,pool_position,generation_state,seed_data,generator_profile,physical_seed_identity,settings_fingerprint,
+                generation_claim,generation_claim_until,generated_at,settings_attested_by,settings_attested_at,generation_error)
+            VALUES
+            ($1,$2,$3,'async_pool',1,'ready','{"old":true}','default','unused-baseline-ready','old-baseline',NULL,NULL,NOW(),$4,NOW(),NULL),
+            ($1,$2,$3,'async_pool',2,'generating',NULL,'default',NULL,'old-baseline','old-baseline-worker',NOW()+INTERVAL '1 hour',NULL,NULL,NULL,NULL),
+            ($1,$2,$3,'async_pool',3,'failed',NULL,'default',NULL,'old-baseline',NULL,NULL,NULL,NULL,NULL,'old failure')
+            RETURNING id"#)
+            .bind(series).bind(event).bind(unused_mode).bind(staff).fetch_all(pool).await.unwrap();
+        let unused_race = -9_000_000_000_000_010_i64;
+        sqlx::query("INSERT INTO races(series,event,id,is_qualifier) VALUES($1,$2,$3,TRUE)")
+            .bind(series).bind(event).bind(unused_race).execute(pool).await.unwrap();
+        let live_seed: i64 = sqlx::query_scalar(r#"INSERT INTO qualifier_seeds
+            (series,event,mode_id,source,live_race_id,generator_profile,settings_fingerprint)
+            VALUES($1,$2,$3,'live',$4,'default','old-baseline') RETURNING id"#)
+            .bind(series).bind(event).bind(unused_mode).bind(unused_race).fetch_one(pool).await.unwrap();
+        let correction = |mode| format!(
+            "mode_id={mode}&position=9&display_name=Corrected&seed_gen_type=owr&seed_config=%7B%22base_settings%22%3A%7B%22mode%22%3A%22inverted%22%7D%7D&enabled=true"
+        );
+        for reason in ["active requests", "locked", "released", "live room", "live generation", "assigned"] {
+            match reason {
+                "active requests" => { sqlx::query("UPDATE pooled_qualifier_configs SET requests_paused=FALSE WHERE series=$1 AND event=$2").bind(series).bind(event).execute(pool).await.unwrap(); }
+                "locked" => { sqlx::query("UPDATE pooled_qualifier_configs SET settings_locked_at=NOW() WHERE series=$1 AND event=$2").bind(series).bind(event).execute(pool).await.unwrap(); }
+                "released" => { sqlx::query("UPDATE qualifier_seeds SET released_at=NOW() WHERE id=$1").bind(private_seeds[0]).execute(pool).await.unwrap(); }
+                "live room" => { sqlx::query("UPDATE races SET room='https://racetime.gg/alttpr/test-unused' WHERE id=$1").bind(unused_race).execute(pool).await.unwrap(); }
+                "live generation" => { sqlx::query("UPDATE qualifier_seeds SET generation_state='generating' WHERE id=$1").bind(live_seed).execute(pool).await.unwrap(); }
+                "assigned" => (), // The existing mode already has assigned attempts.
+                _ => unreachable!(),
+            }
+            let response = client.post(format!("{base}/pooled-mode"))
+                .header(ContentType::Form)
+                .private_cookie(rocket::http::Cookie::new("csrf_token", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="))
+                .header(rocket::http::Header::new("x-test-user", staff.to_string()))
+                .body(encode(&correction(if reason == "assigned" { mode } else { unused_mode })))
+                .dispatch().await;
+            assert_eq!(response.status(), Status::Conflict, "must protect {reason}");
+            let unchanged: bool = sqlx::query_scalar("SELECT seed_config = '{\"base_settings\":{}}'::JSONB FROM qualifier_modes WHERE id=$1")
+                .bind(unused_mode).fetch_one(pool).await.unwrap();
+            assert!(unchanged);
+            sqlx::query("UPDATE pooled_qualifier_configs SET requests_paused=TRUE, settings_locked_at=NULL WHERE series=$1 AND event=$2").bind(series).bind(event).execute(pool).await.unwrap();
+            sqlx::query("UPDATE qualifier_seeds SET released_at=NULL WHERE id=$1").bind(private_seeds[0]).execute(pool).await.unwrap();
+            sqlx::query("UPDATE races SET room=NULL WHERE id=$1").bind(unused_race).execute(pool).await.unwrap();
+            sqlx::query("UPDATE qualifier_seeds SET generation_state='pending' WHERE id=$1").bind(live_seed).execute(pool).await.unwrap();
+        }
+        let response = client.post(format!("{base}/pooled-mode"))
+            .header(ContentType::Form)
+            .private_cookie(rocket::http::Cookie::new("csrf_token", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="))
+            .header(rocket::http::Header::new("x-test-user", staff.to_string()))
+            .body(encode(&correction(unused_mode))).dispatch().await;
+        assert_eq!(response.status(), Status::SeeOther);
+        let reset: i64 = sqlx::query_scalar(r#"SELECT COUNT(*) FROM qualifier_seeds seed
+            JOIN qualifier_modes mode ON mode.id=seed.mode_id WHERE mode.id=$1
+            AND seed.generation_state='pending' AND seed.seed_data IS NULL
+            AND seed.physical_seed_identity IS NULL AND seed.generated_at IS NULL
+            AND seed.generation_claim IS NULL AND seed.generation_claim_until IS NULL AND seed.generation_error IS NULL
+            AND seed.settings_attested_by IS NULL AND seed.settings_attested_at IS NULL
+            AND seed.settings_fingerprint=mode.settings_fingerprint AND seed.settings_fingerprint <> 'old-baseline'"#)
+            .bind(unused_mode).fetch_one(pool).await.unwrap();
+        assert_eq!(reset, 4, "private slots reset and pending live seed receives the corrected fingerprint");
+        let settings: serde_json::Value = sqlx::query_scalar("SELECT seed_config FROM qualifier_modes WHERE id=$1")
+            .bind(unused_mode).fetch_one(pool).await.unwrap();
+        assert_eq!(settings, json!({"base_settings": {"mode": "inverted"}}));
+        sqlx::query("UPDATE pooled_qualifier_configs SET settings_locked_at=$3 WHERE series=$1 AND event=$2")
+            .bind(series).bind(event).bind(old_lock).execute(pool).await.unwrap();
+        private_seeds[1]
     }
 }
