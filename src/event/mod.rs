@@ -1983,10 +1983,11 @@ async fn status_page(
                     @if let QualifierKind::PooledByMode { required_modes } = qualifier_kind {
                         @let config = pooled_qualifiers::Config::load(&mut transaction, data.series, &data.event).await?
                             .ok_or(pooled_qualifiers::Error::NotConfigured)?;
+                        : pooled_qualifiers::standings_notice(&config);
                         @let modes = pooled_qualifiers::Mode::for_event(&mut transaction, data.series, &data.event).await?;
                         @let attempts = pooled_qualifiers::Attempt::for_team(&mut transaction, row.id.into()).await?;
                         @let own_standing = pooled_qualifiers::standings(&mut transaction, &config).await?
-                            .into_iter().find(|standing| standing.team_id == i64::from(row.id));
+                            .into_iter().find(|standing| standing.team_id == Some(i64::from(row.id)));
                         @let live_races = sqlx::query_as::<_, (i64, i64, DateTime<Utc>, Option<String>)>(
                             r#"SELECT seed.id, seed.mode_id, race.start, race.room
                             FROM qualifier_seeds seed JOIN races race ON race.id = seed.live_race_id
@@ -2000,7 +2001,7 @@ async fn status_page(
                         ).bind(data.series).bind(&data.event).fetch_all(&mut *transaction).await?;
                         @let retry_used = sqlx::query_scalar::<_, bool>(
                             r#"SELECT EXISTS(
-                                SELECT 1 FROM qualifier_attempts WHERE team_id = $1 AND retry_of IS NOT NULL AND state <> 'void'
+                                SELECT 1 FROM qualifier_attempts WHERE qualifier_runner_team(series,event,racetime_id,$1) AND retry_of IS NOT NULL AND state <> 'void'
                             )"#
                         ).bind(i64::from(row.id)).fetch_one(&mut *transaction).await?;
                         @let retry_declared = attempts.iter().any(|attempt| attempt.counts_for_entrant && attempt.retry_declared_at.is_some());
@@ -2522,6 +2523,38 @@ async fn status_page(
                 : header;
                 article {
                     p : "You are not signed up for this event.";
+                    @if let Some(config) = pooled_qualifiers::Config::load(&mut transaction, data.series, &data.event).await? {
+                        : pooled_qualifiers::standings_notice(&config);
+                        @if let Some(racetime) = &me.racetime {
+                            @let attempts = pooled_qualifiers::Attempt::for_runner(&mut transaction, data.series, &data.event, &racetime.id).await?;
+                            @let standings = pooled_qualifiers::standings(&mut transaction, &config).await?;
+                            @let standing = standings.iter().find(|standing| standing.racetime_id == racetime.id);
+                            @let modes = pooled_qualifiers::Mode::for_event(&mut transaction, data.series, &data.event).await?;
+                            @let pooled_ctx = ctx.take_request_pooled_async();
+                            @for error in pooled_ctx.errors() { p(class = "error") : error; }
+                            @for attempt in attempts.iter().filter(|attempt| attempt.counts_for_entrant) {
+                                @let mode = modes.iter().find(|mode| mode.id == attempt.mode_id);
+                                p {
+                                    strong : mode.map(|mode| mode.display_name.as_str()).unwrap_or("Qualifier");
+                                    : " — ";
+                                    @let score = mode.and_then(|mode| standing.and_then(|standing| standing.mode_scores.iter().find(|(position, _, _)| *position == mode.position))).map(|(_, score, _)| *score)
+                                        .filter(|_| !pooled_qualifiers::hide_score(data.qualifier_score_hiding, config.results_release_at.is_some_and(|end| end <= Utc::now()), false, false));
+                                    : attempt.status_summary(score);
+                                }
+                                @if attempt.retry_declared_at.is_some() {
+                                    p : "Retry declared. Join an eligible live qualifier before its entry cutoff.";
+                                } else if config.requests_open(Utc::now(), true) && config.retry_limit > 0 && attempt.retry_banned_at.is_none() && matches!(attempt.state.as_str(), "finalized" | "awaiting_verification") {
+                                    : full_form(uri!(declare_pooled_retry(data.series, &*data.event)), csrf, html! {
+                                        input(type = "hidden", name = "mode_id", value = attempt.mode_id);
+                                        input(type = "hidden", name = "original_attempt_id", value = attempt.id);
+                                        input(type = "checkbox", name = "confirm", id = format!("live-retry-{}", attempt.id), required? = true);
+                                        label(for = format!("live-retry-{}", attempt.id)) : "Replace this result with my next live attempt, even if it is worse.";
+                                    }, Vec::new(), "Declare live retry");
+                                }
+                            }
+                        }
+                    }
+
                     p {
                         : "If you want to change that, please see ";
                         a(href = uri!(enter::get(data.series, &*data.event, _, _))) : "the Enter tab";
@@ -3213,7 +3246,8 @@ pub(crate) async fn resign_post(
                 "You can no longer resign from this event since it has already ended.",
             ));
         }
-        let keep_record = data.is_started(&mut transaction).await?
+        let keep_record = data.qualifier_mode == "pooled_by_mode"
+            || data.is_started(&mut transaction).await?
             || sqlx::query_scalar!(
                 r#"SELECT EXISTS (SELECT 1 FROM async_teams WHERE team = $1) AS "exists!""#,
                 team.id as _
@@ -4708,7 +4742,10 @@ pub(crate) async fn declare_pooled_retry(
             "This event does not use pooled qualifiers.",
         ));
     }
-    if team_id.is_none() {
+    let pooled = pooled_qualifiers::Config::load(&mut transaction, series, event)
+        .await?
+        .is_some();
+    if team_id.is_none() && !pooled {
         form.context.push_error(form::Error::validation(
             "You are not signed up for this event.",
         ));
@@ -4719,17 +4756,28 @@ pub(crate) async fn declare_pooled_retry(
     }
     if form.context.errors().next().is_none() {
         let value = form.value.as_ref().expect("validated form");
-        let team_id = team_id.expect("validated team");
         transaction.rollback().await?;
-        match pooled_qualifiers::declare_retry(
-            pool,
-            team_id,
-            value.mode_id,
-            value.original_attempt_id,
-            me.id.into(),
-        )
-        .await
-        {
+        let result = if let Some(team_id) = team_id {
+            pooled_qualifiers::declare_retry(
+                pool,
+                team_id,
+                value.mode_id,
+                value.original_attempt_id,
+                me.id.into(),
+            )
+            .await
+        } else {
+            pooled_qualifiers::declare_live_retry(
+                pool,
+                series,
+                event,
+                value.mode_id,
+                value.original_attempt_id,
+                me.id.into(),
+            )
+            .await
+        };
+        match result {
             Ok(()) => {
                 return Ok(RedirectOrContent::Redirect(Redirect::to(uri!(status(
                     series, event

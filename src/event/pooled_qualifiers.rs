@@ -7,6 +7,8 @@ use {
 use crate::prelude::*;
 
 pub(crate) mod generation;
+#[cfg(test)]
+mod provisional_tests;
 
 pub(crate) fn physical_seed_identity(data: &serde_json::Value) -> Option<String> {
     match seed::Files::from_seed_data(data)? {
@@ -88,6 +90,15 @@ pub(crate) async fn lock_attempt(
     Ok(())
 }
 
+pub(crate) async fn signup_closed_in(
+    transaction: &mut Transaction<'_, Postgres>,
+    series: Series,
+    event: &str,
+) -> Result<bool, sqlx::Error> {
+    Ok(sqlx::query_scalar("SELECT COALESCE(submissions_close_at <= clock_timestamp(), FALSE) FROM pooled_qualifier_configs WHERE series=$1 AND event=$2")
+        .bind(series).bind(event).fetch_optional(&mut **transaction).await?.unwrap_or(false))
+}
+
 #[derive(Clone, Debug, sqlx::FromRow)]
 pub(crate) struct Config {
     pub(crate) series: String,
@@ -143,6 +154,11 @@ impl Config {
             && self.submissions_close_at.is_some_and(|end| now < end)
             && self.results_release_at.is_some()
             && self.retries_close_at.is_some_and(|end| !retry || now < end)
+    }
+
+    pub(crate) fn signup_closed(&self) -> bool {
+        self.submissions_close_at
+            .is_some_and(|end| end <= Utc::now())
     }
 
     pub(crate) fn run_limit(&self) -> chrono::Duration {
@@ -206,12 +222,22 @@ impl Attempt {
         team_id: i64,
     ) -> Result<Vec<Self>, sqlx::Error> {
         sqlx::query_as::<_, Self>(&format!(
-            "SELECT {} FROM qualifier_attempts WHERE team_id = $1 AND state <> 'void' ORDER BY requested_at, id",
+            "SELECT {} FROM qualifier_attempts WHERE qualifier_runner_team(series, event, racetime_id, $1) AND state <> 'void' ORDER BY requested_at, id",
             Self::COLUMNS,
         ))
         .bind(team_id)
         .fetch_all(&mut **transaction)
         .await
+    }
+
+    pub(crate) async fn for_runner(
+        transaction: &mut Transaction<'_, Postgres>,
+        series: Series,
+        event: &str,
+        racetime_id: &str,
+    ) -> Result<Vec<Self>, sqlx::Error> {
+        sqlx::query_as(&format!("SELECT {} FROM qualifier_attempts WHERE series=$1 AND event=$2 AND racetime_id=$3 AND state <> 'void' ORDER BY requested_at,id", Self::COLUMNS))
+            .bind(series).bind(event).bind(racetime_id).fetch_all(&mut **transaction).await
     }
 
     pub(crate) fn is_active_async(&self) -> bool {
@@ -479,7 +505,7 @@ async fn check_verifier(
 ) -> Result<(), Error> {
     let (organizer, participant): (bool, bool) = sqlx::query_as(r#"SELECT
         EXISTS(SELECT 1 FROM organizers WHERE organizer = $2 AND (series, event) = (SELECT series, event FROM qualifier_attempts WHERE id = $1)),
-        EXISTS(SELECT 1 FROM team_members WHERE member = $2 AND team = (SELECT team_id FROM qualifier_attempts WHERE id = $1))"#)
+        EXISTS(SELECT 1 FROM users JOIN qualifier_attempts ON qualifier_attempts.racetime_id=users.racetime_id WHERE users.id=$2 AND qualifier_attempts.id=$1)"#)
         .bind(attempt_id).bind(actor).fetch_one(&mut **tx).await?;
     if !organizer && !User::GLOBAL_ADMIN_USER_IDS.contains(&(actor as u64)) {
         return Err(Error::NotOrganizer);
@@ -629,7 +655,7 @@ async fn check_retry_ban(
     team: i64,
     mode: i64,
 ) -> Result<(), Error> {
-    if sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM qualifier_attempts WHERE team_id = $1 AND mode_id = $2 AND retry_banned_at IS NOT NULL)")
+    if sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM qualifier_attempts WHERE qualifier_runner_team(series, event, racetime_id, $1) AND mode_id = $2 AND retry_banned_at IS NOT NULL)")
         .bind(team).bind(mode).fetch_one(&mut **tx).await? { return Err(Error::RetryForbidden); }
     Ok(())
 }
@@ -751,7 +777,7 @@ async fn allocation_candidates(
           AND NOT EXISTS (
               SELECT 1 FROM qualifier_attempts previous
               JOIN qualifier_seeds previous_seed ON previous_seed.id = previous.seed_id
-              WHERE previous.team_id = $2 AND previous.mode_id = $1 AND previous.state = 'void'
+              WHERE qualifier_runner_team(previous.series, previous.event, previous.racetime_id, $2) AND previous.mode_id = $1 AND previous.state = 'void'
                 AND (previous.seed_id = seed.id OR previous_seed.physical_seed_identity = seed.physical_seed_identity)
           )
         GROUP BY seed.id ORDER BY seed.id"#,
@@ -854,9 +880,9 @@ async fn check_overlap(
 ) -> Result<(), Error> {
     if sqlx::query_scalar::<_, bool>(
         r#"SELECT EXISTS(
-        SELECT 1 FROM qualifier_attempts WHERE team_id = $1
+        SELECT 1 FROM qualifier_attempts WHERE qualifier_runner_team(series, event, racetime_id, $1)
           AND state IN ('assigned', 'revealed', 'starting', 'running')
-        UNION ALL SELECT 1 FROM qualifier_live_entries WHERE team_id = $1
+        UNION ALL SELECT 1 FROM qualifier_live_entries WHERE qualifier_runner_team(series, event, racetime_entrant_id, $1)
           AND eligible AND present_at_go IS NULL)"#,
     )
     .bind(team_id)
@@ -877,7 +903,7 @@ pub(crate) async fn request_async(
     let mut transaction = pool.begin().await?;
     let config = lock_request_context(&mut transaction, team_id, mode_id).await?;
     if let Some(existing_id) = sqlx::query_scalar::<_, i64>(
-        "SELECT id FROM qualifier_attempts WHERE team_id = $1 AND mode_id = $2 AND counts_for_entrant AND state <> 'void'",
+        "SELECT id FROM qualifier_attempts WHERE qualifier_runner_team(series, event, racetime_id, $1) AND mode_id = $2 AND counts_for_entrant AND state <> 'void'",
     )
     .bind(team_id)
     .bind(mode_id)
@@ -904,7 +930,7 @@ pub(crate) async fn request_async(
         r#"INSERT INTO qualifier_attempts
             (series, event, mode_id, seed_id, team_id, attempt_sequence, source, created_by)
         SELECT mode.series, mode.event, mode.id, $1, $2,
-            (SELECT (COALESCE(MAX(attempt_sequence), 0) + 1)::SMALLINT FROM qualifier_attempts WHERE team_id = $2 AND mode_id = mode.id), 'async', $3
+            (SELECT (COALESCE(MAX(attempt_sequence), 0) + 1)::SMALLINT FROM qualifier_attempts WHERE qualifier_runner_team(series, event, racetime_id, $2) AND mode_id = mode.id), 'async', $3
         FROM qualifier_modes mode WHERE mode.id = $4 RETURNING id"#,
     )
     .bind(seed_id)
@@ -931,7 +957,7 @@ pub(crate) async fn request_async_retry(
     }
     if let Some(replacement_id) = sqlx::query_scalar::<_, i64>(
         r#"SELECT id FROM qualifier_attempts
-        WHERE team_id = $1 AND retry_of IS NOT NULL AND state <> 'void'"#,
+        WHERE qualifier_runner_team(series, event, racetime_id, $1) AND retry_of IS NOT NULL AND state <> 'void'"#,
     )
     .bind(team_id)
     .fetch_optional(&mut *transaction)
@@ -947,7 +973,7 @@ pub(crate) async fn request_async_retry(
     check_requests(&config, true)?;
     check_overlap(&mut transaction, team_id).await?;
     if sqlx::query_scalar::<_, bool>(
-        r#"SELECT EXISTS(SELECT 1 FROM qualifier_live_entries WHERE team_id = $1
+        r#"SELECT EXISTS(SELECT 1 FROM qualifier_live_entries WHERE qualifier_runner_team(series, event, racetime_entrant_id, $1)
             AND retry_reserved_at IS NOT NULL AND retry_committed_at IS NULL
             AND retry_released_at IS NULL)"#,
     )
@@ -959,14 +985,14 @@ pub(crate) async fn request_async_retry(
     }
     check_retry_ban(&mut transaction, team_id, mode_id).await?;
     let declared_mode: Option<i64> = sqlx::query_scalar(
-        "SELECT mode_id FROM qualifier_attempts WHERE team_id=$1 AND counts_for_entrant AND state <> 'void' AND retry_declared_at IS NOT NULL",
+        "SELECT mode_id FROM qualifier_attempts WHERE qualifier_runner_team(series, event, racetime_id, $1) AND counts_for_entrant AND state <> 'void' AND retry_declared_at IS NOT NULL",
     ).bind(team_id).fetch_optional(&mut *transaction).await?;
     if declared_mode.is_some_and(|declared| declared != mode_id) {
         return Err(Error::RetryUnavailable);
     }
     let original_id: i64 = sqlx::query_scalar(
         r#"SELECT id FROM qualifier_attempts
-        WHERE team_id = $1 AND mode_id = $2 AND counts_for_entrant
+        WHERE qualifier_runner_team(series, event, racetime_id, $1) AND mode_id = $2 AND counts_for_entrant
           AND state IN ('awaiting_verification', 'finalized') FOR UPDATE"#,
     )
     .bind(team_id)
@@ -998,7 +1024,7 @@ pub(crate) async fn request_async_retry(
         }),
     });
     let next_sequence: i16 = sqlx::query_scalar(
-        "SELECT (COALESCE(MAX(attempt_sequence), 0) + 1)::SMALLINT FROM qualifier_attempts WHERE team_id = $1 AND mode_id = $2",
+        "SELECT (COALESCE(MAX(attempt_sequence), 0) + 1)::SMALLINT FROM qualifier_attempts WHERE qualifier_runner_team(series, event, racetime_id, $1) AND mode_id = $2",
     )
     .bind(team_id)
     .bind(mode_id)
@@ -1050,7 +1076,7 @@ pub(crate) async fn declare_retry(
         return Err(Error::RetryUnavailable);
     }
     let used: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM qualifier_attempts WHERE team_id=$1 AND retry_of IS NOT NULL AND state <> 'void')",
+        "SELECT EXISTS(SELECT 1 FROM qualifier_attempts WHERE qualifier_runner_team(series, event, racetime_id, $1) AND retry_of IS NOT NULL AND state <> 'void')",
     ).bind(team_id).fetch_one(&mut *transaction).await?;
     if used {
         return Err(Error::RetryUnavailable);
@@ -1058,7 +1084,7 @@ pub(crate) async fn declare_retry(
     check_retry_ban(&mut transaction, team_id, mode_id).await?;
     let original: Option<Option<DateTime<Utc>>> = sqlx::query_scalar(
         r#"SELECT retry_declared_at FROM qualifier_attempts
-        WHERE id=$1 AND team_id=$2 AND mode_id=$3 AND counts_for_entrant
+        WHERE id=$1 AND qualifier_runner_team(series, event, racetime_id, $2) AND mode_id=$3 AND counts_for_entrant
           AND retry_banned_at IS NULL AND state IN ('awaiting_verification', 'finalized')"#,
     ).bind(original_id).bind(team_id).bind(mode_id).fetch_optional(&mut *transaction).await?;
     let declared_at = original.ok_or(Error::RetryForbidden)?;
@@ -1068,7 +1094,7 @@ pub(crate) async fn declare_retry(
     }
     check_requests(&config, true)?;
     let already_declared: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM qualifier_attempts WHERE team_id=$1 AND counts_for_entrant AND state <> 'void' AND retry_declared_at IS NOT NULL)",
+        "SELECT EXISTS(SELECT 1 FROM qualifier_attempts WHERE qualifier_runner_team(series, event, racetime_id, $1) AND counts_for_entrant AND state <> 'void' AND retry_declared_at IS NOT NULL)",
     ).bind(team_id).fetch_one(&mut *transaction).await?;
     if already_declared {
         return Err(Error::RetryUnavailable);
@@ -1085,6 +1111,63 @@ pub(crate) async fn declare_retry(
     Ok(())
 }
 
+pub(crate) async fn declare_live_retry(
+    pool: &PgPool,
+    series: Series,
+    event: &str,
+    mode_id: i64,
+    original_id: i64,
+    actor: i64,
+) -> Result<(), Error> {
+    let mut tx = pool.begin().await?;
+    lock_event(&mut tx, series, event).await?;
+    let config = Config::load(&mut tx, series, event)
+        .await?
+        .ok_or(Error::NotConfigured)?;
+    if config.retry_limit == 0 {
+        return Err(Error::RetryUnavailable);
+    }
+    let runner: String =
+        sqlx::query_scalar("SELECT racetime_id FROM users WHERE id=$1 AND racetime_id IS NOT NULL")
+            .bind(actor)
+            .fetch_optional(&mut *tx)
+            .await?
+            .ok_or(Error::RetryForbidden)?;
+    let original: Option<Option<DateTime<Utc>>> = sqlx::query_scalar(r#"SELECT retry_declared_at FROM qualifier_attempts
+        WHERE id=$1 AND series=$2 AND event=$3 AND racetime_id=$4 AND mode_id=$5 AND counts_for_entrant
+          AND retry_banned_at IS NULL AND state IN ('awaiting_verification','finalized')"#)
+        .bind(original_id).bind(series).bind(event).bind(&runner).bind(mode_id).fetch_optional(&mut *tx).await?;
+    let declared = original.ok_or(Error::RetryForbidden)?;
+    let unavailable: bool = sqlx::query_scalar(r#"SELECT EXISTS(SELECT 1 FROM qualifier_attempts
+        WHERE series=$1 AND event=$2 AND racetime_id=$3 AND
+          ((retry_of IS NOT NULL AND state<>'void') OR (mode_id=$4 AND retry_banned_at IS NOT NULL)
+           OR (id<>$5 AND retry_declared_at IS NOT NULL AND counts_for_entrant AND state<>'void')))"#)
+        .bind(series).bind(event).bind(&runner).bind(mode_id).bind(original_id).fetch_one(&mut *tx).await?;
+    if unavailable {
+        return Err(Error::RetryUnavailable);
+    }
+    if declared.is_none() {
+        check_requests(&config, true)?;
+        sqlx::query("UPDATE qualifier_attempts SET retry_declared_at=clock_timestamp(), retry_declared_by=$2 WHERE id=$1")
+            .bind(original_id).bind(actor).execute(&mut *tx).await?;
+    }
+    tx.commit().await?;
+    Ok(())
+}
+
+pub(crate) fn standings_notice(config: &Config) -> RawHtml<String> {
+    html! {
+        div(class = "bg-surface") {
+            p { strong : if config.signup_closed() { "Signup closed" } else { "Provisional rankings" }; }
+            p : "Rankings are provisional until qualifiers close and results are verified. Before the deadline, live players awaiting signup count toward standings and par times, including qualifying positions. Players who miss the signup deadline are excluded from both calculations, which may change everyone's points and rank.";
+            @if let Some(deadline) = config.submissions_close_at {
+                p { : "Event signup deadline: "; : format_datetime(deadline, DateTimeFormat { long: true, running_text: false }); }
+            }
+            p : format!("After signup closes, each seed's par is the average of its fastest {} eligible finishers, or all remaining eligible finishers if fewer remain.", config.par_finishers);
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct LiveEntrant {
     pub(crate) racetime_id: String,
@@ -1093,6 +1176,7 @@ pub(crate) struct LiveEntrant {
 #[derive(Clone, Debug)]
 pub(crate) struct LiveResult {
     pub(crate) racetime_id: String,
+    pub(crate) name: Option<String>,
     pub(crate) outcome: Outcome,
 }
 
@@ -1198,31 +1282,26 @@ pub(crate) async fn freeze_live_eligibility(
     .fetch_all(&mut *transaction)
     .await?;
     let mut summary = LiveFreezeSummary::default();
-    for (entry_id, racetime_id, user_id, team_id, mut retry_original) in entries {
+    for (entry_id, racetime_id, _user_id, _team_id, mut retry_original) in entries {
         let (eligible, reason) = if !present_ids.contains(racetime_id.as_str()) {
             (false, Some("not present at the entry cutoff"))
-        } else if user_id.is_none() || team_id.is_none() {
-            (
-                false,
-                Some("no active event registration linked to this racetime.gg account"),
-            )
         } else {
-            let team_id = team_id.expect("checked above");
             let active: bool = sqlx::query_scalar(
                 r#"SELECT EXISTS(SELECT 1 FROM qualifier_attempts
-                WHERE team_id = $1 AND state IN ('assigned', 'revealed', 'starting', 'running')
+                WHERE racetime_id = $1 AND (series,event)=(SELECT series,event FROM qualifier_modes WHERE id=$3) AND state IN ('assigned', 'revealed', 'starting', 'running')
                 UNION ALL SELECT 1 FROM qualifier_live_entries
-                WHERE team_id=$1 AND seed_id<>$2 AND eligible AND present_at_go IS NULL)"#,
+                WHERE racetime_entrant_id=$1 AND (series,event)=(SELECT series,event FROM qualifier_modes WHERE id=$3) AND seed_id<>$2 AND eligible AND present_at_go IS NULL)"#,
             )
-            .bind(team_id)
+            .bind(&racetime_id)
             .bind(seed_id)
+            .bind(mode_id)
             .fetch_one(&mut *transaction)
             .await?;
             let counted: Option<i64> = sqlx::query_scalar(
                 r#"SELECT id FROM qualifier_attempts
-                WHERE team_id = $1 AND mode_id = $2 AND counts_for_entrant AND state <> 'void'"#,
+                WHERE racetime_id = $1 AND mode_id = $2 AND counts_for_entrant AND state <> 'void'"#,
             )
-            .bind(team_id)
+            .bind(&racetime_id)
             .bind(mode_id)
             .fetch_optional(&mut *transaction)
             .await?;
@@ -1235,16 +1314,16 @@ pub(crate) async fn freeze_live_eligibility(
                     JOIN races race ON race.id=$3
                     JOIN pooled_qualifier_configs config
                       ON config.series=attempt.series AND config.event=attempt.event
-                    WHERE attempt.team_id=$1 AND attempt.mode_id=$2 AND attempt.counts_for_entrant
+                    WHERE attempt.racetime_id=$1 AND attempt.mode_id=$2 AND attempt.counts_for_entrant
                       AND attempt.state IN ('awaiting_verification', 'finalized')
                       AND attempt.retry_banned_at IS NULL AND config.retry_limit>0
                       AND attempt.retry_declared_at < race.start-config.live_entry_close_lead
                       AND NOT EXISTS(SELECT 1 FROM qualifier_attempts used
-                        WHERE used.team_id=$1 AND used.retry_of IS NOT NULL AND used.state<>'void')
+                        WHERE used.racetime_id=$1 AND used.series=attempt.series AND used.event=attempt.event AND used.retry_of IS NOT NULL AND used.state<>'void')
                       AND NOT EXISTS(SELECT 1 FROM qualifier_live_entries reserved
-                        WHERE reserved.team_id=$1 AND reserved.retry_reserved_at IS NOT NULL
+                        WHERE reserved.racetime_entrant_id=$1 AND reserved.series=attempt.series AND reserved.event=attempt.event AND reserved.retry_reserved_at IS NOT NULL
                           AND reserved.retry_committed_at IS NULL AND reserved.retry_released_at IS NULL)"#,
-                ).bind(team_id).bind(mode_id).bind(race_id).fetch_optional(&mut *transaction).await?;
+                ).bind(&racetime_id).bind(mode_id).bind(race_id).fetch_optional(&mut *transaction).await?;
                 if let Some((original_id, declared_at, declared_by)) = declared {
                     sqlx::query("UPDATE qualifier_live_entries SET retry_original_attempt_id=$2, retry_reserved_at=$3, retry_declared_by=$4, retry_released_at=NULL WHERE id=$1")
                         .bind(entry_id).bind(original_id).bind(declared_at).bind(declared_by)
@@ -1391,14 +1470,14 @@ pub(crate) async fn start_live(
         .bind(entry_id)
         .fetch_one(&mut *transaction)
         .await?;
-        let Some(team_id) = team_id.filter(|_| eligible) else {
+        if !eligible {
             continue;
-        };
+        }
 
         let next_sequence: i16 = sqlx::query_scalar(
-            "SELECT (COALESCE(MAX(attempt_sequence), 0) + 1)::SMALLINT FROM qualifier_attempts WHERE team_id = $1 AND mode_id = $2",
+            "SELECT (COALESCE(MAX(attempt_sequence), 0) + 1)::SMALLINT FROM qualifier_attempts WHERE racetime_id = $1 AND mode_id = $2",
         )
-        .bind(team_id)
+        .bind(&racetime_id)
         .bind(mode_id)
         .fetch_one(&mut *transaction)
         .await?;
@@ -1408,11 +1487,11 @@ pub(crate) async fn start_live(
             };
             let valid_original: bool = sqlx::query_scalar(
                 r#"SELECT EXISTS(SELECT 1 FROM qualifier_attempts WHERE id = $1
-                    AND team_id = $2 AND mode_id = $3 AND counts_for_entrant
+                    AND racetime_id = $2 AND mode_id = $3 AND counts_for_entrant
                     AND retry_banned_at IS NULL AND state IN ('awaiting_verification', 'finalized'))"#,
             )
             .bind(original_id)
-            .bind(team_id)
+            .bind(&racetime_id)
             .bind(mode_id)
             .fetch_one(&mut *transaction)
             .await?;
@@ -1438,8 +1517,8 @@ pub(crate) async fn start_live(
         let attempt_id: i64 = sqlx::query_scalar(
             r#"INSERT INTO qualifier_attempts
                 (series, event, mode_id, seed_id, team_id, attempt_sequence, source,
-                 state, requested_at, revealed_at, started_at, retry_of)
-            VALUES ($1, $2, $3, $4, $5, $6, 'live', 'running', NOW(), NOW(), NOW(), $7)
+                 state, requested_at, revealed_at, started_at, retry_of, racetime_id)
+            VALUES ($1, $2, $3, $4, $5, $6, 'live', 'running', NOW(), NOW(), NOW(), $7, $8)
             RETURNING id"#,
         )
         .bind(&series)
@@ -1449,6 +1528,7 @@ pub(crate) async fn start_live(
         .bind(team_id)
         .bind(next_sequence)
         .bind(replacement_of)
+        .bind(&racetime_id)
         .fetch_one(&mut *transaction)
         .await?;
         if let Some(original_id) = replacement_of {
@@ -1528,6 +1608,14 @@ pub(crate) async fn finish_live(
             None,
         )
         .await?;
+        if let Some(name) = results
+            .iter()
+            .find(|result| result.racetime_id == racetime_id)
+            .and_then(|result| result.name.as_deref())
+        {
+            sqlx::query("UPDATE qualifier_attempts SET allocation_metadata=jsonb_set(allocation_metadata,'{racetime_name}',to_jsonb($2::TEXT)) WHERE id=$1")
+                .bind(attempt_id).bind(name).execute(&mut *transaction).await?;
+        }
         finalized += 1;
     }
     transaction.commit().await?;
@@ -1592,7 +1680,7 @@ pub(crate) enum Outcome {
 
 #[derive(Clone, Debug)]
 pub(crate) struct Performance {
-    pub(crate) team_id: i64,
+    pub(crate) racetime_id: String,
     pub(crate) mode_id: i64,
     pub(crate) seed_id: i64,
     pub(crate) counts_for_entrant: bool,
@@ -1608,14 +1696,16 @@ pub(crate) enum ModeScore {
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct TeamScore {
-    pub(crate) team_id: i64,
+    pub(crate) racetime_id: String,
     pub(crate) modes: Vec<(i64, ModeScore)>,
     pub(crate) average: Option<f64>,
 }
 
 #[derive(Clone, Debug)]
 pub(crate) struct Standing {
-    pub(crate) team_id: i64,
+    pub(crate) racetime_id: String,
+    pub(crate) racetime_name: String,
+    pub(crate) team_id: Option<i64>,
     pub(crate) entered: usize,
     pub(crate) finished: usize,
     pub(crate) forfeited: usize,
@@ -1633,7 +1723,12 @@ pub(crate) fn seed_par(
     let count = usize::try_from(config.par_finishers)
         .ok()
         .filter(|count| *count > 0)?;
-    if finishes.len() < count {
+    let count = if config.signup_closed() {
+        count.min(finishes.len())
+    } else {
+        count
+    };
+    if count == 0 || finishes.len() < count {
         return None;
     }
     let seconds = finishes[..count]
@@ -1673,7 +1768,7 @@ pub(crate) fn score(config: &Config, performances: &[Performance]) -> Vec<TeamSc
             (seed_id, seed_par(config, finishes))
         })
         .collect();
-    let mut teams: HashMap<i64, Vec<(i64, ModeScore)>> = HashMap::new();
+    let mut teams: HashMap<String, Vec<(i64, ModeScore)>> = HashMap::new();
     for run in performances.iter().filter(|run| run.counts_for_entrant) {
         let mode_score = performance_score(
             config,
@@ -1681,13 +1776,13 @@ pub(crate) fn score(config: &Config, performances: &[Performance]) -> Vec<TeamSc
             pars.get(&run.seed_id).copied().flatten(),
         );
         teams
-            .entry(run.team_id)
+            .entry(run.racetime_id.clone())
             .or_default()
             .push((run.mode_id, mode_score));
     }
     teams
         .into_iter()
-        .map(|(team_id, mut modes)| {
+        .map(|(racetime_id, mut modes)| {
             modes.sort_by_key(|(mode_id, _)| *mode_id);
             let average = (modes.len() == config.required_mode_count as usize
                 && modes
@@ -1704,7 +1799,7 @@ pub(crate) fn score(config: &Config, performances: &[Performance]) -> Vec<TeamSc
                     / modes.len() as f64
             });
             TeamScore {
-                team_id,
+                racetime_id,
                 modes,
                 average,
             }
@@ -1734,7 +1829,7 @@ pub(crate) async fn standings(
     config: &Config,
 ) -> Result<Vec<Standing>, sqlx::Error> {
     type Row = (
-        i64,
+        String,
         i64,
         i16,
         i64,
@@ -1744,15 +1839,23 @@ pub(crate) async fn standings(
         Option<String>,
         Option<sqlx::postgres::types::PgInterval>,
         String,
+        Option<i64>,
+        String,
     );
     let rows: Vec<Row> = sqlx::query_as(
-        r#"SELECT attempt.team_id, attempt.mode_id, mode.position, attempt.seed_id,
+        r#"SELECT attempt.racetime_id, attempt.mode_id, mode.position, attempt.seed_id,
             attempt.counts_for_entrant, attempt.par_eligible, attempt.state,
-            attempt.official_outcome, attempt.official_time, attempt.source
+            attempt.official_outcome, attempt.official_time, attempt.source,
+            (SELECT teams.id FROM teams JOIN team_members ON team_members.team=teams.id
+             JOIN users ON users.id=team_members.member WHERE users.racetime_id=attempt.racetime_id
+             AND teams.series=attempt.series AND teams.event=attempt.event AND NOT teams.resigned
+             AND NOT EXISTS (SELECT 1 FROM team_members pending WHERE pending.team=teams.id AND pending.status='unconfirmed') LIMIT 1),
+            COALESCE((SELECT racetime_display_name FROM users WHERE racetime_id=attempt.racetime_id), attempt.allocation_metadata->>'racetime_name', attempt.racetime_id)
         FROM qualifier_attempts attempt
         JOIN qualifier_modes mode ON mode.id = attempt.mode_id
         WHERE attempt.series = $1 AND attempt.event = $2 AND attempt.state <> 'void'
-        ORDER BY attempt.team_id, mode.position, attempt.attempt_sequence"#,
+          AND qualifier_signup_eligible(attempt.series, attempt.event, attempt.racetime_id)
+        ORDER BY attempt.racetime_id, mode.position, attempt.attempt_sequence"#,
     )
     .bind(&config.series)
     .bind(&config.event)
@@ -1772,7 +1875,7 @@ pub(crate) async fn standings(
                 _ => return None,
             };
             Some(Performance {
-                team_id: row.0,
+                racetime_id: row.0.clone(),
                 mode_id: row.1,
                 seed_id: row.3,
                 counts_for_entrant: row.4,
@@ -1783,20 +1886,29 @@ pub(crate) async fn standings(
         .collect();
     let scores: HashMap<_, _> = score(config, &performances)
         .into_iter()
-        .map(|score| (score.team_id, score))
+        .map(|score| (score.racetime_id.clone(), score))
         .collect();
     let mode_positions: HashMap<_, _> = rows.iter().map(|row| (row.1, row.2)).collect();
-    let team_ids: HashSet<_> = rows.iter().map(|row| row.0).collect();
-    Ok(team_ids
+    let racetime_ids: HashSet<_> = rows.iter().map(|row| row.0.clone()).collect();
+    Ok(racetime_ids
         .into_iter()
-        .map(|team_id| {
+        .map(|racetime_id| {
             let counted: Vec<_> = rows
                 .iter()
-                .filter(|row| row.0 == team_id && row.4)
+                .filter(|row| row.0 == racetime_id && row.4)
                 .collect();
-            let scored = scores.get(&team_id);
+            let scored = scores.get(&racetime_id);
             Standing {
-                team_id,
+                team_id: rows
+                    .iter()
+                    .find(|row| row.0 == racetime_id)
+                    .and_then(|row| row.10),
+                racetime_name: rows
+                    .iter()
+                    .find(|row| row.0 == racetime_id)
+                    .map(|row| row.11.clone())
+                    .unwrap_or_else(|| racetime_id.clone()),
+                racetime_id,
                 entered: counted.len(),
                 finished: counted.iter().filter(|row| row.6 == "finalized").count(),
                 forfeited: counted
@@ -2050,7 +2162,7 @@ pub(crate) mod tests {
         let mut runs = Vec::new();
         for (team, minutes) in [50, 55, 60, 65, 70].into_iter().enumerate() {
             runs.push(Performance {
-                team_id: team as i64,
+                racetime_id: team.to_string(),
                 mode_id: 1,
                 seed_id: 10,
                 counts_for_entrant: team == 0,
@@ -2060,7 +2172,7 @@ pub(crate) mod tests {
         }
         runs.extend([
             Performance {
-                team_id: 0,
+                racetime_id: "0".into(),
                 mode_id: 2,
                 seed_id: 20,
                 counts_for_entrant: true,
@@ -2068,7 +2180,7 @@ pub(crate) mod tests {
                 outcome: Outcome::Forfeit,
             },
             Performance {
-                team_id: 0,
+                racetime_id: "0".into(),
                 mode_id: 3,
                 seed_id: 30,
                 counts_for_entrant: true,
@@ -2078,7 +2190,7 @@ pub(crate) mod tests {
         ]);
         let result = score(&config(), &runs)
             .into_iter()
-            .find(|score| score.team_id == 0)
+            .find(|score| score.racetime_id == "0")
             .unwrap();
         assert_eq!(
             result.modes,
@@ -2095,7 +2207,7 @@ pub(crate) mod tests {
     fn finish_is_pending_until_its_own_physical_seed_has_five_valid_finishes() {
         let runs = vec![
             Performance {
-                team_id: 1,
+                racetime_id: "1".into(),
                 mode_id: 1,
                 seed_id: 1,
                 counts_for_entrant: true,
@@ -2103,7 +2215,7 @@ pub(crate) mod tests {
                 outcome: Outcome::Finished(Duration::from_secs(3600)),
             },
             Performance {
-                team_id: 2,
+                racetime_id: "2".into(),
                 mode_id: 1,
                 seed_id: 2,
                 counts_for_entrant: true,
@@ -2551,12 +2663,12 @@ pub(crate) mod tests {
         let finished_attempt = load_attempt_in(&mut transaction, first.id).await.unwrap();
         let mut status_config = Config::load(&mut transaction, Series::from_str(series).unwrap(), event).await.unwrap().unwrap();
         let pending_scores = standings(&mut transaction, &status_config).await.unwrap();
-        let pending = pending_scores.iter().find(|standing| standing.team_id == entrants[0].0).unwrap().mode_scores[0].1;
+        let pending = pending_scores.iter().find(|standing| standing.team_id == Some(entrants[0].0)).unwrap().mode_scores[0].1;
         assert_eq!(finished_attempt.status_summary(Some(pending)), "Async — verified finish — final time: 1:00:00 — points still pending");
         // Once the cohort can establish par, the same attempt shows its score.
         status_config.par_finishers = 1;
         let scored = standings(&mut transaction, &status_config).await.unwrap();
-        let points = scored.iter().find(|standing| standing.team_id == entrants[0].0).unwrap().mode_scores[0].1;
+        let points = scored.iter().find(|standing| standing.team_id == Some(entrants[0].0)).unwrap().mode_scores[0].1;
         assert_eq!(finished_attempt.status_summary(Some(points)), "Async — verified finish — final time: 1:00:00 — 100.00 points");
         transaction.commit().await.unwrap();
         let replacement = request_async_retry(&pool, entrants[0].0, mode_id, entrants[0].1)
@@ -2700,7 +2812,7 @@ pub(crate) mod tests {
                 &pool,
                 race_id,
                 &[LiveResult {
-                    racetime_id: entrants[1].2.clone(),
+                    name: None, racetime_id: entrants[1].2.clone(),
                     outcome: Outcome::Finished(Duration::from_secs(3900)),
                 }],
             )
@@ -2714,7 +2826,7 @@ pub(crate) mod tests {
         let live_attempt = live_attempts.iter().find(|attempt| attempt.seed_id == live_seed_id).unwrap();
         let config = Config::load(&mut tx, Series::from_str(series).unwrap(), event).await.unwrap().unwrap();
         let scores = standings(&mut tx, &config).await.unwrap();
-        let points = scores.iter().find(|standing| standing.team_id == entrants[1].0).unwrap().mode_scores[0].1;
+        let points = scores.iter().find(|standing| standing.team_id == Some(entrants[1].0)).unwrap().mode_scores[0].1;
         assert_eq!(live_attempt.status_summary(Some(points)), "Live (sync) — verified finish — final time: 1:05:00 — points still pending");
         tx.rollback().await.unwrap();
         assert_eq!(cancel_live(&pool, race_id).await.unwrap(), 1);
@@ -2761,9 +2873,9 @@ pub(crate) mod tests {
         assert_eq!(dq, ("dq".into(), true, false, true));
         let config = Config::load(&mut tx, Series::from_str(series).unwrap(), event).await.unwrap().unwrap();
         let scores = standings(&mut tx, &config).await.unwrap();
-        assert!(scores.iter().find(|row| row.team_id == entrants[0].0).unwrap().mode_scores.iter().any(|(_, score, _)| *score == ModeScore::Score(0.0)));
+        assert!(scores.iter().find(|row| row.team_id == Some(entrants[0].0)).unwrap().mode_scores.iter().any(|(_, score, _)| *score == ModeScore::Score(0.0)));
         let disqualified = load_attempt_in(&mut tx, replacement.id).await.unwrap();
-        let zero = scores.iter().find(|standing| standing.team_id == entrants[0].0).unwrap().mode_scores[0].1;
+        let zero = scores.iter().find(|standing| standing.team_id == Some(entrants[0].0)).unwrap().mode_scores[0].1;
         assert_eq!(disqualified.status_summary(Some(zero)), "Async — disqualified — 0.00 points");
         let original_outcome: String = sqlx::query_scalar("SELECT official_outcome FROM qualifier_attempts WHERE id=$1")
             .bind(first.id).fetch_one(&mut *tx).await.unwrap();
@@ -2798,7 +2910,7 @@ pub(crate) mod tests {
             .bind(live_original_id).fetch_one(&pool).await.unwrap();
         let mut tx = pool.begin().await.unwrap();
         invalidate_attempt(&mut tx, live_original_id, live_version, staff, "").await.unwrap();
-        assert!(standings(&mut tx, &config).await.unwrap().iter().all(|row| row.team_id != entrants[1].0));
+        assert!(standings(&mut tx, &config).await.unwrap().iter().all(|row| row.team_id != Some(entrants[1].0)));
         tx.rollback().await.unwrap();
         assert_eq!(request_async_retry(&pool, entrants[0].0, mode_id, entrants[0].1).await.unwrap().id, replacement.id);
 

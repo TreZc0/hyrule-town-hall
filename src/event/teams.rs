@@ -1158,12 +1158,9 @@ pub(crate) async fn signups_sorted(
                 .ok_or_else(|| {
                     sqlx::Error::Protocol("pooled qualifier configuration is missing".into())
                 })?;
-            let modes = pooled_qualifiers::Mode::for_event(transaction, data.series, &data.event).await?;
-            let standings: HashMap<_, _> = pooled_qualifiers::standings(transaction, &config)
-                .await?
-                .into_iter()
-                .map(|standing| (standing.team_id, standing))
-                .collect();
+            let modes =
+                pooled_qualifiers::Mode::for_event(transaction, data.series, &data.event).await?;
+            let standings = pooled_qualifiers::standings(transaction, &config).await?;
             let teams = sqlx::query!(r#"SELECT id AS "id: Id<Teams>", name, racetime_slug, challonge_id, startgg_id AS "startgg_id: startgg::ID", plural_name, custom_choices AS "custom_choices: Json<HashMap<String, String>>", restream_consent, mw_impl AS "mw_impl: mw::Impl", qualifier_rank FROM teams WHERE
                 series = $1
                 AND event = $2
@@ -1173,38 +1170,7 @@ pub(crate) async fn signups_sorted(
                     OR NOT EXISTS (SELECT 1 FROM team_members WHERE team = id AND status = 'unconfirmed')
                 )
             "#, data.series as _, &data.event, me.as_ref().map(|me| PgSnowflake(me.id)) as _).fetch_all(&mut **transaction).await?;
-            let mut signups = Vec::with_capacity(teams.len());
-            for row in teams {
-                let team = Team {
-                    id: row.id,
-                    series: data.series,
-                    event: data.event.to_string(),
-                    name: row.name,
-                    racetime_slug: row.racetime_slug,
-                    startgg_id: row.startgg_id,
-                    challonge_id: row.challonge_id,
-                    plural_name: row.plural_name,
-                    restream_consent: row.restream_consent,
-                    mw_impl: row.mw_impl,
-                    qualifier_rank: row.qualifier_rank,
-                };
-                let mut members = Vec::new();
-                for &(role, _) in data.team_config.roles() {
-                    let member = sqlx::query!(r#"SELECT member AS "id: Id<Users>", status AS "status: SignupStatus" FROM team_members WHERE team = $1 AND role = $2"#, team.id as _, role as _)
-                        .fetch_one(&mut **transaction).await?;
-                    members.push(SignupsMember {
-                        role,
-                        user: MemberUser::MidosHouse(
-                            User::from_id(&mut **transaction, member.id)
-                                .await?
-                                .ok_or(DataError::NonexistentUser)?,
-                        ),
-                        is_confirmed: member.status.is_confirmed(),
-                        qualifier_time: None,
-                        qualifier_vod: None,
-                    });
-                }
-                let standing = standings.get(&i64::from(team.id));
+            let qualification = |standing: Option<&pooled_qualifiers::Standing>| {
                 let hide_counts = !is_organizer
                     && config
                         .results_release_at
@@ -1248,44 +1214,116 @@ pub(crate) async fn signups_sorted(
                         }
                     })
                     .collect();
+                Qualification::Multiple {
+                    num_entered: if hide_counts {
+                        0
+                    } else {
+                        standing.map_or(0, |standing| standing.entered)
+                    },
+                    num_finished: if hide_counts {
+                        0
+                    } else {
+                        standing.map_or(0, |standing| standing.finished)
+                    },
+                    num_forfeited: if hide_counts {
+                        0
+                    } else {
+                        standing.map_or(0, |standing| standing.forfeited)
+                    },
+                    score: r64(standing
+                        .filter(|standing| {
+                            !pooled_qualifiers::hide_score(
+                                data.qualifier_score_hiding,
+                                config
+                                    .results_release_at
+                                    .is_some_and(|release| release <= Utc::now()),
+                                is_organizer,
+                                standing
+                                    .mode_scores
+                                    .iter()
+                                    .any(|(_, _, is_async)| *is_async),
+                            )
+                        })
+                        .and_then(|standing| standing.average)
+                        .unwrap_or(-1.0)),
+                    round_scores,
+                }
+            };
+            let mut signups = Vec::with_capacity(teams.len());
+            for row in teams {
+                let team = Team {
+                    id: row.id,
+                    series: data.series,
+                    event: data.event.to_string(),
+                    name: row.name,
+                    racetime_slug: row.racetime_slug,
+                    startgg_id: row.startgg_id,
+                    challonge_id: row.challonge_id,
+                    plural_name: row.plural_name,
+                    restream_consent: row.restream_consent,
+                    mw_impl: row.mw_impl,
+                    qualifier_rank: row.qualifier_rank,
+                };
+                let mut members = Vec::new();
+                for &(role, _) in data.team_config.roles() {
+                    let member = sqlx::query!(r#"SELECT member AS "id: Id<Users>", status AS "status: SignupStatus" FROM team_members WHERE team = $1 AND role = $2"#, team.id as _, role as _)
+                        .fetch_one(&mut **transaction).await?;
+                    members.push(SignupsMember {
+                        role,
+                        user: MemberUser::MidosHouse(
+                            User::from_id(&mut **transaction, member.id)
+                                .await?
+                                .ok_or(DataError::NonexistentUser)?,
+                        ),
+                        is_confirmed: member.status.is_confirmed(),
+                        qualifier_time: None,
+                        qualifier_vod: None,
+                    });
+                }
+                let standing = standings
+                    .iter()
+                    .find(|standing| standing.team_id == Some(i64::from(team.id)));
+                if config.signup_closed() && standing.is_none() {
+                    let eligible: bool = sqlx::query_scalar(
+                        "SELECT qualifier_signup_eligible($1,$2,qualifier_team_racetime($3))",
+                    )
+                    .bind(data.series)
+                    .bind(&data.event)
+                    .bind(i64::from(team.id))
+                    .fetch_one(&mut **transaction)
+                    .await?;
+                    if !eligible {
+                        continue;
+                    }
+                }
                 signups.push(SignupsTeam {
                     team: Some(team),
                     members,
-                    qualification: Qualification::Multiple {
-                        num_entered: if hide_counts {
-                            0
-                        } else {
-                            standing.map_or(0, |standing| standing.entered)
-                        },
-                        num_finished: if hide_counts {
-                            0
-                        } else {
-                            standing.map_or(0, |standing| standing.finished)
-                        },
-                        num_forfeited: if hide_counts {
-                            0
-                        } else {
-                            standing.map_or(0, |standing| standing.forfeited)
-                        },
-                        score: r64(standing
-                            .filter(|standing| {
-                                !pooled_qualifiers::hide_score(
-                                    data.qualifier_score_hiding,
-                                    config
-                                        .results_release_at
-                                        .is_some_and(|release| release <= Utc::now()),
-                                    is_organizer,
-                                    standing
-                                        .mode_scores
-                                        .iter()
-                                        .any(|(_, _, is_async)| *is_async),
-                                )
-                            })
-                            .and_then(|standing| standing.average)
-                            .unwrap_or(-1.0)),
-                        round_scores,
-                    },
+                    qualification: qualification(standing),
                     custom_choices: row.custom_choices.0,
+                    is_opted_out: false,
+                });
+            }
+            for unregistered in standings
+                .iter()
+                .filter(|standing| standing.team_id.is_none())
+            {
+                let standing = Some(unregistered);
+                signups.push(SignupsTeam {
+                    team: None,
+                    members: vec![SignupsMember {
+                        role: Role::None,
+                        user: MemberUser::RaceTime {
+                            id: unregistered.racetime_id.clone(),
+                            name: unregistered.racetime_name.clone(),
+                            url: format!("/user/{}", unregistered.racetime_id),
+                        },
+                        is_confirmed: false,
+                        qualifier_time: None,
+                        qualifier_vod: None,
+                    }],
+                    qualification: qualification(standing),
+                    custom_choices: HashMap::new(),
                     is_opted_out: false,
                 });
             }
@@ -1845,6 +1883,11 @@ pub(crate) async fn list(
         false
     };
     let qualifier_kind = data.qualifier_kind(&mut transaction, me.as_ref()).await?;
+    let pooled_config = if matches!(qualifier_kind, QualifierKind::PooledByMode { .. }) {
+        pooled_qualifiers::Config::load(&mut transaction, data.series, &data.event).await?
+    } else {
+        None
+    };
     let all_qualifiers_ended = if let QualifierKind::Score(_) = qualifier_kind {
         let all_races_ended = Race::for_event(&mut transaction, http_client, &data)
             .await?
@@ -1866,10 +1909,12 @@ pub(crate) async fn list(
         .await?;
         all_races_ended && all_asyncs_ended
     } else if let QualifierKind::PooledByMode { .. } = qualifier_kind {
-        pooled_qualifiers::Config::load(&mut transaction, data.series, &data.event)
-            .await?
-            .and_then(|config| config.results_release_at)
-            .is_some_and(|release| release <= Utc::now())
+        pooled_config.as_ref().is_some_and(|config| {
+            config.signup_closed()
+                && config
+                    .results_release_at
+                    .is_some_and(|release| release <= Utc::now())
+        })
     } else if let QualifierKind::Single { .. } = qualifier_kind {
         sqlx::query_scalar!(
             r#"
@@ -1985,12 +2030,13 @@ pub(crate) async fn list(
         "Teams"
     };
     let has_opt_outs = signups.iter().any(|signup| signup.is_opted_out);
-    let has_racetime_only = signups.iter().any(|signup| {
-        signup
-            .members
-            .iter()
-            .any(|m| matches!(m.user, MemberUser::RaceTime { .. }))
-    });
+    let has_racetime_only = !matches!(qualifier_kind, QualifierKind::PooledByMode { .. })
+        && signups.iter().any(|signup| {
+            signup
+                .members
+                .iter()
+                .any(|m| matches!(m.user, MemberUser::RaceTime { .. }))
+        });
     let entrant_word = if let TeamConfig::Solo = data.team_config {
         "player"
     } else {
@@ -2167,6 +2213,7 @@ pub(crate) async fn list(
     }
     let content = html! {
         : header;
+        @if let Some(config) = &pooled_config { : pooled_qualifiers::standings_notice(config); }
         div(class = "entrants-stats") {
             p {
                 : total_entrants;
@@ -2341,7 +2388,12 @@ pub(crate) async fn list(
                                                 }
                                             }
                                         }
-                                        MemberUser::RaceTime { url, name, .. } => em { a(href = format!("https://{}{url}", racetime_host())) : name; : "**"; }
+                                        MemberUser::RaceTime { url, name, .. } => em {
+                                            a(href = format!("https://{}{url}", racetime_host())) : name;
+                                            @if matches!(qualifier_kind, QualifierKind::PooledByMode { .. }) {
+                                                : " — Awaiting signup";
+                                            } else { : "**"; }
+                                        }
                                         MemberUser::Newcomer => @unreachable // only returned if signups_sorted is called with worst_case_extrapolation = true, which it isn't above
                                         MemberUser::Deleted => em : "deleted user";
                                     }

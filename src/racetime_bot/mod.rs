@@ -4556,6 +4556,7 @@ impl Handler {
                     | EntrantStatusValue::InProgress => event::pooled_qualifiers::Outcome::Forfeit,
                 };
                 Some(event::pooled_qualifiers::LiveResult {
+                    name: Some(user.name.clone()),
                     racetime_id: user.id.clone(),
                     outcome,
                 })
@@ -6600,7 +6601,16 @@ impl RaceHandler<GlobalState> for Handler {
             low_seed_name,
             fpa_enabled,
         };
-        if let Some(official) = this.official_data.as_ref().filter(|data| data.is_pooled_live()) {
+        if let Some(official) = this
+            .official_data
+            .as_ref()
+            .filter(|data| data.is_pooled_live())
+        {
+            let notice: Option<(DateTime<Utc>, i16)> = sqlx::query_as("SELECT submissions_close_at, par_finishers FROM pooled_qualifier_configs WHERE series=$1 AND event=$2 AND submissions_close_at IS NOT NULL")
+                .bind(official.event.series).bind(&*official.event.event).fetch_optional(&ctx.global_state.db_pool).await.to_racetime()?;
+            if let Some((deadline, par_finishers)) = notice {
+                ctx.say(format!("Live runners may qualify before event signup. Rankings and par times are provisional, including qualifying places. Sign up before {deadline} at https://hyruletownhall.com/event/{}/{}/enter. Unsigned runners will be removed from scores and par calculations at the deadline; final par averages up to {par_finishers} remaining eligible finishers. Asyncs require signup.", official.event.series, official.event.event)).await?;
+            }
             let official = official.clone();
             let ctx = ctx.clone();
             tokio::spawn(async move {

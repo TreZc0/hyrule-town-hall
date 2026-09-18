@@ -150,6 +150,7 @@ async fn qualifiers_form(
                     a(href = "#pooled-live") : "Live eligibility";
                     a(href = "#qualifier-setup", class = "qualifier-setup-link") : "Setup";
                 }
+                : pooled_qualifiers::standings_notice(config);
                 : pooled_standings;
                 h2(id = "pooled-attempts", class = "qualifier-section-title") : "Attempts & result review";
                 p(class = "qualifier-intro") : "One row per assigned attempt. Counted marks the result used for the entrant’s mode score; Retry of links a replacement to its original attempt. Review / correct result is for async evidence and result corrections. Live results are imported from racetime.gg. DQ, invalidation and recorded history are available for both.";
@@ -162,7 +163,7 @@ async fn qualifiers_form(
                             @for attempt in &pooled_attempts {
                                 tr(id = format!("attempt-{}", attempt.id)) {
                                     td : attempt.id;
-                                    td { : &attempt.entrant_name; : format!(" ({})", attempt.team_id); }
+                                    td { : &attempt.entrant_name; : format!(" ({})", attempt.team_id.map_or_else(|| "awaiting signup".into(), |team| team.to_string())); }
                                     td : &attempt.mode_name;
                                     td { a(href = format!("#pool-seed-{}", attempt.seed_id)) : pools::seed_label(attempt.seed_id, &pooled_seeds); }
                                     td : &attempt.source;
@@ -721,7 +722,9 @@ pub(crate) async fn post_pooled_config(
         || i64::from(old.live_entry_close_lead.days) * 1440
             + old.live_entry_close_lead.microseconds / 60_000_000
             != value.live_entry_close_minutes;
-    if old.settings_locked_at.is_some() && structural_changed {
+    if (old.settings_locked_at.is_some() && structural_changed)
+        || (old.signup_closed() && old.submissions_close_at != submissions_close)
+    {
         return Err(StatusOrError::Status(Status::Conflict));
     }
     sqlx::query(

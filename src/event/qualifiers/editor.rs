@@ -54,7 +54,7 @@ pub(super) fn configuration(
                         ("allocation_spread", "Maximum assignment count difference", "Balances the number of entrants assigned to each seed.", config.allocation_spread.to_string(), "1", None, "1"),
                     ]),
                     ("Scoring", "Each physical seed has its own par. The overall qualifier score averages one counted result per required mode.", vec![
-                        ("par_finishers", "Fastest finishes used for par", "Scores remain pending until the seed has this many eligible finishes.", config.par_finishers.to_string(), "1", None, "1"),
+                        ("par_finishers", "Fastest finishes used for par", "Scores remain pending until this many eligible finishes; final par uses all remaining eligible finishers if fewer remain.", config.par_finishers.to_string(), "1", None, "1"),
                         ("score_scale", "Score scale", "Point multiplier. With the standard formula, use 100.", config.score_scale.to_string(), "", None, "any"),
                         ("score_offset", "Score offset", "The starting factor before subtracting time ÷ par.", config.score_offset.to_string(), "", None, "any"),
                         ("score_minimum", "Minimum finish score", "Lower bound for finished runs; other outcomes score zero.", config.score_minimum.to_string(), "", None, "any"),

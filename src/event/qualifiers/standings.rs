@@ -8,13 +8,14 @@ pub(super) async fn load(
     modes: &[pooled_qualifiers::Mode],
     attempts: &[pools::AttemptRow],
 ) -> Result<RawHtml<String>, sqlx::Error> {
-    let entrants: Vec<(i64, String)> = sqlx::query_as(
-        r#"SELECT team.id, COALESCE(team.name, account.discord_display_name,
+    let entrants: Vec<(String, String)> = sqlx::query_as(
+        r#"SELECT account.racetime_id, COALESCE(team.name, account.discord_display_name,
             account.racetime_display_name, 'Team ' || team.id::TEXT)
         FROM teams team
         LEFT JOIN team_members member ON member.team = team.id
         LEFT JOIN users account ON account.id = member.member
-        WHERE team.series = $1 AND team.event = $2 AND NOT team.resigned
+        WHERE team.series = $1 AND team.event = $2 AND NOT team.resigned AND account.racetime_id IS NOT NULL
+            AND qualifier_signup_eligible(team.series, team.event, account.racetime_id)
             AND NOT EXISTS (SELECT 1 FROM team_members unconfirmed
                 WHERE unconfirmed.team = team.id AND unconfirmed.status = 'unconfirmed')"#,
     )
@@ -27,18 +28,26 @@ pub(super) async fn load(
 }
 
 fn render(
-    mut entrants: Vec<(i64, String)>,
+    mut entrants: Vec<(String, String)>,
     scores: Vec<pooled_qualifiers::Standing>,
     modes: &[pooled_qualifiers::Mode],
     attempts: &[pools::AttemptRow],
 ) -> RawHtml<String> {
+    for score in &scores {
+        if !entrants.iter().any(|(id, _)| id == &score.racetime_id) {
+            entrants.push((
+                score.racetime_id.clone(),
+                format!("{} — Awaiting signup", score.racetime_name),
+            ));
+        }
+    }
     let scores: HashMap<_, _> = scores
         .into_iter()
-        .map(|score| (score.team_id, score))
+        .map(|score| (score.racetime_id.clone(), score))
         .collect();
-    let average = |team| scores.get(&team).and_then(|score| score.average);
+    let average = |team: &String| scores.get(team).and_then(|score| score.average);
     entrants.sort_by(|(left, left_name), (right, right_name)| {
-        match (average(*left), average(*right)) {
+        match (average(left), average(right)) {
             (Some(left), Some(right)) => right.total_cmp(&left),
             (Some(_), None) => Less,
             (None, Some(_)) => Greater,
@@ -65,10 +74,10 @@ fn render(
                     tbody {
                         @for (team_id, name) in &entrants {
                             tr {
-                                td : average(*team_id).map(|score| (1 + entrants.iter().take_while(|(other, _)| average(*other) != Some(score)).count()).to_string()).unwrap_or_else(|| "—".into());
+                                td : average(team_id).map(|score| (1 + entrants.iter().take_while(|(other, _)| average(other) != Some(score)).count()).to_string()).unwrap_or_else(|| "—".into());
                                 td : name;
                                 @for mode in modes.iter().filter(|mode| mode.enabled) {
-                                    @let outcome = attempts.iter().find(|attempt| attempt.team_id == *team_id && attempt.mode_id == mode.id && attempt.counts_for_entrant && attempt.state == "finalized").and_then(|attempt| attempt.official_outcome.as_deref());
+                                    @let outcome = attempts.iter().find(|attempt| attempt.racetime_id == *team_id && attempt.signup_eligible && attempt.mode_id == mode.id && attempt.counts_for_entrant && attempt.state == "finalized").and_then(|attempt| attempt.official_outcome.as_deref());
                                     td : match outcome {
                                         Some("forfeit") => "Forfeit (0.00)".into(),
                                         Some("dq") => "Disqualified (0.00)".into(),
@@ -79,8 +88,8 @@ fn render(
                                         },
                                     };
                                 }
-                                td : attempts.iter().filter(|attempt| attempt.team_id == *team_id && attempt.counts_for_entrant && attempt.state == "finalized" && attempt.official_outcome.as_deref() == Some("forfeit")).count();
-                                td : average(*team_id).map(|score| format!("{score:.2}")).unwrap_or_else(|| "Pending".into());
+                                td : attempts.iter().filter(|attempt| attempt.racetime_id == *team_id && attempt.signup_eligible && attempt.counts_for_entrant && attempt.state == "finalized" && attempt.official_outcome.as_deref() == Some("forfeit")).count();
+                                td : average(team_id).map(|score| format!("{score:.2}")).unwrap_or_else(|| "Pending".into());
                             }
                         }
                     }
@@ -118,7 +127,9 @@ mod tests {
             (4, "invalid", "finalized", true),
         ] {
             attempts.push(pools::AttemptRow {
-                team_id,
+                team_id: Some(team_id),
+                racetime_id: team_id.to_string(),
+                signup_eligible: true,
                 mode_id: 1,
                 official_outcome: Some(outcome.into()),
                 state: state.into(),
@@ -128,7 +139,9 @@ mod tests {
         }
         let scores = (1..=4)
             .map(|team_id| pooled_qualifiers::Standing {
-                team_id,
+                team_id: Some(team_id),
+                racetime_id: team_id.to_string(),
+                racetime_name: format!("Entrant {team_id}"),
                 average: Some(0.0),
                 entered: 1,
                 finished: 1,
@@ -138,7 +151,7 @@ mod tests {
             .collect();
         let html = render(
             (1..=4)
-                .map(|team| (team, format!("Entrant {team}")))
+                .map(|team| (team.to_string(), format!("Entrant {team}")))
                 .collect(),
             scores,
             &[mode],
@@ -169,8 +182,10 @@ mod tests {
 
     #[test]
     fn standings_rank_ties_and_keep_pending_entrants_unranked() {
-        let score = |team_id, average| pooled_qualifiers::Standing {
-            team_id,
+        let score = |team_id: i64, average| pooled_qualifiers::Standing {
+            team_id: Some(team_id),
+            racetime_id: team_id.to_string(),
+            racetime_name: format!("Entrant {team_id}"),
             average,
             entered: 1,
             finished: 1,
@@ -179,10 +194,10 @@ mod tests {
         };
         let html = render(
             vec![
-                (1, "Pending".into()),
-                (2, "Zero".into()),
-                (3, "Winner B".into()),
-                (4, "Winner A".into()),
+                ("1".into(), "Pending".into()),
+                ("2".into(), "Zero".into()),
+                ("3".into(), "Winner B".into()),
+                ("4".into(), "Winner A".into()),
             ],
             vec![
                 score(2, Some(0.0)),

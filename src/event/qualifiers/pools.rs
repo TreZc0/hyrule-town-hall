@@ -25,7 +25,9 @@ pub(super) struct AttemptRow {
     pub(super) superseded_by: Option<i64>,
     pub(super) discord_thread: Option<i64>,
     pub(super) id: i64,
-    pub(super) team_id: i64,
+    pub(super) team_id: Option<i64>,
+    pub(super) racetime_id: String,
+    pub(super) signup_eligible: bool,
     pub(super) entrant_name: String,
     pub(super) mode_name: String,
     pub(super) source: String,
@@ -67,16 +69,20 @@ pub(super) async fn load_attempts(
     event: &str,
 ) -> Result<Vec<AttemptRow>, sqlx::Error> {
     sqlx::query_as::<_, AttemptRow>(
-            r#"SELECT attempt.id, attempt.mode_id, attempt.seed_id, attempt.par_eligible, attempt.superseded_by, attempt.discord_thread, attempt.team_id,
+            r#"SELECT attempt.id, attempt.mode_id, attempt.seed_id, attempt.par_eligible, attempt.superseded_by, attempt.discord_thread, attempt.racetime_id,
+                (SELECT teams.id FROM teams WHERE teams.series=attempt.series AND teams.event=attempt.event
+                    AND NOT teams.resigned AND qualifier_runner_team(attempt.series, attempt.event, attempt.racetime_id, teams.id)
+                    AND NOT EXISTS (SELECT 1 FROM team_members WHERE team=teams.id AND status='unconfirmed')
+                    LIMIT 1) AS team_id,
+                qualifier_signup_eligible(attempt.series, attempt.event, attempt.racetime_id) AS signup_eligible,
                 COALESCE(user_account.discord_display_name, user_account.racetime_display_name,
-                    'Team ' || attempt.team_id::TEXT) AS entrant_name,
+                    attempt.allocation_metadata->>'racetime_name', attempt.racetime_id) AS entrant_name,
                 mode.display_name AS mode_name, attempt.source, attempt.state,
                 attempt.counts_for_entrant, attempt.official_outcome,
                 attempt.official_time, attempt.vod, attempt.retry_of, attempt.retry_declared_at, attempt.retry_banned_at, attempt.control_version, attempt.delivery_error, attempt.correction_history
             FROM qualifier_attempts attempt
             JOIN qualifier_modes mode ON mode.id = attempt.mode_id
-            LEFT JOIN team_members member ON member.team = attempt.team_id
-            LEFT JOIN users user_account ON user_account.id = member.member
+            LEFT JOIN users user_account ON user_account.racetime_id = attempt.racetime_id
             WHERE attempt.series = $1 AND attempt.event = $2
             ORDER BY attempt.requested_at, attempt.id"#,
         )
@@ -168,7 +174,7 @@ struct Population {
 fn population(config: &pooled_qualifiers::Config, attempts: &[&AttemptRow]) -> Population {
     let finishes: Vec<_> = attempts
         .iter()
-        .filter(|attempt| attempt.par_eligible)
+        .filter(|attempt| attempt.par_eligible && attempt.signup_eligible)
         .filter_map(|attempt| match attempt.outcome() {
             Some(pooled_qualifiers::Outcome::Finished(time)) => Some(time),
             _ => None,
@@ -181,7 +187,9 @@ fn population(config: &pooled_qualifiers::Config, attempts: &[&AttemptRow]) -> P
             .count(),
         counted: attempts
             .iter()
-            .filter(|attempt| attempt.state != "void" && attempt.counts_for_entrant)
+            .filter(|attempt| {
+                attempt.state != "void" && attempt.counts_for_entrant && attempt.signup_eligible
+            })
             .count(),
         active: attempts
             .iter()
@@ -257,7 +265,7 @@ pub(super) fn overview(
                             td {
                                 : format!("{} eligible finishes", stats.eligible_finishes);
                                 @if let Some(par) = stats.par {
-                                    : format!(" · Par: {} (fastest {})", English.format_duration(Duration::from_secs_f64(par), false), config.par_finishers);
+                                    : format!(" · Par: {} (fastest {})", English.format_duration(Duration::from_secs_f64(par), false), config.par_finishers.min(stats.eligible_finishes as i16));
                                 } else {
                                     : format!(" · {}/{} finishes — par pending", stats.eligible_finishes, config.par_finishers);
                                 }
@@ -281,6 +289,7 @@ pub(super) fn overview(
                         p {
                             : format!("{}; {}", attempt.source, attempt.state);
                             @if attempt.state == "void" { : "; void — excluded from population and scoring"; }
+                            else if !attempt.signup_eligible { : "; excluded from scoring: no active signup at the required time"; }
                             else if attempt.counts_for_entrant { : "; counted for entrant"; }
                             else { : "; not counted for entrant"; }
                             @if let Some(original) = attempt.retry_of {
@@ -299,11 +308,13 @@ pub(super) fn overview(
                                     pooled_qualifiers::Outcome::Invalid => { : "Invalid result"; }
                                 }
                                 : " — ";
-                                @match pooled_qualifiers::performance_score(config, outcome, stats.par) {
+                                @if !attempt.signup_eligible { : "excluded from scoring"; }
+                                else { @match pooled_qualifiers::performance_score(config, outcome, stats.par) {
                                     pooled_qualifiers::ModeScore::Pending => { : "points pending"; }
                                     pooled_qualifiers::ModeScore::Score(points) => { : format!("{points:.2} points"); }
                                 }
-                                @if matches!(outcome, pooled_qualifiers::Outcome::Finished(_)) && attempt.par_eligible { : "; eligible for par"; }
+                                }
+                                @if matches!(outcome, pooled_qualifiers::Outcome::Finished(_)) && attempt.par_eligible && attempt.signup_eligible { : "; eligible for par"; }
                                 else { : "; excluded from par"; }
                             }
                         }
@@ -334,6 +345,7 @@ mod tests {
             source: "async".into(),
             state: "finalized".into(),
             counts_for_entrant: true,
+            signup_eligible: true,
             par_eligible: true,
             official_outcome: Some("finished".into()),
             official_time: Some(sqlx::postgres::types::PgInterval {
@@ -343,6 +355,19 @@ mod tests {
             }),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn final_pool_summary_excludes_unsigned_finishers() {
+        let mut config = pooled_qualifiers::tests::config();
+        config.submissions_close_at = Some(Utc::now() - chrono::Duration::hours(1));
+        let mut attempts = vec![finish(1, 30), finish(2, 50), finish(3, 60)];
+        attempts[0].signup_eligible = false;
+        let stats = population(&config, &attempts.iter().collect::<Vec<_>>());
+        assert_eq!(stats.assigned, 3);
+        assert_eq!(stats.counted, 2);
+        assert_eq!(stats.eligible_finishes, 2);
+        assert_eq!(stats.par, Some(55.0 * 60.0));
     }
 
     #[test]
@@ -362,6 +387,7 @@ mod tests {
             retry_of: Some(1),
             state: "running".into(),
             counts_for_entrant: true,
+            signup_eligible: true,
             ..Default::default()
         });
         attempts.push(AttemptRow {
@@ -369,6 +395,7 @@ mod tests {
             seed_id: 1,
             state: "awaiting_verification".into(),
             counts_for_entrant: true,
+            signup_eligible: true,
             ..Default::default()
         });
         let mut void = finish(9, 1);

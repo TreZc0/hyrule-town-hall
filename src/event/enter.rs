@@ -1606,7 +1606,14 @@ pub(crate) async fn enter_form(
     } else {
         Vec::default()
     };
-    let content = if data.is_started(&mut transaction).await? {
+    let pooled_config =
+        super::pooled_qualifiers::Config::load(&mut transaction, data.series, &data.event).await?;
+    let content = if pooled_config
+        .as_ref()
+        .is_some_and(|config| config.signup_closed())
+    {
+        html! { article { p : "The pooled qualifier signup deadline has passed."; } }
+    } else if data.is_started(&mut transaction).await? {
         html! {
             article {
                 p : "You can no longer enter this event since it has already started.";
@@ -1832,6 +1839,7 @@ pub(crate) async fn enter_form(
         &format!("Enter — {}", data.display_name),
         html! {
             : header;
+            @if let Some(config) = &pooled_config { : super::pooled_qualifiers::standings_notice(config); }
             : invites;
             div(class = "enter-page") : content;
         },
@@ -2012,6 +2020,16 @@ pub(crate) async fn post(
     let mut form = form.into_inner();
     form.verify(&csrf);
     if let Some(ref value) = form.value {
+        if data.qualifier_mode == "pooled_by_mode" {
+            super::pooled_qualifiers::lock_event(&mut transaction, series, event).await?;
+            let closed =
+                super::pooled_qualifiers::signup_closed_in(&mut transaction, series, event).await?;
+            if closed {
+                form.context.push_error(form::Error::validation(
+                    "The pooled qualifier signup deadline has passed.",
+                ));
+            }
+        }
         if data.is_started(&mut transaction).await? {
             form.context.push_error(form::Error::validation(
                 "You can no longer enter this event since it has already started.",
@@ -2074,6 +2092,16 @@ pub(crate) async fn post(
                     AND NOT EXISTS (SELECT 1 FROM team_members WHERE team = id AND status = 'unconfirmed')
                 ) AS "exists!""#, series as _, event, me.id as _).fetch_one(&mut *transaction).await? {
                     form.context.push_error(form::Error::validation("You are already signed up for this event."));
+                }
+                // Requirements may involve external services. Recheck after
+                // validation, while still holding the event lock, before signup.
+                if data.qualifier_mode == "pooled_by_mode"
+                    && super::pooled_qualifiers::signup_closed_in(&mut transaction, series, event)
+                        .await?
+                {
+                    form.context.push_error(form::Error::validation(
+                        "The pooled qualifier signup deadline has passed.",
+                    ));
                 }
                 if form.context.errors().next().is_none() {
                     // Check if there's an existing resigned team to reactivate
