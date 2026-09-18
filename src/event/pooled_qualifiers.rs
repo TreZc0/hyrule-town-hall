@@ -404,6 +404,9 @@ pub(crate) async fn revert_finish(
     lock_attempt(&mut transaction, attempt_id).await?;
     let next = sqlx::query_scalar::<_, i64>(
         r#"UPDATE qualifier_attempts SET state = 'running', player_finished_at = NULL, participant_outcome = NULL, undo_until = NULL,
+            delivery_messages = CASE WHEN delivery_messages ? ('run-' || (control_version - 1))
+                THEN jsonb_set(delivery_messages, ARRAY['restore-run-' || (control_version + 1)], delivery_messages->('run-' || (control_version - 1)))
+                ELSE delivery_messages END,
             control_version = control_version + 1
         WHERE id = $1 AND control_version = $2 AND state = 'awaiting_verification'
           AND official_outcome IS NULL AND NOW() <= deadline_at AND NOW() <= undo_until AND participant_outcome = 'finished'
@@ -2511,7 +2514,16 @@ pub(crate) mod tests {
             control_version: running_version,
         };
         running_run.check_finish_allowed(&pool).await.unwrap();
-        running_run.set_player_finished_at(&pool).await.unwrap();
+        sqlx::query("UPDATE qualifier_attempts SET delivery_messages=jsonb_build_object($2::TEXT,123456) WHERE id=$1")
+            .bind(first.id).bind(format!("run-{running_version}")).execute(&pool).await.unwrap();
+        let finish_click = Utc::now();
+        running_run.set_player_finished_at(&pool, finish_click).await.unwrap();
+        let pending: (DateTime<Utc>, DateTime<Utc>, Option<String>) = sqlx::query_as(
+            "SELECT player_finished_at,undo_until,official_outcome FROM qualifier_attempts WHERE id=$1",
+        ).bind(first.id).fetch_one(&pool).await.unwrap();
+        assert_eq!(pending.0.timestamp_micros(), finish_click.timestamp_micros());
+        assert_eq!(pending.1 - pending.0, chrono::Duration::seconds(30));
+        assert!(pending.2.is_none());
         let reverted_version = revert_finish(&pool, first.id, running_version + 1)
             .await
             .unwrap();
@@ -2519,8 +2531,12 @@ pub(crate) mod tests {
             attempt_id: first.id,
             control_version: reverted_version,
         };
+        let controls: Option<i64> = sqlx::query_scalar(
+            "SELECT (delivery_messages->>$2)::BIGINT FROM qualifier_attempts WHERE id=$1",
+        ).bind(first.id).bind(format!("restore-run-{reverted_version}")).fetch_one(&pool).await.unwrap();
+        assert_eq!(controls, Some(123456), "REVERT queues an edit of the original running message");
         reverted_run.check_finish_allowed(&pool).await.unwrap();
-        reverted_run.set_player_finished_at(&pool).await.unwrap();
+        reverted_run.set_player_finished_at(&pool, Utc::now()).await.unwrap();
         let mut transaction = pool.begin().await.unwrap();
         finalize(
             &mut transaction,

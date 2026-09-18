@@ -581,8 +581,8 @@ async fn async_race_manager(
         tokio::select! {
             _ = interval.tick() => {
                 let discord_ctx = discord_ctx.read().await;
-                if let Ok(()) = async_race::AsyncRaceManager::create_async_threads(&db_pool, &discord_ctx, &http_client).await {
-                    // Threads created successfully
+                if let Err(error) = async_race::AsyncRaceManager::create_async_threads(&db_pool, &discord_ctx, &http_client).await {
+                    log::error!("async thread setup failed: {error}");
                 }
             }
             _ = shutdown.clone() => break,
