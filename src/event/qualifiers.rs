@@ -1,3 +1,5 @@
+use rocket::{request::FlashMessage, response::Flash};
+
 use crate::{
     cal::{Entrants, Race, RaceSchedule, Source},
     discord_scheduled_events::DiscordCtx,
@@ -20,6 +22,7 @@ async fn qualifiers_form(
     event: Data<'_>,
     is_started: bool,
     ctx: Context<'_>,
+    result_error: Option<&str>,
 ) -> Result<RawHtml<String>, event::Error> {
     let header = event
         .header(&mut transaction, Some(&me), Tab::Qualifiers, false)
@@ -135,6 +138,9 @@ async fn qualifiers_form(
         script(src = static_url!("setting-help.js")) {}
         script(defer, src = static_url!("qualifier-race-edit.js")) {}
         article(class = "qualifier-admin") {
+            @if let Some(error) = result_error {
+                p(class = "error", role = "alert") : error;
+            }
             : rank_editor;
             @if let Some(ref config) = pooled_config {
                 nav(class = "qualifier-jump", aria_label = "Qualifier management sections") {
@@ -500,6 +506,7 @@ pub(crate) async fn get(
     me: User,
     uri: Origin<'_>,
     csrf: Option<CsrfToken>,
+    flash: Option<FlashMessage<'_>>,
     series: Series,
     event: String,
 ) -> Result<RawHtml<String>, StatusOrError<event::Error>> {
@@ -511,6 +518,8 @@ pub(crate) async fn get(
         return Err(StatusOrError::Status(Status::Forbidden));
     }
     let is_started = event_data.is_started(&mut transaction).await?;
+    let result_error = flash.filter(|message| message.kind() == "pooled-result-error")
+        .map(|message| message.message().to_owned());
     Ok(qualifiers_form(
         transaction,
         me,
@@ -519,6 +528,7 @@ pub(crate) async fn get(
         event_data,
         is_started,
         Context::default(),
+        result_error.as_deref(),
     )
     .await?)
 }
@@ -687,6 +697,7 @@ pub(crate) async fn post_pooled_config(
                 data,
                 is_started,
                 form.context,
+                None,
             )
             .await?,
         ));
@@ -772,6 +783,7 @@ pub(crate) async fn post_pooled_config(
                     data,
                     false,
                     form.context,
+                    None,
                 )
                 .await?,
             ));
@@ -1004,6 +1016,12 @@ pub(crate) struct PooledResultForm {
     vod: String,
 }
 
+#[derive(rocket::Responder)]
+pub(crate) enum PooledResultResponse {
+    Saved(Redirect),
+    Rejected(Flash<Redirect>),
+}
+
 #[rocket::post("/event/<series>/<event>/qualifiers/pooled-result", data = "<form>")]
 pub(crate) async fn post_pooled_result(
     pool: &State<PgPool>,
@@ -1012,7 +1030,7 @@ pub(crate) async fn post_pooled_result(
     series: Series,
     event: &str,
     form: Form<Contextual<'_, PooledResultForm>>,
-) -> Result<Redirect, StatusOrError<event::Error>> {
+) -> Result<PooledResultResponse, StatusOrError<event::Error>> {
     let mut form = form.into_inner();
     form.verify(&csrf);
     if form.context.errors().next().is_some() {
@@ -1074,11 +1092,19 @@ pub(crate) async fn post_pooled_result(
         ).await,
         _ => return Err(StatusOrError::Status(Status::BadRequest)),
     };
-    result.map_err(|error| {
-        StatusOrError::Err(event::Error::Sql(sqlx::Error::Protocol(error.to_string())))
-    })?;
+    if let Err(error) = result {
+        tx.rollback().await?;
+        if let pooled_qualifiers::Error::Sql(error) = error {
+            return Err(error.into());
+        }
+        return Ok(PooledResultResponse::Rejected(Flash::new(
+            Redirect::to(uri!(get(series, event))),
+            "pooled-result-error",
+            format!("Attempt {}: {error}", value.attempt_id),
+        )));
+    }
     tx.commit().await?;
-    Ok(Redirect::to(uri!(get(series, event))))
+    Ok(PooledResultResponse::Saved(Redirect::to(uri!(get(series, event)))))
 }
 
 #[derive(FromForm, CsrfForm)]
@@ -1251,6 +1277,7 @@ pub(crate) async fn post_race(
                     event_data,
                     false,
                     form.context,
+                    None,
                 )
                 .await?,
             )
@@ -1271,6 +1298,7 @@ pub(crate) async fn post_race(
                             event_data,
                             false,
                             form.context,
+                            None,
                         )
                         .await?,
                     ));
@@ -1295,6 +1323,7 @@ pub(crate) async fn post_race(
                                     event_data,
                                     false,
                                     form.context,
+                                    None,
                                 )
                                 .await?,
                             ));
@@ -1334,6 +1363,7 @@ pub(crate) async fn post_race(
                             event_data,
                             false,
                             form.context,
+                            None,
                         )
                         .await?,
                     ));
@@ -1439,6 +1469,7 @@ pub(crate) async fn post_race(
                 event_data,
                 false,
                 form.context,
+                None,
             )
             .await?,
         )
@@ -1645,6 +1676,7 @@ pub(crate) async fn post_settings(
                         event_data,
                         is_started,
                         form.context,
+                        None,
                     )
                     .await?,
                 ));
@@ -1670,6 +1702,7 @@ pub(crate) async fn post_settings(
                 event_data,
                 is_started,
                 form.context,
+                None,
             )
             .await?,
         )
@@ -1738,6 +1771,7 @@ pub(crate) async fn post_notification_role(
                     event_data,
                     is_started,
                     form.context,
+                    None,
                 )
                 .await?,
             ));
@@ -1762,6 +1796,7 @@ pub(crate) async fn post_notification_role(
                 event_data,
                 is_started,
                 form.context,
+                None,
             )
             .await?,
         )
@@ -2322,6 +2357,7 @@ pub(crate) async fn post_seeding_race(
                     event_data,
                     false,
                     form.context,
+                    None,
                 )
                 .await?,
             )
@@ -2342,6 +2378,7 @@ pub(crate) async fn post_seeding_race(
                             event_data,
                             false,
                             form.context,
+                            None,
                         )
                         .await?,
                     ));
@@ -2366,6 +2403,7 @@ pub(crate) async fn post_seeding_race(
                                     event_data,
                                     false,
                                     form.context,
+                                    None,
                                 )
                                 .await?,
                             ));
@@ -2453,6 +2491,7 @@ pub(crate) async fn post_seeding_race(
                 event_data,
                 false,
                 form.context,
+                None,
             )
             .await?,
         )
@@ -3151,6 +3190,48 @@ pub(crate) mod route_tests {
         let (attempt_id, mut version): (i64, i64) = sqlx::query_as(
             "SELECT id, control_version FROM qualifier_attempts WHERE series=$1 AND event=$2 AND state<>'void' AND counts_for_entrant AND team_id IN (SELECT team FROM team_members WHERE member=$3) ORDER BY id DESC LIMIT 1",
         ).bind(series).bind(event).bind(outsider).fetch_one(pool).await.unwrap();
+        // Expected review failures redirect to a one-time notice on the page.
+        sqlx::query("INSERT INTO organizers(series,event,organizer) VALUES($1,$2,$3)")
+            .bind(series).bind(event).bind(outsider).execute(pool).await.unwrap();
+        for action in ["result", "dq", "invalidate"] {
+            let response = client.post(format!("{base}/pooled-result"))
+                .header(ContentType::Form)
+                .private_cookie(rocket::http::Cookie::new("csrf_token", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="))
+                .header(rocket::http::Header::new("x-test-user", outsider.to_string()))
+                .body(encode(&format!("attempt_id={attempt_id}&control_version={version}&action={action}&outcome=forfeit")))
+                .dispatch().await;
+            assert_eq!(response.status(), Status::SeeOther, "self-review with {action}");
+            assert_eq!(response.headers().get_one("Location"), Some(base.as_str()));
+            let response = client.get(&base)
+                .header(rocket::http::Header::new("x-test-user", outsider.to_string()))
+                .dispatch().await;
+            assert_eq!(response.status(), Status::Ok);
+            let html = response.into_string().await.unwrap();
+            assert!(html.contains("you cannot review your own qualifier attempt"));
+            assert!(html.contains("role=\"alert\""));
+            assert!(html.find("you cannot review your own qualifier attempt").unwrap() < html.find("id=\"pooled-attempts\"").unwrap());
+            let unchanged: i64 = sqlx::query_scalar("SELECT control_version FROM qualifier_attempts WHERE id=$1")
+                .bind(attempt_id).fetch_one(pool).await.unwrap();
+            assert_eq!(unchanged, version);
+        }
+        sqlx::query("DELETE FROM organizers WHERE series=$1 AND event=$2 AND organizer=$3")
+            .bind(series).bind(event).bind(outsider).execute(pool).await.unwrap();
+        let response = client.post(format!("{base}/pooled-result"))
+            .header(ContentType::Form)
+            .private_cookie(rocket::http::Cookie::new("csrf_token", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="))
+            .header(rocket::http::Header::new("x-test-user", staff.to_string()))
+            .body(encode(&format!("attempt_id={attempt_id}&control_version=0&action=dq")))
+            .dispatch().await;
+        assert_eq!(response.status(), Status::SeeOther, "stale result redirects");
+        let response = client.get(&base)
+            .header(rocket::http::Header::new("x-test-user", staff.to_string()))
+            .dispatch().await;
+        assert_eq!(response.status(), Status::Ok);
+        assert!(response.into_string().await.unwrap().contains("stale result"));
+        let html = client.get(&base)
+            .header(rocket::http::Header::new("x-test-user", staff.to_string()))
+            .dispatch().await.into_string().await.unwrap();
+        assert!(!html.contains("stale result"), "the notice is consumed after one display");
         for action in ["dq", "invalidate"] {
             let response = client.post(format!("{base}/pooled-result"))
                 .header(ContentType::Form)

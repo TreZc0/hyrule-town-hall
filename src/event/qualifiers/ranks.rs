@@ -112,7 +112,7 @@ pub(crate) async fn post(
         Err(error) => {
             form.context.push_error(form::Error::validation(error).with_name("rank"));
             let is_started = data.is_started(&mut transaction).await?;
-            Ok(RedirectOrContent::Content(super::qualifiers_form(transaction, me, uri, csrf.as_ref(), data, is_started, form.context).await?))
+            Ok(RedirectOrContent::Content(super::qualifiers_form(transaction, me, uri, csrf.as_ref(), data, is_started, form.context, None).await?))
         }
     }
 }
