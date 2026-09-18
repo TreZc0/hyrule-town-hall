@@ -338,8 +338,11 @@ impl SeedGenType {
         let config = config.for_display(race, race.draft.is_some());
         if let Some(snapshot) = super::choice_resolution::read(&mut *executor, race.id).await.ok().flatten() {
             // This table is public, including while another async part is still pending.
-            return (snapshot.visible_at(super::choice_resolution::Timing::RaceCreation) || race.is_ended())
-                .then(|| snapshot.display_for_config(false, &config));
+            return Some(if race.is_ended() {
+                snapshot.display_for_config(false, &config)
+            } else {
+                snapshot.scheduling_display(false, &config)
+            });
         }
         let team_ids = race.teams().map(|t| t.id).collect_vec();
         if team_ids.len() < 2 {

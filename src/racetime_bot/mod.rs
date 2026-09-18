@@ -2637,7 +2637,7 @@ impl SeedRollUpdate {
                 let summary = saved_summary.or_else(|| seed.seed_data.as_ref().and_then(|data| baselines::seed_summary(data, false)))
                     .or_else(|| resolved_randoms.map(|s| format!("Final settings - {s}")));
                 if let Some(summary) = summary {
-                    for chunk in baselines::message_chunks(&summary) { ctx.say(chunk).await?; }
+                    for chunk in baselines::message_chunks(&baselines::racetime_summary(&summary)) { ctx.say(chunk).await?; }
                 }
 
                 if let Some(VersionedBranch::Tww { identifier, github_url, .. }) = version {
@@ -5406,7 +5406,10 @@ impl Handler {
             }
         };
         let choices = owr_choices_for_race(&ctx.global_state.db_pool, &cal_event.race).await;
-        let seed_options_str = owr_choices_description(&choices, &config);
+        let seed_options_str = snapshot.as_ref().map_or_else(
+            || owr_choices_description(&choices, &config),
+            |snapshot| snapshot.seed_options_description(&config, choice_resolution::Timing::RoomOpening),
+        );
         let seed_options_str = config.selected_baseline.as_ref().map_or(seed_options_str.clone(), |(_, label)| format!("{label}; {seed_options_str}"));
         let labels: Vec<(String, String)> = self
             .official_data
@@ -5434,11 +5437,7 @@ impl Handler {
             baselines::with_presentation(receiver, presentation),
             language,
             article,
-            if snapshot.as_ref().is_some_and(|snapshot| !snapshot.visible_at(choice_resolution::Timing::RoomOpening)) {
-                "seed".into()
-            } else {
-                format!("seed with {seed_options_str}")
-            },
+            format!("seed with {seed_options_str}"),
             false,
         )
         .await;
@@ -5482,7 +5481,10 @@ impl Handler {
             }
         };
         let choices = owr_choices_for_race(&ctx.global_state.db_pool, &cal_event.race).await;
-        let description = owr_choices_description(&choices, &config);
+        let description = snapshot.as_ref().map_or_else(
+            || owr_choices_description(&choices, &config),
+            |snapshot| snapshot.seed_options_description(&config, choice_resolution::Timing::RoomOpening),
+        );
         let description = config.selected_baseline.as_ref().map_or(description.clone(), |(_, label)| format!("{label}; {description}"));
         let labels: Vec<(String, String)> = self
             .official_data
@@ -5507,11 +5509,7 @@ impl Handler {
                 .roll_owr_seed(resolved, config, resolved_randoms_str, build), presentation),
             language,
             article,
-            if snapshot.as_ref().is_some_and(|snapshot| !snapshot.visible_at(choice_resolution::Timing::RoomOpening)) {
-                "seed".into()
-            } else {
-                format!("seed with {description}")
-            },
+            format!("seed with {description}"),
             false,
         )
         .await;
@@ -6113,7 +6111,7 @@ impl RaceHandler<GlobalState> for Handler {
                     if let Some(snapshot) = choice_resolution::ensure(&mut transaction, &cal_event.race, config, choice_resolution::Timing::RoomOpening).await.to_racetime()?
                         .filter(|snapshot| snapshot.visible_at(choice_resolution::Timing::RoomOpening)) {
                         let display_config = config.for_display(&cal_event.race, event.draft_kind_str.is_some());
-                        pending_sends.push(PendingSend::Say(snapshot.display_for_config(!matches!(cal_event.kind, cal::EventKind::Normal), &display_config)));
+                        pending_sends.push(PendingSend::Say(baselines::racetime_summary(&snapshot.display_for_config(!matches!(cal_event.kind, cal::EventKind::Normal), &display_config))));
                     }
                 }
                 let mut entrants = Vec::default();

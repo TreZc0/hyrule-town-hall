@@ -52,6 +52,15 @@ pub(crate) struct Snapshot {
 }
 
 impl Snapshot {
+    /// Describe agreements before reveal without exposing saved random outcomes.
+    pub(crate) fn seed_options_description(&self, config: &OwrEventConfig, stage: Timing) -> String {
+        if self.visible_at(stage) {
+            super::owr_choices_description(&self.values(), config)
+        } else {
+            super::owr_choices_description(&self.preferences, config)
+        }
+    }
+
     pub(crate) fn scheduling_display(&self, is_async: bool, config: &OwrEventConfig) -> String {
         if self.visible_at(Timing::RaceCreation) {
             return self.display_for_config(is_async, config);

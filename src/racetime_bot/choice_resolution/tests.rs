@@ -119,9 +119,9 @@ fn scheduling_threads_show_agreements_without_revealing_saved_random_outcomes() 
             json!({"option": "random", "boots": "always", "delay": "never"}),
             json!({"option": "always", "boots": "always", "delay": "always"}),
         ]);
-        let expected = "Both agreed on: Boots, Use stream delay\nRandom Choice: Option";
+        let expected = "Agreed on: Boots, Use stream delay\nRandom Choice: Option";
         assert_eq!(scheduling_preferences(&preferences, &config, false), expected);
-        assert_eq!(scheduling_preferences(&preferences, &config, true), "Both agreed on: Boots\nRandom Choice: Option");
+        assert_eq!(scheduling_preferences(&preferences, &config, true), "Agreed on: Boots\nRandom Choice: Option");
         for enabled in [false, true] {
             let snapshot = Snapshot {
                 teams: vec![1, 2],
@@ -142,10 +142,57 @@ fn scheduling_preferences_respect_pending_and_selected_baselines() {
     config.choices["option"]["baselines"] = json!(["a"]);
     config.choices["other"] = json!({"label": "Other", "settings": {"other": true}, "baselines": ["b"]});
     let preferences = [("option".into(), ChoiceValue::Always), ("other".into(), ChoiceValue::Always)].into();
-    assert_eq!(scheduling_preferences(&preferences, &config, true), "If a is selected:\nBoth agreed on: Option\nIf b is selected:\nBoth agreed on: Other");
+    assert_eq!(scheduling_preferences(&preferences, &config, true), "If a is selected:\nAgreed on: Option\nIf b is selected:\nAgreed on: Other");
     config.choices = OwrEventConfig::choices_for_baseline(&config.choices, "a");
     config.selected_baseline = Some(("a".into(), "A".into()));
-    assert_eq!(scheduling_preferences(&preferences, &config, true), "Both agreed on: Option");
+    assert_eq!(scheduling_preferences(&preferences, &config, true), "Agreed on: Option");
+}
+
+#[test]
+fn room_preamble_shows_base_and_agreed_settings_without_leaking_random_outcomes() {
+    for timing in [Timing::RaceCreation, Timing::RoomOpening, Timing::SeedRolling] {
+        let config = fixture(timing);
+        for value in [ChoiceValue::Never, ChoiceValue::Always, ChoiceValue::Random] {
+            for enabled in [false, true] {
+                if value != ChoiceValue::Random && enabled != (value == ChoiceValue::Always) {
+                    continue;
+                }
+                let snapshot = Snapshot {
+                    teams: vec![1, 2],
+                    definitions: config.choices.clone(),
+                    preferences: [("option".into(), value)].into(),
+                    resolved: [("option".into(), enabled)].into(),
+                    timing,
+                    selected_baseline: None,
+                };
+                let expected = if value == ChoiceValue::Random && timing == Timing::SeedRolling {
+                    "random choice: Option"
+                } else if enabled {
+                    "Option"
+                } else {
+                    "base settings"
+                };
+                assert_eq!(snapshot.seed_options_description(&config, Timing::RoomOpening), expected);
+            }
+        }
+    }
+}
+
+#[test]
+fn public_base_settings_remain_visible_before_reveal() {
+    for timing in [Timing::RoomOpening, Timing::SeedRolling] {
+        let mut config = fixture(timing);
+        config.choices.as_object_mut().unwrap().remove("delay");
+        let snapshot = Snapshot {
+            teams: vec![1, 2],
+            definitions: config.choices.clone(),
+            preferences: HashMap::new(),
+            resolved: [("option".into(), false)].into(),
+            timing,
+            selected_baseline: None,
+        };
+        assert_eq!(snapshot.scheduling_display(false, &config), "This match will be played on base settings");
+    }
 }
 
 #[tokio::test]
@@ -325,7 +372,11 @@ async fn database_timing_retries_concurrency_and_per_game_storage() {
         let kind = SeedGenType::Owr { config: fixture(if id == 2 { Timing::RoomOpening } else { Timing::SeedRolling }), build: OwrBuild::Regular };
         assert_eq!(kind.scheduling_thread_str(&pool, &race(id), None, true, false).await.as_deref(), Some("Random Choice: Option"));
         let mut connection = pool.acquire().await.unwrap();
-        assert!(kind.settings_display_str(&mut connection, &race(id), &[]).await.is_none());
+        assert_eq!(kind.settings_display_str(&mut connection, &race(id), &[]).await.as_deref(), Some("Random Choice: No delay, Option"));
+        let mut finished = race(id);
+        finished.schedule = RaceSchedule::Live { start: Utc::now(), end: Some(Utc::now()), room: None };
+        let expected = read(&pool, finished.id).await.unwrap().unwrap().display(false);
+        assert_eq!(kind.settings_display_str(&mut connection, &finished, &[]).await.as_deref(), Some(expected.as_str()));
     }
     // A concurrent first resolution must also choose only once.
     sqlx::query("INSERT INTO races (id, team1, team2) VALUES (4, 1, 2)")
@@ -397,6 +448,23 @@ async fn database_timing_retries_concurrency_and_per_game_storage() {
             .values()
             .all(|enabled| !enabled)
     );
+    let mut connection = pool.acquire().await.unwrap();
+    assert_eq!(kind.settings_display_str(&mut connection, &race(5), &[]).await.as_deref(), Some("Agreed on: Use stream delay"));
+    // Later preference edits must not alter the public summary of a saved race.
+    assert_eq!(kind.settings_display_str(&mut connection, &game4, &[]).await.as_deref(), Some("Random Choice: No delay, Option"));
+    drop(connection);
+    // Base settings still have a tooltip after early seed generation, for both generators.
+    let mut base_config = config.clone();
+    base_config.choices.as_object_mut().unwrap().remove("delay");
+    sqlx::query("INSERT INTO races (id, team1, team2) VALUES (7, 1, 2)").execute(&pool).await.unwrap();
+    for_seed(&pool, &race(7), &base_config).await.unwrap().unwrap();
+    for slug in ["owr", "alttpr_dr"] {
+        let mut value = serde_json::to_value(&base_config).unwrap();
+        value["source"] = json!("mutual_choices");
+        let kind = SeedGenType::from_db(Some(slug), Some(&value)).unwrap();
+        let mut connection = pool.acquire().await.unwrap();
+        assert_eq!(kind.settings_display_str(&mut connection, &race(7), &[]).await.as_deref(), Some("This match will be played on base settings"));
+    }
     sqlx::query("UPDATE races SET team2 = 3 WHERE id = 4")
         .execute(&pool)
         .await

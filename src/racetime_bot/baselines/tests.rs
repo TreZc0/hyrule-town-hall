@@ -500,6 +500,18 @@ fn pooled_modes_keep_explicit_baselines_and_chunks_keep_all_text() {
     assert_eq!(chunks.concat(), text);
 }
 
+#[test]
+fn racetime_settings_have_separators_even_when_chat_collapses_newlines() {
+    assert_eq!(
+        racetime_summary("Choices resolved at seed reveal:\nhovering and moldorm bouncing ALLOWED\nno stream delay\nPseudoboots: applied"),
+        "Choices resolved at seed reveal: hovering and moldorm bouncing ALLOWED, no stream delay, Pseudoboots: applied",
+    );
+    assert_eq!(
+        racetime_summary("Choices resolved at room opening:\nBaseline: Crosskeys\nBoots: applied\nFlute: not applied"),
+        "Choices resolved at room opening: Baseline: Crosskeys, Boots: applied, Flute: not applied",
+    );
+}
+
 #[tokio::test]
 #[ignore = "requires HTH_TEST_DATABASE_URL pointing to a migrated production-copy *_test database"]
 async fn database_named_draft_propagation_seed_reuse_and_unused_games() {

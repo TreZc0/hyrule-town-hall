@@ -417,6 +417,18 @@ pub(crate) fn seed_summary(data: &serde_json::Value, is_async: bool) -> Option<S
     }
 }
 
+/// Racetime chat collapses line breaks, so separate settings explicitly.
+pub(super) fn racetime_summary(text: &str) -> String {
+    let mut summary = String::new();
+    for line in text.lines().map(str::trim).filter(|line| !line.is_empty()) {
+        if !summary.is_empty() {
+            summary.push_str(if summary.ends_with(':') { " " } else { ", " });
+        }
+        summary.push_str(line);
+    }
+    summary
+}
+
 /// Keep individual messages below both Discord and Racetime limits, even for long custom labels.
 pub(crate) fn message_chunks(text: &str) -> Vec<String> {
     let mut chunks = Vec::new();
