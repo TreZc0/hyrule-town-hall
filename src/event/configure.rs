@@ -237,7 +237,7 @@ async fn configure_form(
                                 input(type = "number", id = "async_start_delay", name = "async_start_delay", min = "0", value = ctx.field_value("async_start_delay").unwrap_or(
                                     &event.async_start_delay.map(|d| d.to_string()).unwrap_or_default()
                                 ), style = "width: 100%; max-width: 200px;");
-                                label(class = "help") : " (After seed is distributed, auto-start after this many minutes. Leave empty to disable.)";
+                                label(class = "help") : " (After seed is distributed, auto-start after this many minutes. Leave empty or set 0 to disable.)";
                             });
                             : form_field("discord_events_enabled", &mut errors, html! {
                                 input(type = "checkbox", id = "discord_events_enabled", name = "discord_events_enabled", checked? = ctx.field_value("discord_events_enabled").map_or(event.discord_events_enabled, |value| value == "on"));

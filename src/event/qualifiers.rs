@@ -1139,12 +1139,12 @@ pub(crate) async fn post_pooled_recover(
         .ok_or(StatusOrError::Status(Status::BadRequest))?;
     let mut tx = pool.begin().await?;
     require_organizer(&mut tx, &me, series, event).await?;
-    let row: Option<(String, Option<i64>, Option<i64>, String, bool, Option<i64>)> = sqlx::query_as(r#"SELECT attempt.state, attempt.discord_thread, event.discord_async_channel,
-        attempt.source, attempt.retry_declared_at IS NOT NULL, event.discord_organizer_channel
+    let row: Option<(String, Option<i64>, Option<i64>, String, bool, Option<i64>, serde_json::Value)> = sqlx::query_as(r#"SELECT attempt.state, attempt.discord_thread, event.discord_async_channel,
+        attempt.source, attempt.retry_declared_at IS NOT NULL, event.discord_organizer_channel, attempt.delivery_messages
         FROM qualifier_attempts attempt JOIN events event USING (series, event)
         WHERE attempt.id=$1 AND attempt.control_version=$2 AND attempt.series=$3 AND attempt.event=$4"#)
         .bind(value.attempt_id).bind(value.control_version).bind(series).bind(event).fetch_optional(&mut *tx).await?;
-    let (state, thread, parent, source, declared, organizers_channel) = row.ok_or(StatusOrError::Status(Status::Conflict))?;
+    let (state, thread, parent, source, declared, organizers_channel, messages) = row.ok_or(StatusOrError::Status(Status::Conflict))?;
     if source != "async" && value.action != "retry-declared" {
         return Err(StatusOrError::Status(Status::BadRequest));
     }
@@ -1158,7 +1158,8 @@ pub(crate) async fn post_pooled_recover(
                 let message = ChannelId::new(organizers_channel.unwrap() as u64)
                     .message(&*ctx, MessageId::new(id)).await?;
                 let bot = ctx.http.get_current_user().await?;
-                if message.author.id != bot.id || !crate::async_race::pooled::has_delivery_marker(&message.content, value.attempt_id, "retry-declared") {
+                if message.author.id != bot.id || (messages.get("retry-declared").and_then(serde_json::Value::as_u64) != Some(message.id.get())
+                    && !crate::async_race::pooled::matches_delivery(&message, value.attempt_id, "retry-declared", messages.get("nonce:retry-declared").and_then(serde_json::Value::as_str))) {
                     return Err(StatusOrError::Status(Status::BadRequest));
                 }
             }
@@ -1200,7 +1201,8 @@ pub(crate) async fn post_pooled_recover(
             let bot = ctx.http.get_current_user().await?;
             let key = format!("go-{}", value.control_version);
             if message.author.id != bot.id
-                || !crate::async_race::pooled::has_delivery_marker(&message.content, value.attempt_id, &key)
+                || (messages.get(&key).and_then(serde_json::Value::as_u64) != Some(message.id.get())
+                    && !crate::async_race::pooled::matches_delivery(&message, value.attempt_id, &key, messages.get(format!("nonce:{key}")).and_then(serde_json::Value::as_str)))
             {
                 return Err(StatusOrError::Status(Status::BadRequest));
             }

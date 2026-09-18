@@ -191,6 +191,7 @@ pub(crate) struct Attempt {
     pub(crate) state: String,
     pub(crate) counts_for_entrant: bool,
     pub(crate) official_outcome: Option<String>,
+    pub(crate) official_time: Option<sqlx::postgres::types::PgInterval>,
     pub(crate) discord_thread: Option<i64>,
     pub(crate) retry_banned_at: Option<DateTime<Utc>>,
     pub(crate) retry_declared_at: Option<DateTime<Utc>>,
@@ -198,7 +199,7 @@ pub(crate) struct Attempt {
 
 impl Attempt {
     const COLUMNS: &'static str = r#"id, mode_id, seed_id, source, state,
-        counts_for_entrant, official_outcome, discord_thread, retry_banned_at, retry_declared_at"#;
+        counts_for_entrant, official_outcome, official_time, discord_thread, retry_banned_at, retry_declared_at"#;
 
     pub(crate) async fn for_team(
         transaction: &mut Transaction<'_, Postgres>,
@@ -219,6 +220,33 @@ impl Attempt {
                 self.state.as_str(),
                 "assigned" | "revealed" | "starting" | "running"
             )
+    }
+
+    pub(crate) fn status_summary(&self, score: Option<ModeScore>) -> String {
+        let source = if self.source == "async" { "Async" } else { "Live (sync)" };
+        let status = match (self.state.as_str(), self.official_outcome.as_deref()) {
+            ("assigned", _) => "request received",
+            ("revealed", _) => "seed revealed; waiting to start",
+            ("starting", _) => "starting",
+            ("running", _) => "in progress",
+            ("awaiting_verification", _) => "finished; awaiting verification",
+            ("finalized", Some("finished")) => "verified finish",
+            ("finalized", Some("forfeit")) => "forfeit",
+            ("finalized", Some("dq")) => "disqualified",
+            ("finalized", Some("invalid")) => "invalid result",
+            _ => "requires organizer attention",
+        };
+        let mut summary = format!("{source} — {status}");
+        if let Some(time) = self.official_time.as_ref()
+            .and_then(|time| pg_interval_duration(time).to_std().ok())
+        {
+            summary.push_str(&format!(" — final time: {}", English.format_duration(time, false)));
+        }
+        match score {
+            Some(ModeScore::Score(points)) => summary.push_str(&format!(" — {points:.2} points")),
+            _ => summary.push_str(" — points still pending"),
+        }
+        summary
     }
 }
 
@@ -274,7 +302,7 @@ pub(crate) async fn reveal(
         RETURNING attempt.control_version"#,
     )
     .bind(attempt_id)
-    .bind(row.4.map(|delay| delay.max(0)))
+    .bind(row.4.filter(|delay| *delay > 0))
     .fetch_optional(&mut *transaction)
     .await?
     .ok_or(Error::WindowClosed)?;
@@ -2440,6 +2468,7 @@ pub(crate) mod tests {
             .unwrap();
         assert_eq!(first.id, repeated.id);
         assert!(seed_ids.contains(&first.seed_id));
+        assert_eq!(first.status_summary(None), "Async — request received — points still pending");
         crate::async_race::pooled::test_delivery_failures(&pool, first.id).await;
         let discord_thread = -first.id;
         sqlx::query("UPDATE qualifier_attempts SET discord_thread = $2 WHERE id = $1")
@@ -2448,9 +2477,9 @@ pub(crate) mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        // None disables force-start, zero starts immediately, and a positive
+        // Blank or nonpositive delays disable force-start; a positive
         // allowance is fixed at READY and cannot be reset by another click.
-        for delay in [Some(10_i32), Some(0), None] {
+        for delay in [Some(10_i32), Some(0), Some(-1), None] {
             sqlx::query("UPDATE events SET async_start_delay=$3 WHERE series=$1 AND event=$2")
                 .bind(series).bind(event).bind(delay).execute(&pool).await.unwrap();
             sqlx::query("UPDATE qualifier_attempts SET state='assigned', control_version=1, revealed_at=NULL, start_due_at=NULL WHERE id=$1")
@@ -2458,12 +2487,12 @@ pub(crate) mod tests {
             let revealed = reveal(&pool, first.id, 1, discord_thread).await.unwrap();
             let timing: (DateTime<Utc>, Option<DateTime<Utc>>) = sqlx::query_as("SELECT revealed_at,start_due_at FROM qualifier_attempts WHERE id=$1")
                 .bind(first.id).fetch_one(&pool).await.unwrap();
-            assert_eq!(timing.1.map(|due| (due - timing.0).num_seconds()), delay.map(|delay| i64::from(delay) * 60));
+            assert_eq!(timing.1.map(|due| (due - timing.0).num_seconds()), delay.filter(|delay| *delay > 0).map(|delay| i64::from(delay) * 60));
             reveal(&pool, first.id, 1, discord_thread).await.unwrap();
             let repeated: Option<DateTime<Utc>> = sqlx::query_scalar("SELECT start_due_at FROM qualifier_attempts WHERE id=$1")
                 .bind(first.id).fetch_one(&pool).await.unwrap();
             assert_eq!(repeated, timing.1);
-            assert_eq!(request_start(&pool, first.id, revealed.next_control_version, true).await.unwrap(), delay == Some(0));
+            assert!(!request_start(&pool, first.id, revealed.next_control_version, true).await.unwrap());
             if delay == Some(10) {
                 assert!(request_start(&pool, first.id, revealed.next_control_version, false).await.unwrap());
             }
@@ -2503,6 +2532,16 @@ pub(crate) mod tests {
         )
         .await
         .unwrap();
+        let finished_attempt = load_attempt_in(&mut transaction, first.id).await.unwrap();
+        let mut status_config = Config::load(&mut transaction, Series::from_str(series).unwrap(), event).await.unwrap().unwrap();
+        let pending_scores = standings(&mut transaction, &status_config).await.unwrap();
+        let pending = pending_scores.iter().find(|standing| standing.team_id == entrants[0].0).unwrap().mode_scores[0].1;
+        assert_eq!(finished_attempt.status_summary(Some(pending)), "Async — verified finish — final time: 1:00:00 — points still pending");
+        // Once the cohort can establish par, the same attempt shows its score.
+        status_config.par_finishers = 1;
+        let scored = standings(&mut transaction, &status_config).await.unwrap();
+        let points = scored.iter().find(|standing| standing.team_id == entrants[0].0).unwrap().mode_scores[0].1;
+        assert_eq!(finished_attempt.status_summary(Some(points)), "Async — verified finish — final time: 1:00:00 — 100.00 points");
         transaction.commit().await.unwrap();
         let replacement = request_async_retry(&pool, entrants[0].0, mode_id, entrants[0].1)
             .await
@@ -2654,6 +2693,14 @@ pub(crate) mod tests {
             1
         );
         assert_eq!(finish_live(&pool, race_id, &[]).await.unwrap(), 0);
+        let mut tx = pool.begin().await.unwrap();
+        let live_attempts = Attempt::for_team(&mut tx, entrants[1].0).await.unwrap();
+        let live_attempt = live_attempts.iter().find(|attempt| attempt.seed_id == live_seed_id).unwrap();
+        let config = Config::load(&mut tx, Series::from_str(series).unwrap(), event).await.unwrap().unwrap();
+        let scores = standings(&mut tx, &config).await.unwrap();
+        let points = scores.iter().find(|standing| standing.team_id == entrants[1].0).unwrap().mode_scores[0].1;
+        assert_eq!(live_attempt.status_summary(Some(points)), "Live (sync) — verified finish — final time: 1:05:00 — points still pending");
+        tx.rollback().await.unwrap();
         assert_eq!(cancel_live(&pool, race_id).await.unwrap(), 1);
         assert_eq!(cancel_live(&pool, race_id).await.unwrap(), 0);
         let restored: (bool, Option<i64>) = sqlx::query_as(
@@ -2699,6 +2746,9 @@ pub(crate) mod tests {
         let config = Config::load(&mut tx, Series::from_str(series).unwrap(), event).await.unwrap().unwrap();
         let scores = standings(&mut tx, &config).await.unwrap();
         assert!(scores.iter().find(|row| row.team_id == entrants[0].0).unwrap().mode_scores.iter().any(|(_, score, _)| *score == ModeScore::Score(0.0)));
+        let disqualified = load_attempt_in(&mut tx, replacement.id).await.unwrap();
+        let zero = scores.iter().find(|standing| standing.team_id == entrants[0].0).unwrap().mode_scores[0].1;
+        assert_eq!(disqualified.status_summary(Some(zero)), "Async — disqualified — 0.00 points");
         let original_outcome: String = sqlx::query_scalar("SELECT official_outcome FROM qualifier_attempts WHERE id=$1")
             .bind(first.id).fetch_one(&mut *tx).await.unwrap();
         assert_eq!(original_outcome, "finished");

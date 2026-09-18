@@ -414,7 +414,7 @@ async fn setup_form(
                             input(type = "number", id = "async_start_delay", name = "async_start_delay", min = "0", value = ctx.field_value("async_start_delay").unwrap_or(
                                 &event.async_start_delay.map(|d| d.to_string()).unwrap_or_default()
                             ), style = "width: 100%; max-width: 200px;");
-                            label(class = "help") : " (After seed is distributed, auto-start after this many minutes. Leave empty to disable.)";
+                            label(class = "help") : " (After seed is distributed, auto-start after this many minutes. Leave empty or set 0 to disable.)";
                         });
 
                         : form_field("show_opt_out", &mut errors, html! {

@@ -132,11 +132,11 @@ pub(super) fn label(field: &str, title: &str) -> RawHtml<String> {
         ],
         "automated_asyncs" => &[
             "Uses automated Discord threads for the supported qualifier-async workflow, so entrants receive the seed and start/report their run through the bot.",
-            "Configure the event's Discord server and async channel as well as the async seed and timing settings. The legacy force-start delay is a separate field. Pooled-by-mode qualifiers use their dedicated configuration and request lifecycle on the Qualifiers page.",
+            "Configure the event's Discord server and async channel as well as the async seed and timing settings. Force-Start Delay applies to both normal and pooled asyncs. Manage pooled seed pools and request windows on the Qualifiers page.",
         ],
         "async_start_delay" => &[
-            "For the automated async workflow, this is the number of minutes after seed distribution before the bot forces the start if the entrant has not started manually. Leave it empty to disable that automatic force-start.",
-            "This is measured in minutes, unlike Start Delay for racetime rooms, which is measured in seconds. It is also separate from a qualifier's request or submission deadline. Pooled qualifiers have their own READY/countdown/GO lifecycle.",
+            "For the automated async workflow, this is the number of minutes after seed distribution before the bot forces the start if the entrant has not started manually. Leave it empty or set it to 0 to disable automatic force-start.",
+            "This is measured in minutes, unlike Start Delay for racetime rooms, which is measured in seconds. It is also separate from a qualifier's request or submission deadline. For pooled qualifiers, this delay starts at READY; the run timer starts at GO after the countdown.",
         ],
         "show_opt_out" => &[
             "Shows the opt-out control where the event supports it: before the event starts, for score-based qualification. It allows a qualified player to indicate they do not intend to participate.",

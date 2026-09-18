@@ -1974,21 +1974,10 @@ pub(crate) fn spawn_force_start_task(
     player_id: UserId,
     delay_minutes: i32,
 ) {
+    if delay_minutes <= 0 {
+        return;
+    }
     tokio::spawn(async move {
-        if delay_minutes <= 0 {
-            if !run.is_started(&pool).await.unwrap_or(true) {
-                let _ = channel_id
-                    .say(
-                        &http,
-                        "@here **The seed is being force started right now!**",
-                    )
-                    .await;
-                let _ = run_countdown(&pool, &http, channel_id, &run).await;
-                remove_start_button(&http, channel_id, &run).await;
-            }
-            return;
-        }
-
         let total_secs = delay_minutes as u64 * 60;
 
         let warning_2min = if delay_minutes > 2 {
@@ -2310,6 +2299,9 @@ fn pooled_seed_message(seed_data: &serde_json::Value) -> Result<MessageBuilder, 
                 .query_pairs_mut()
                 .append_pair("patch", &format!("{}/seed/{prefix}{uuid}.bps", base_uri()));
             message.push(format!("Seed URL: {patcher}\n"));
+            if let Some(hash) = seed::Data::from_seed_data_only(Some(seed_data.clone()), None, false).file_hash {
+                message.push(format!("Seed Hash: {}\n", hash.join(", ")));
+            }
         }
         seed::Files::AvianartSeed { hash, seed_hash } => {
             message.push(format!("Seed URL: https://avianart.games/perm/{hash}\n"));

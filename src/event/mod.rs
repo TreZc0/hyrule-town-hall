@@ -1985,6 +1985,8 @@ async fn status_page(
                             .ok_or(pooled_qualifiers::Error::NotConfigured)?;
                         @let modes = pooled_qualifiers::Mode::for_event(&mut transaction, data.series, &data.event).await?;
                         @let attempts = pooled_qualifiers::Attempt::for_team(&mut transaction, row.id.into()).await?;
+                        @let own_standing = pooled_qualifiers::standings(&mut transaction, &config).await?
+                            .into_iter().find(|standing| standing.team_id == i64::from(row.id));
                         @let live_races = sqlx::query_as::<_, (i64, i64, DateTime<Utc>, Option<String>)>(
                             r#"SELECT seed.id, seed.mode_id, race.start, race.room
                             FROM qualifier_seeds seed JOIN races race ON race.id = seed.live_race_id
@@ -2029,18 +2031,9 @@ async fn status_page(
                                     @if let Some(attempt) = attempt {
                                         p {
                                             : "Status: ";
-                                            : match (attempt.state.as_str(), attempt.official_outcome.as_deref()) {
-                                                ("assigned", _) => "request received",
-                                                ("revealed", _) => "seed revealed; waiting to start",
-                                                ("starting", _) => "starting",
-                                                ("running", _) => "in progress",
-                                                ("awaiting_verification", _) => "finished; awaiting verification",
-                                                ("finalized", Some("finished")) => "verified finish",
-                                                ("finalized", Some("forfeit")) => "forfeit",
-                                                ("finalized", Some("dq")) => "disqualified",
-                                                ("finalized", Some("invalid")) => "invalid result",
-                                                _ => "requires organizer attention",
-                                            };
+                                            : attempt.status_summary(own_standing.as_ref()
+                                                .and_then(|standing| standing.mode_scores.iter().find(|(position, _, _)| *position == mode.position))
+                                                .map(|(_, score, _)| *score));
                                             @if let Some(thread) = attempt.discord_thread {
                                                 : " — ";
                                                 a(href = format!("https://discord.com/channels/{}/{thread}", data.discord_guild.map(|guild| guild.get()).unwrap_or_default())) : "Open Discord thread";

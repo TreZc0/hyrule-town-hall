@@ -1,6 +1,6 @@
 //! Recovery of the pooled Discord workflow. Database transactions never span Discord calls.
 use super::*;
-use serenity::all::{EditThread, GetMessages, Message, MessageId};
+use serenity::all::{EditThread, GetMessages, Message, MessageId, Nonce};
 
 #[derive(sqlx::FromRow)]
 struct Delivery {
@@ -42,7 +42,7 @@ pub(super) async fn sweep(pool: &PgPool, http: &Arc<Http>) -> Result<(), Error> 
 async fn pending_delivery_ids(pool: &PgPool) -> Result<Vec<i64>, sqlx::Error> {
     sqlx::query_scalar(r#"SELECT id FROM qualifier_attempts WHERE
         (delivery_claim_until IS NULL OR delivery_claim_until < NOW()) AND ((source = 'async' AND (
-            (state = 'assigned' AND (NOT delivery_messages ? 'ready' OR NOT delivery_messages ? 'welcome-v3')) OR
+            (state = 'assigned' AND (NOT delivery_messages ? 'ready' OR NOT delivery_messages ? 'welcome-v4')) OR
             (state = 'revealed' AND (
                 jsonb_typeof(delivery_messages->'seed') IS DISTINCT FROM 'number' OR start_due_at <= NOW()
                 OR (start_due_at > revealed_at + INTERVAL '2 minutes'
@@ -121,7 +121,7 @@ trait Transport: Send + Sync {
         Err(recovery_error("thread creation unavailable"))
     }
     async fn get(&self, channel: ChannelId, id: MessageId) -> Result<Message, Error>;
-    async fn find(&self, channel: ChannelId, attempt: i64, key: &str) -> Result<Option<Message>, Error>;
+    async fn find(&self, channel: ChannelId, attempt: i64, key: &str, nonce: Option<&str>) -> Result<Option<Message>, Error>;
     async fn edit_content(&self, _channel: ChannelId, _id: MessageId, _content: String) -> Result<Message, Error> {
         Err(recovery_error("message editing unavailable"))
     }
@@ -130,6 +130,7 @@ trait Transport: Send + Sync {
         channel: ChannelId,
         content: String,
         components: Vec<CreateActionRow>,
+        nonce: String,
     ) -> Result<Message, Error>;
 }
 
@@ -183,7 +184,7 @@ impl Transport for DiscordTransport<'_> {
     async fn get(&self, channel: ChannelId, id: MessageId) -> Result<Message, Error> {
         Ok(channel.message(self.0, id).await?)
     }
-    async fn find(&self, channel: ChannelId, attempt: i64, key: &str) -> Result<Option<Message>, Error> {
+    async fn find(&self, channel: ChannelId, attempt: i64, key: &str, nonce: Option<&str>) -> Result<Option<Message>, Error> {
         let bot = self.0.get_current_user().await?.id;
         let mut before = None;
         loop {
@@ -194,7 +195,7 @@ impl Transport for DiscordTransport<'_> {
             let messages = channel.messages(self.0, query).await?;
             if let Some(message) = messages
                 .iter()
-                .find(|message| message.author.id == bot && has_delivery_marker(&message.content, attempt, key))
+                .find(|message| message.author.id == bot && matches_delivery(message, attempt, key, nonce))
             {
                 return Ok(Some(message.clone()));
             }
@@ -212,11 +213,12 @@ impl Transport for DiscordTransport<'_> {
         channel: ChannelId,
         content: String,
         components: Vec<CreateActionRow>,
+        nonce: String,
     ) -> Result<Message, Error> {
         Ok(channel
             .send_message(
                 self.0,
-                CreateMessage::new().content(content).components(components),
+                CreateMessage::new().content(content).components(components).nonce(Nonce::String(nonce)).enforce_nonce(true),
             )
             .await?)
     }
@@ -267,11 +269,14 @@ async fn deliver_message(
         return Ok(message);
     }
     let sent = if row.delivery_messages.get(key).is_some() {
-        transport.find(channel, row.id, key).await?.ok_or_else(|| recovery_error("uncertain Discord send could not be recovered; staff must review the delivery operation"))?
+        transport.find(channel, row.id, key, row.delivery_messages.get(format!("nonce:{key}")).and_then(serde_json::Value::as_str)).await?.ok_or_else(|| recovery_error("uncertain Discord send could not be recovered; staff must review the delivery operation"))?
     } else {
+        // Keep delivery identity in Discord metadata, outside the visible text.
+        let nonce = Uuid::new_v4().simple().to_string()[..25].to_owned();
+        remember(pool, row, claim, &format!("nonce:{key}"), serde_json::json!(nonce)).await?;
         remember(pool, row, claim, key, serde_json::json!("pending")).await?;
         transport
-            .send(channel, with_delivery_link(row, key, &content), components)
+            .send(channel, with_delivery_link(row, key, &content), components, nonce)
             .await?
     };
     remember(pool, row, claim, key, serde_json::json!(sent.id.get())).await?;
@@ -281,26 +286,34 @@ async fn deliver_message(
     Ok(sent)
 }
 
-fn refreshed_content(row: &Delivery, key: &str, requested: &str, current: &str) -> Option<String> {
-    let content = if key == "ready" {
-        Some(with_delivery_link(row, key, requested))
-    } else {
-        current.strip_suffix(&format!("\n-# [qualifier:{}:{key}]", row.id))
-            .map(|content| with_delivery_link(row, key, content))
-    };
-    content.filter(|content| content != current)
+fn strip_delivery_footer<'a>(content: &'a str, attempt: i64, key: &str) -> &'a str {
+    if let Some((body, footer)) = content.rsplit_once("\n-# ") {
+        if has_delivery_marker(footer, attempt, key) { return body; }
+    }
+    content
 }
 
-pub(crate) fn has_delivery_marker(content: &str, attempt: i64, key: &str) -> bool {
+fn refreshed_content(row: &Delivery, key: &str, requested: &str, current: &str) -> Option<String> {
+    let body = if key == "ready" { requested } else { strip_delivery_footer(current, row.id, key) };
+    let content = with_delivery_link(row, key, body);
+    (content != current).then_some(content)
+}
+
+fn has_delivery_marker(content: &str, attempt: i64, key: &str) -> bool {
     content.ends_with(&format!("[qualifier:{attempt}:{key}]"))
         || content.ends_with(&format!("#qualifier:{attempt}:{key})"))
 }
 
+pub(crate) fn matches_delivery(message: &Message, attempt: i64, key: &str, nonce: Option<&str>) -> bool {
+    has_delivery_marker(&message.content, attempt, key)
+        || matches!((&message.nonce, nonce), (Some(Nonce::String(actual)), Some(expected)) if actual == expected)
+}
+
 fn with_delivery_link(row: &Delivery, key: &str, content: &str) -> String {
-    let (label, page) = if key == "retry-declared" {
-        ("Qualifier management", "qualifiers")
-    } else {
-        ("My status", "status")
+    let (label, page) = match key {
+        "ready" => ("Check your current qualifier status on HTH", "status"),
+        "retry-declared" => ("Qualifier management", "qualifiers"),
+        _ => return content.to_owned(),
     };
     format!("{content}\n-# [{label}]({}/event/{}/{}/{page}#qualifier:{}:{key})", base_uri(), row.series, row.event, row.id)
 }
@@ -398,15 +411,14 @@ async fn thread_details(pool: &PgPool, row: &Delivery) -> Result<(String, String
         .push("2. Download and prepare the seed. ");
     match event.async_start_delay {
         Some(delay) if delay > 0 => {
-            content.push(format!("You have **{delay} minutes** after READY before the countdown starts automatically.\n"));
+            content.push(format!("After READY, you have **{delay} minutes** to prepare before the countdown starts automatically.\n"));
         }
-        Some(_) => { content.push("The countdown starts automatically immediately after READY.\n"); }
-        None => { content.push("No automatic force-start is configured; click **START COUNTDOWN** when ready.\n"); }
+        _ => { content.push("No automatic force-start is configured; click **START COUNTDOWN** when ready.\n"); }
     }
-    content.push("3. Click **START COUNTDOWN** to start sooner. Your timer starts at **GO**, after the six-second countdown.\n")
-        .push("4. Click **FINISH** when you finish, or **FORFEIT** if you stop. An accidental FINISH can be reverted for 30 seconds, within your run deadline.\n")
+    content.push("3. Click **START COUNTDOWN** when you are ready to start. Your timer starts at **GO**, after the six-second countdown.\n")
+        .push("4. Click **FINISH** when you finish, or **FORFEIT** if you stop. An accidental FINISH can be reverted for 30 seconds.\n")
         .push("5. Post your VOD/recording link and the required screenshot in this thread.\n")
-        .push("6. Organizers will review your evidence and confirm your result using the thread’s staff controls.\n\n");
+        .push("6. Organizers will review your vod and confirm your result afterwards.\n\n");
     AsyncRaceManager::append_qualifier_recording_requirements(&mut tx, &event, &mut content).await?;
     content.push("\n**Timing:**\nRun limit: ")
         .push(English.format_duration(config.run_limit().to_std().unwrap_or_default(), false))
@@ -506,7 +518,7 @@ async fn deliver(pool: &PgPool, http: &Arc<Http>, id: i64, claim: &str) -> Resul
     match row.state.as_str() {
         "assigned" => {
             message(pool, http, &row, claim, channel, "ready", welcome, vec![CreateActionRow::Buttons(vec![CreateButton::new(run.button_id("ready")).label("READY!").style(ButtonStyle::Primary)])]).await?;
-            remember(pool, &row, claim, "welcome-v3", serde_json::json!(true)).await?;
+            remember(pool, &row, claim, "welcome-v4", serde_json::json!(true)).await?;
         }
         "revealed" => {
             let mut content = pooled_seed_message(&row.seed_data)?.build();
@@ -727,13 +739,13 @@ pub(crate) async fn test_delivery_failures(pool: &PgPool, id: i64) {
                 .cloned()
                 .ok_or_else(|| recovery_error("missing message"))
         }
-        async fn find(&self, _: ChannelId, attempt: i64, key: &str) -> Result<Option<Message>, Error> {
+        async fn find(&self, _: ChannelId, attempt: i64, key: &str, nonce: Option<&str>) -> Result<Option<Message>, Error> {
             Ok(self
                 .messages
                 .lock()
                 .unwrap()
                 .iter()
-                .find(|message| has_delivery_marker(&message.content, attempt, key))
+                .find(|message| matches_delivery(message, attempt, key, nonce))
                 .cloned())
         }
         async fn edit_content(&self, _: ChannelId, id: MessageId, content: String) -> Result<Message, Error> {
@@ -747,6 +759,7 @@ pub(crate) async fn test_delivery_failures(pool: &PgPool, id: i64) {
             channel: ChannelId,
             content: String,
             components: Vec<CreateActionRow>,
+            nonce: String,
         ) -> Result<Message, Error> {
             if self.fail_before {
                 return Err(recovery_error("failure before send"));
@@ -756,7 +769,7 @@ pub(crate) async fn test_delivery_failures(pool: &PgPool, id: i64) {
                 "author": {"id":"1234", "username":"fake", "discriminator":"0001", "avatar":null, "bot":true},
                 "content":content, "timestamp":"2026-09-10T10:00:00Z", "edited_timestamp":null,
                 "tts":false, "mention_everyone":false, "mentions":[], "mention_roles":[], "attachments":[], "embeds":[], "pinned":false, "type":0,
-                "components": components
+                "components": components, "nonce": nonce
             })).unwrap();
             self.messages.lock().unwrap().push(message.clone());
             if self.fail_after {
@@ -795,7 +808,30 @@ pub(crate) async fn test_delivery_failures(pool: &PgPool, id: i64) {
         assert!(welcome.contains(instruction), "missing qualifier instruction: {instruction}");
     }
     assert!(with_delivery_link(&row, "ready", &welcome).chars().count() <= 2000);
+    assert_eq!(with_delivery_link(&row, "ready", &welcome).matches("/status#").count(), 1);
+    for key in ["seed", "countdown-3", "go-3", "run-3", "undo-4", "staff-4", "final-5", "warn-2min", "warn-30s"] {
+        assert_eq!(with_delivery_link(&row, key, "Step text"), "Step text");
+        for footer in [
+            format!("[qualifier:{id}:{key}]"),
+            format!("[My status](https://hthdev.zsr.gg/event/casboots/pqtest/status#qualifier:{id}:{key})"),
+            format!("[Check your current qualifier status on HTH](https://hthdev.zsr.gg/event/casboots/pqtest/status#qualifier:{id}:{key})"),
+        ] {
+            assert_eq!(refreshed_content(&row, key, "New text", &format!("Original text\n-# {footer}")), Some("Original text".into()));
+        }
+    }
     assert!(welcome.contains("No automatic force-start is configured"));
+    for delay in [Some(10_i32), Some(0), Some(-1), None] {
+        sqlx::query("UPDATE events SET async_start_delay=$2 WHERE (series,event)=(SELECT series,event FROM qualifier_attempts WHERE id=$1)")
+            .bind(id).bind(delay).execute(pool).await.unwrap();
+        let (_, instructions) = thread_details(pool, &row).await.unwrap();
+        if delay == Some(10) {
+            assert!(instructions.contains("**10 minutes**"));
+        } else {
+            assert!(instructions.contains("No automatic force-start is configured"));
+        }
+        assert!(!instructions.contains("automatically immediately"));
+        assert!(with_delivery_link(&row, "ready", &instructions).chars().count() <= 2000);
+    }
     let now = Utc::now();
     row.revealed_at = Some(now);
     row.start_due_at = Some(now + chrono::Duration::minutes(5));
@@ -882,9 +918,10 @@ pub(crate) async fn test_delivery_failures(pool: &PgPool, id: i64) {
         );
         if let Ok(message) = recovered {
             assert!(!message.content.contains("[qualifier:"));
-            assert!(message.content.contains("[My status]("));
-            assert!(has_delivery_marker(&message.content, id, key));
-            assert!(!has_delivery_marker(&message.content, id + 1, key));
+            assert_eq!(message.content, "GO");
+            let nonce = row.delivery_messages.get(format!("nonce:{key}")).and_then(serde_json::Value::as_str);
+            assert!(matches_delivery(&message, id, key, nonce));
+            assert!(!matches_delivery(&message, id, key, Some("wrong-nonce")));
             assert_eq!(
                 message.timestamp.unix_timestamp(),
                 DateTime::parse_from_rfc3339("2026-09-10T10:00:00Z")
@@ -918,7 +955,7 @@ pub(crate) async fn test_delivery_failures(pool: &PgPool, id: i64) {
     // Its original timestamp and buttons must survive, with no duplicate send.
     let legacy = transport.send(ChannelId::new(1), format!("Old introduction\n-# [qualifier:{id}:ready]"), vec![CreateActionRow::Buttons(vec![
         CreateButton::new("async:pooled:ready:test").label("READY!").style(ButtonStyle::Primary),
-    ])]).await.unwrap();
+    ])], "legacy-ready".into()).await.unwrap();
     remember(pool, &row, "test", "ready", serde_json::json!("pending")).await.unwrap();
     row.delivery_messages = sqlx::query_scalar("SELECT delivery_messages FROM qualifier_attempts WHERE id=$1")
         .bind(id).fetch_one(pool).await.unwrap();
