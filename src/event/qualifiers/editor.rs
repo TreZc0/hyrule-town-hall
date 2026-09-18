@@ -209,12 +209,12 @@ pub(super) fn seed_controls(
                     input(type = "hidden", name = "mode_id", value = mode.id);
                     input(type = "hidden", name = "retry_failed", value = "true");
                     @let id = format!("generate-{}-pool_position", mode.id);
-                    : field(&id, "pool_position", "Existing seed", "Select a failed seed to retry. Ready, queued, running and released seeds cannot be retried here. Use Generate missing slots above to create new slots.", html! {
+                    : field(&id, "pool_position", "Existing seed", "Select a failed or ready seed to regenerate. Queued, running, assigned and released seeds cannot be retried here. Use Generate missing slots above to create new slots.", html! {
                         select(id = &id, name = "pool_position", required? = true, aria_describedby = format!("{id}-hint")) {
                             option(value = "", selected, disabled) : "Select an existing seed…";
                             @for seed in seeds.iter().filter(|seed| seed.mode_id == mode.id && seed.retired_at.is_none()) {
                                 @if let Some(slot) = seed.pool_position.filter(|slot| (1..=config.pool_seed_count).contains(slot)) {
-                                    option(value = slot, disabled? = seed.generation_state != "failed" || seed.released_at.is_some()) : format!("{} — {}", pools::seed_label(seed.id, seeds), seed.generation_state);
+                                    option(value = slot, disabled? = !matches!(seed.generation_state.as_str(), "failed" | "ready") || seed.released_at.is_some() || seed.has_attempts) : format!("{} — {}", pools::seed_label(seed.id, seeds), seed.generation_state);
                                 }
                             }
                         }
@@ -302,7 +302,7 @@ mod tests {
         assert!(
             seed_select
                 .as_node()
-                .select_first("option[value='1'][disabled]")
+                .select_first("option[value='1']:not([disabled])")
                 .is_ok()
         );
         let retry = seed_select

@@ -3140,6 +3140,45 @@ pub(crate) mod route_tests {
             (series,event,mode_id,source,live_race_id,generator_profile,settings_fingerprint)
             VALUES($1,$2,$3,'live',$4,'default','old-baseline') RETURNING id"#)
             .bind(series).bind(event).bind(unused_mode).bind(unused_race).fetch_one(pool).await.unwrap();
+        // Regeneration replaces only unused ready/failed seeds. Each case rolls
+        // back so the baseline-correction checks below retain their original fixture.
+        for state in ["ready", "failed", "generating", "pending", "released", "retired"] {
+            let mut tx = pool.begin().await.unwrap();
+            match state {
+                "released" => { sqlx::query("UPDATE qualifier_seeds SET released_at=NOW() WHERE id=$1").bind(private_seeds[0]).execute(&mut *tx).await.unwrap(); }
+                "retired" => { sqlx::query("UPDATE qualifier_seeds SET retired_at=NOW() WHERE id=$1").bind(private_seeds[0]).execute(&mut *tx).await.unwrap(); }
+                _ => { sqlx::query("UPDATE qualifier_seeds SET generation_state=$2 WHERE id=$1").bind(private_seeds[0]).bind(state).execute(&mut *tx).await.unwrap(); }
+            }
+            let before: serde_json::Value = sqlx::query_scalar("SELECT to_jsonb(seed) FROM qualifier_seeds seed WHERE id=$1")
+                .bind(private_seeds[0]).fetch_one(&mut *tx).await.unwrap();
+            pooled_qualifiers::generation::enqueue(&mut tx, series.parse().unwrap(), event, unused_mode, Some(1), true).await.unwrap();
+            let after: serde_json::Value = sqlx::query_scalar("SELECT to_jsonb(seed) FROM qualifier_seeds seed WHERE id=$1")
+                .bind(private_seeds[0]).fetch_one(&mut *tx).await.unwrap();
+            if matches!(state, "ready" | "failed") {
+                assert_eq!(after["generation_state"], "pending");
+                for field in ["seed_data", "physical_seed_identity", "generated_at", "generation_claim", "generation_claim_until", "generation_error", "settings_attested_by", "settings_attested_at"] {
+                    assert!(after[field].is_null(), "{state} retry must clear {field}");
+                }
+            } else {
+                assert_eq!(before, after, "retry must preserve {state} seed");
+            }
+            tx.rollback().await.unwrap();
+        }
+        {
+            let mut tx = pool.begin().await.unwrap();
+            sqlx::query("UPDATE races SET round='Live qualifier 1' WHERE id=$1")
+                .bind(unused_race).execute(&mut *tx).await.unwrap();
+            let seeds = pools::load_seeds(&mut tx, series.parse().unwrap(), event).await.unwrap();
+            assert_eq!(pools::seed_label(live_seed, &seeds), format!("Live qualifier 1 (seed {live_seed})"));
+            let assigned = seeds.iter().find(|seed| seed.mode_id == mode && seed.has_attempts && seed.pool_position.is_some()).unwrap();
+            let before: serde_json::Value = sqlx::query_scalar("SELECT to_jsonb(seed) FROM qualifier_seeds seed WHERE id=$1")
+                .bind(assigned.id).fetch_one(&mut *tx).await.unwrap();
+            pooled_qualifiers::generation::enqueue(&mut tx, series.parse().unwrap(), event, mode, assigned.pool_position, true).await.unwrap();
+            let after: serde_json::Value = sqlx::query_scalar("SELECT to_jsonb(seed) FROM qualifier_seeds seed WHERE id=$1")
+                .bind(assigned.id).fetch_one(&mut *tx).await.unwrap();
+            assert_eq!(before, after, "retry must preserve assigned seed");
+            tx.rollback().await.unwrap();
+        }
         let correction = |mode| format!(
             "mode_id={mode}&position=9&display_name=Corrected&seed_gen_type=owr&seed_config=%7B%22base_settings%22%3A%7B%22mode%22%3A%22inverted%22%7D%7D&enabled=true"
         );

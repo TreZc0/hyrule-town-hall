@@ -108,7 +108,7 @@ pub(super) fn label(id: &str, field: &str, title: &str) -> RawHtml<String> {
         ],
         "pool_position" => &[
             "The numbered private seed slot within this mode, starting at 1 and ending at Private seeds per mode. Slots in different modes are independent.",
-            "Generate missing slots queues absent slots. The existing-seed dropdown lists this mode’s private seeds and their generation status. Select a failed, unused, unreleased seed to retry it. Ready seeds and existing assignments are preserved. Reload the page to see worker progress.",
+            "Generate missing slots queues absent slots. The existing-seed dropdown lists this mode’s private seeds and their generation status. Select a failed or ready seed that is unused and unreleased to regenerate it. Retrying a ready seed replaces its current seed data. Queued, running, assigned and released seeds cannot be retried. Reload the page to see worker progress.",
         ],
         "notification_role_id" => &[
             "Optional Discord role to mention when a qualifier room opens. Enter the numeric role ID, copied with Discord Developer Mode enabled, rather than a role name or channel ID.",

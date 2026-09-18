@@ -139,8 +139,10 @@ pub(crate) async fn enqueue(
         }
         sqlx::query(r#"INSERT INTO qualifier_seeds(series, event, mode_id, source, pool_position, generator_profile, settings_fingerprint)
             VALUES ($1,$2,$3,'async_pool',$4,$5,$6) ON CONFLICT (mode_id, pool_position) DO UPDATE SET generation_state = 'pending', generation_claim = NULL,
-                generation_claim_until = NULL, generation_error = NULL
-            WHERE $7 AND qualifier_seeds.generation_state = 'failed' AND qualifier_seeds.released_at IS NULL
+                generation_claim_until = NULL, generation_error = NULL, seed_data = NULL, physical_seed_identity = NULL,
+                generated_at = NULL, settings_attested_by = NULL, settings_attested_at = NULL
+            WHERE $7 AND qualifier_seeds.generation_state IN ('failed', 'ready')
+              AND qualifier_seeds.released_at IS NULL AND qualifier_seeds.retired_at IS NULL
               AND NOT EXISTS(SELECT 1 FROM qualifier_attempts WHERE seed_id = qualifier_seeds.id)"#)
             .bind(series).bind(event).bind(mode.id).bind(slot).bind(&mode.generator_profile).bind(&mode.settings_fingerprint).bind(retry)
             .execute(&mut **tx).await?;

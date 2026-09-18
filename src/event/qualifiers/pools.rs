@@ -5,6 +5,8 @@ use super::*;
 pub(super) struct SeedRow {
     pub(super) id: i64,
     pub(super) live_race_id: Option<i64>,
+    pub(super) live_round: Option<String>,
+    pub(super) has_attempts: bool,
     pub(super) retired_at: Option<DateTime<Utc>>,
     pub(super) mode_id: i64,
     pub(super) pool_position: Option<i16>,
@@ -46,10 +48,12 @@ pub(super) async fn load_seeds(
     event: &str,
 ) -> Result<Vec<SeedRow>, sqlx::Error> {
     sqlx::query_as::<_, SeedRow>(
-        r#"SELECT id, live_race_id, retired_at, mode_id, pool_position,
-            generation_state, physical_seed_identity, seed_data, released_at, generation_error
-            FROM qualifier_seeds WHERE series = $1 AND event = $2
-            ORDER BY mode_id, source, pool_position, live_race_id"#,
+        r#"SELECT seed.id, seed.live_race_id, race.round AS live_round, seed.retired_at, seed.mode_id, seed.pool_position,
+            seed.generation_state, seed.physical_seed_identity, seed.seed_data, seed.released_at, seed.generation_error,
+            EXISTS(SELECT 1 FROM qualifier_attempts WHERE seed_id = seed.id) AS has_attempts
+            FROM qualifier_seeds seed LEFT JOIN races race ON race.id = seed.live_race_id
+            WHERE seed.series = $1 AND seed.event = $2
+            ORDER BY seed.mode_id, seed.source, seed.pool_position, seed.live_race_id"#,
     )
     .bind(series)
     .bind(event)
@@ -87,7 +91,7 @@ pub(super) fn seed_label(id: i64, seeds: &[SeedRow]) -> String {
         || format!("Seed {id}"),
         |seed| match (seed.pool_position, seed.live_race_id) {
             (Some(slot), _) => format!("Async slot {slot} (seed {id})"),
-            (_, Some(race)) => format!("Live race {race} (seed {id})"),
+            (_, Some(_)) => format!("{} (seed {id})", seed.live_round.as_deref().filter(|round| !round.trim().is_empty()).unwrap_or("Live qualifier")),
             _ => format!("Seed {id}"),
         },
     )
@@ -414,6 +418,7 @@ mod tests {
                 id: 2,
                 mode_id: 1,
                 live_race_id: Some(42),
+                live_round: Some("Live qualifier <1>".into()),
                 generation_state: "ready".into(),
                 ..Default::default()
             },
@@ -421,7 +426,7 @@ mod tests {
         let html = overview(&config, 1, &seeds, &attempts, Some(456)).0;
         for text in [
             "Async slot 2",
-            "Live race 42",
+            "Live qualifier &lt;1&gt;",
             "Entrant &lt;1&gt;",
             "105.00 points",
             "eligible for par",
