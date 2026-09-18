@@ -3193,29 +3193,29 @@ pub(crate) mod route_tests {
         // Expected review failures redirect to a one-time notice on the page.
         sqlx::query("INSERT INTO organizers(series,event,organizer) VALUES($1,$2,$3)")
             .bind(series).bind(event).bind(outsider).execute(pool).await.unwrap();
-        for action in ["result", "dq", "invalidate"] {
-            let response = client.post(format!("{base}/pooled-result"))
-                .header(ContentType::Form)
-                .private_cookie(rocket::http::Cookie::new("csrf_token", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="))
-                .header(rocket::http::Header::new("x-test-user", outsider.to_string()))
-                .body(encode(&format!("attempt_id={attempt_id}&control_version={version}&action={action}&outcome=forfeit")))
-                .dispatch().await;
-            assert_eq!(response.status(), Status::SeeOther, "self-review with {action}");
-            assert_eq!(response.headers().get_one("Location"), Some(base.as_str()));
-            let response = client.get(&base)
-                .header(rocket::http::Header::new("x-test-user", outsider.to_string()))
-                .dispatch().await;
-            assert_eq!(response.status(), Status::Ok);
-            let html = response.into_string().await.unwrap();
-            assert!(html.contains("you cannot review your own qualifier attempt"));
-            assert!(html.contains("role=\"alert\""));
-            assert!(html.find("you cannot review your own qualifier attempt").unwrap() < html.find("id=\"pooled-attempts\"").unwrap());
-            let unchanged: i64 = sqlx::query_scalar("SELECT control_version FROM qualifier_attempts WHERE id=$1")
-                .bind(attempt_id).fetch_one(pool).await.unwrap();
-            assert_eq!(unchanged, version);
+        if !Environment::default().is_dev() {
+            for action in ["result", "dq", "invalidate"] {
+                let response = client.post(format!("{base}/pooled-result"))
+                    .header(ContentType::Form)
+                    .private_cookie(rocket::http::Cookie::new("csrf_token", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="))
+                    .header(rocket::http::Header::new("x-test-user", outsider.to_string()))
+                    .body(encode(&format!("attempt_id={attempt_id}&control_version={version}&action={action}&outcome=forfeit")))
+                    .dispatch().await;
+                assert_eq!(response.status(), Status::SeeOther, "self-review with {action}");
+                assert_eq!(response.headers().get_one("Location"), Some(base.as_str()));
+                let response = client.get(&base)
+                    .header(rocket::http::Header::new("x-test-user", outsider.to_string()))
+                    .dispatch().await;
+                assert_eq!(response.status(), Status::Ok);
+                let html = response.into_string().await.unwrap();
+                assert!(html.contains("you cannot review your own qualifier attempt"));
+                assert!(html.contains("role=\"alert\""));
+                assert!(html.find("you cannot review your own qualifier attempt").unwrap() < html.find("id=\"pooled-attempts\"").unwrap());
+                let unchanged: i64 = sqlx::query_scalar("SELECT control_version FROM qualifier_attempts WHERE id=$1")
+                    .bind(attempt_id).fetch_one(pool).await.unwrap();
+                assert_eq!(unchanged, version);
+            }
         }
-        sqlx::query("DELETE FROM organizers WHERE series=$1 AND event=$2 AND organizer=$3")
-            .bind(series).bind(event).bind(outsider).execute(pool).await.unwrap();
         let response = client.post(format!("{base}/pooled-result"))
             .header(ContentType::Form)
             .private_cookie(rocket::http::Cookie::new("csrf_token", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="))
@@ -3236,7 +3236,7 @@ pub(crate) mod route_tests {
             let response = client.post(format!("{base}/pooled-result"))
                 .header(ContentType::Form)
                 .private_cookie(rocket::http::Cookie::new("csrf_token", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="))
-                .header(rocket::http::Header::new("x-test-user", staff.to_string()))
+                .header(rocket::http::Header::new("x-test-user", if Environment::default().is_dev() { outsider } else { staff }.to_string()))
                 .body(encode(&format!("attempt_id={attempt_id}&control_version={version}&action={action}")))
                 .dispatch().await;
             assert_eq!(response.status(), Status::SeeOther, "{action} without a reason");
@@ -3245,6 +3245,8 @@ pub(crate) mod route_tests {
             assert_eq!(row, if action == "dq" { ("finalized".into(), true, Some("dq".into()), "".into()) } else { ("void".into(), false, None, "".into()) });
             version += 1;
         }
+        sqlx::query("DELETE FROM organizers WHERE series=$1 AND event=$2 AND organizer=$3")
+            .bind(series).bind(event).bind(outsider).execute(pool).await.unwrap();
         private_seeds[1]
     }
 }

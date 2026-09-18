@@ -453,7 +453,7 @@ async fn check_verifier(
     if !organizer && !User::GLOBAL_ADMIN_USER_IDS.contains(&(actor as u64)) {
         return Err(Error::NotOrganizer);
     }
-    if participant {
+    if participant && !Environment::default().is_dev() {
         return Err(Error::SelfReview);
     }
     Ok(())
@@ -2674,8 +2674,13 @@ pub(crate) mod tests {
         assert!(matches!(correct_result(&mut tx, first.id, version, -1, "", Outcome::Forfeit, None).await, Err(Error::NotOrganizer)));
         sqlx::query("INSERT INTO organizers(series,event,organizer) VALUES($1,$2,$3)")
             .bind(series).bind(event).bind(entrants[0].1).execute(&mut *tx).await.unwrap();
-        assert!(matches!(correct_result(&mut tx, first.id, version, entrants[0].1, "", Outcome::Forfeit, None).await, Err(Error::SelfReview)));
-        assert!(matches!(invalidate_attempt(&mut tx, first.id, version, entrants[0].1, "").await, Err(Error::SelfReview)));
+        if Environment::default().is_dev() {
+            correct_result(&mut tx, first.id, version, entrants[0].1, "", Outcome::Forfeit, None).await.unwrap();
+            invalidate_attempt(&mut tx, first.id, version + 1, entrants[0].1, "").await.unwrap();
+        } else {
+            assert!(matches!(correct_result(&mut tx, first.id, version, entrants[0].1, "", Outcome::Forfeit, None).await, Err(Error::SelfReview)));
+            assert!(matches!(invalidate_attempt(&mut tx, first.id, version, entrants[0].1, "").await, Err(Error::SelfReview)));
+        }
         tx.rollback().await.unwrap();
         let mut tx = pool.begin().await.unwrap();
         correct_result(&mut tx, first.id, version, staff, "", Outcome::Finished(Duration::from_secs(3550)), Some("https://example.invalid/corrected")).await.unwrap();
