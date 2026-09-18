@@ -152,7 +152,7 @@ async fn qualifiers_form(
                 }
                 : pooled_standings;
                 h2(id = "pooled-attempts", class = "qualifier-section-title") : "Attempts & result review";
-                p(class = "qualifier-intro") : "One row per assigned attempt. Counted marks the result used for the entrant’s mode score; Retry of links a replacement to its original attempt. Open Review / correct result to verify evidence, record a correction or review history.";
+                p(class = "qualifier-intro") : "One row per assigned attempt. Counted marks the result used for the entrant’s mode score; Retry of links a replacement to its original attempt. Review / correct result is for async evidence and result corrections. Live results are imported from racetime.gg. DQ, invalidation and recorded history are available for both.";
                 @if pooled_attempts.is_empty() {
                     p : "No attempts have been assigned.";
                 } else {
@@ -206,31 +206,33 @@ async fn qualifiers_form(
                                             }
                                         }
 
-                                        details {
-                                            summary : if attempt.state == "void" { "Review history" } else { "Review / correct result" };
-                                            @if attempt.state == "void" {
-                                                p : "This attempt was invalidated and does not count.";
-                                            } else {
-                                                p(class = "qualifier-hint") : "Verify this run’s evidence or correct its recorded result. For a finish, enter the official time and recording URL.";
-                                                : full_form(uri!(post_pooled_result(event.series, &*event.event)), csrf, html! {
-                                                    input(type = "hidden", name = "attempt_id", value = attempt.id);
-                                                    input(type = "hidden", name = "control_version", value = attempt.control_version);
-                                                    input(type = "hidden", name = "action", value = "result");
-                                                    : help::label(&format!("review-{}-outcome", attempt.id), "outcome", "Official outcome");
-                                                    select(id = format!("review-{}-outcome", attempt.id), name = "outcome") {
-                                                        option(value = "finished") : "Finished";
-                                                        option(value = "forfeit") : "Forfeit / missing evidence";
-                                                    }
-                                                    : help::label(&format!("review-{}-finish_time", attempt.id), "finish_time", "Time (HH:MM:SS, required for a finish)");
-                                                    input(id = format!("review-{}-finish_time", attempt.id), name = "finish_time", placeholder = "01:23:45");
-                                                    : help::label(&format!("review-{}-vod", attempt.id), "vod", "VOD URL (required for a finish)");
-                                                    input(id = format!("review-{}-vod", attempt.id), name = "vod", type = "url", value = attempt.vod.as_deref().unwrap_or(""));
-                                                    : help::label(&format!("review-{}-reason", attempt.id), "reason", "Reason (optional)");
-                                                    textarea(id = format!("review-{}-reason", attempt.id), name = "reason");
-                                                }, Vec::new(), "Save reviewed change");
-                                            }
-                                            @if attempt.correction_history.as_array().is_some_and(|history| !history.is_empty()) {
-                                                pre : serde_json::to_string_pretty(&attempt.correction_history).unwrap_or_default();
+                                        @if attempt.source == "async" || attempt.state == "void" || attempt.correction_history.as_array().is_some_and(|history| !history.is_empty()) {
+                                            details {
+                                                summary : if attempt.source == "async" && attempt.state != "void" { "Review / correct result" } else { "Review history" };
+                                                @if attempt.state == "void" {
+                                                    p : "This attempt was invalidated and does not count.";
+                                                } else if attempt.source == "async" {
+                                                    p(class = "qualifier-hint") : "Verify this run’s evidence or correct its recorded result. For a finish, enter the official time and recording URL.";
+                                                    : full_form(uri!(post_pooled_result(event.series, &*event.event)), csrf, html! {
+                                                        input(type = "hidden", name = "attempt_id", value = attempt.id);
+                                                        input(type = "hidden", name = "control_version", value = attempt.control_version);
+                                                        input(type = "hidden", name = "action", value = "result");
+                                                        : help::label(&format!("review-{}-outcome", attempt.id), "outcome", "Official outcome");
+                                                        select(id = format!("review-{}-outcome", attempt.id), name = "outcome") {
+                                                            option(value = "finished") : "Finished";
+                                                            option(value = "forfeit") : "Forfeit / missing evidence";
+                                                        }
+                                                        : help::label(&format!("review-{}-finish_time", attempt.id), "finish_time", "Time (HH:MM:SS, required for a finish)");
+                                                        input(id = format!("review-{}-finish_time", attempt.id), name = "finish_time", placeholder = "01:23:45");
+                                                        : help::label(&format!("review-{}-vod", attempt.id), "vod", "VOD URL (required for a finish)");
+                                                        input(id = format!("review-{}-vod", attempt.id), name = "vod", type = "url", value = attempt.vod.as_deref().unwrap_or(""));
+                                                        : help::label(&format!("review-{}-reason", attempt.id), "reason", "Reason (optional)");
+                                                        textarea(id = format!("review-{}-reason", attempt.id), name = "reason");
+                                                    }, Vec::new(), "Save reviewed change");
+                                                }
+                                                @if attempt.correction_history.as_array().is_some_and(|history| !history.is_empty()) {
+                                                    pre : serde_json::to_string_pretty(&attempt.correction_history).unwrap_or_default();
+                                                }
                                             }
                                         }
                                         @if attempt.state != "void" {
