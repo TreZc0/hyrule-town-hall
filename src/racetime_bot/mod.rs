@@ -5141,7 +5141,7 @@ impl Handler {
             let result = async {
                 lock!(@write state = state; *state = RaceState::Rolling); //TODO ensure only one seed is rolled at a time
                 let mut seed_state = None::<SeedRollUpdate>;
-                if let Some(delay) = delay_until.and_then(|delay_until| (delay_until - Utc::now()).to_std().ok()) {
+                let roll_deadline = if let Some(delay) = delay_until.and_then(|delay_until| (delay_until - Utc::now()).to_std().ok()) {
                     let roll_deadline = Instant::now() + delay;
                     // don't want to give an unnecessarily exact estimate if the room was opened automatically 30 or 60 minutes ahead of start
                     let display_delay = if delay > Duration::from_secs(14 * 60) && delay < Duration::from_secs(16 * 60) {
@@ -5166,6 +5166,37 @@ impl Handler {
                             }
                         }
                     }
+                    Some(roll_deadline)
+                } else {
+                    None
+                };
+                if !suppress_preamble {
+                    let announcement = async {
+                        if let Some(data) = official_data.as_ref().filter(|data| !data.is_pooled_live()) {
+                            if let Some(config) = data.event.seed_gen_type.as_ref().and_then(choice_resolution::config) {
+                                let config = config.for_display(&data.cal_event.race, data.event.draft_kind_str.is_some());
+                                if let Some(rules) = choice_resolution::fixed_rules_for_race(
+                                    &db_pool,
+                                    &data.cal_event.race,
+                                    &config,
+                                    !matches!(data.cal_event.kind, cal::EventKind::Normal),
+                                ).await.to_racetime()? {
+                                    for chunk in baselines::message_chunks(&format!("Race rules: {rules}")) {
+                                        ctx.say(chunk).await?;
+                                    }
+                                }
+                            }
+                        }
+                        Ok::<_, Error>(())
+                    }.await;
+                    if let Err(e) = announcement {
+                        eprintln!("failed to announce race rules in {room_url}; continuing with the roll: {e} ({e:?})");
+                        if let Environment::Production = Environment::default() {
+                            log::error!("failed to announce race rules in {room_url}; continuing with the roll: {e} ({e:?})");
+                        }
+                    }
+                }
+                if let Some(roll_deadline) = roll_deadline {
                     let mut sleep = pin!(sleep_until(roll_deadline));
                     loop {
                         select! {
@@ -6608,8 +6639,9 @@ impl RaceHandler<GlobalState> for Handler {
         {
             let notice: Option<(DateTime<Utc>, i16)> = sqlx::query_as("SELECT submissions_close_at, par_finishers FROM pooled_qualifier_configs WHERE series=$1 AND event=$2 AND submissions_close_at IS NOT NULL")
                 .bind(official.event.series).bind(&*official.event.event).fetch_optional(&ctx.global_state.db_pool).await.to_racetime()?;
-            if let Some((deadline, par_finishers)) = notice {
-                ctx.say(format!("Live runners may qualify before event signup. Rankings and par times are provisional, including qualifying places. Sign up before {deadline} at https://hyruletownhall.com/event/{}/{}/enter. Unsigned runners will be removed from scores and par calculations at the deadline; final par averages up to {par_finishers} remaining eligible finishers. Asyncs require signup.", official.event.series, official.event.event)).await?;
+            if let Some((deadline, _)) = notice {
+                let signup_url = uri!(base_uri(), event::enter::get(official.event.series, &*official.event.event, _, _));
+                ctx.say(format!("Live runners may qualify before event signup. Sign up before {deadline} at {signup_url} to be eligible for participation in later stages.")).await?;
             }
             let official = official.clone();
             let ctx = ctx.clone();

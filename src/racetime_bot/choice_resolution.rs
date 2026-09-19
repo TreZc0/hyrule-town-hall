@@ -241,6 +241,56 @@ pub(crate) fn scheduling_preferences(
     lines.join("\n")
 }
 
+/// Only fixed, rule-only agreements belong in the pre-seed reminder.
+pub(crate) async fn fixed_rules_for_race(
+    pool: &PgPool,
+    race: &Race,
+    config: &OwrEventConfig,
+    is_async: bool,
+) -> sqlx::Result<Option<String>> {
+    let mut config = config.clone();
+    let preferences = if let Some(snapshot) = read(pool, race.id).await? {
+        config.choices = snapshot.definitions;
+        config.selected_baseline = snapshot.selected_baseline.or(config.selected_baseline);
+        if let Some((key, _)) = &config.selected_baseline {
+            config.choices = OwrEventConfig::choices_for_baseline(&config.choices, key);
+        }
+        snapshot.preferences
+    } else {
+        let teams = race.teams().map(|team| i64::from(team.id)).collect_vec();
+        let rows = sqlx::query_scalar::<_, serde_json::Value>(
+            "SELECT custom_choices FROM teams WHERE id = ANY($1)",
+        )
+        .bind(&teams)
+        .fetch_all(pool)
+        .await?;
+        super::resolve_choice_values(&rows)
+    };
+    let rules = config.choices.as_object().into_iter().flatten()
+        .sorted_by_key(|(key, _)| key.as_str())
+        .filter_map(|(key, entry)| {
+            let value = preferences.get(key).copied().unwrap_or_default();
+            if super::choice_entry_affects_seed(Some(entry))
+                || value == ChoiceValue::Random
+                || is_async && super::choice_entry_hidden_for_async(Some(entry))
+                || config.selected_baseline.is_none() && entry.get("baselines").is_some()
+            {
+                return None;
+            }
+            let value_key = if value == ChoiceValue::Always { "always" } else { "never" };
+            if let Some(label) = entry.get("value_labels")
+                .and_then(|labels| labels.get(value_key))
+                .and_then(serde_json::Value::as_str)
+            {
+                return (!label.is_empty()).then(|| label.to_owned());
+            }
+            let label = super::choice_entry_label(Some(entry), key);
+            Some(format!("{label}: {}", if value == ChoiceValue::Always { "allowed" } else { "not allowed" }))
+        })
+        .collect_vec();
+    Ok(English.join_str_opt(rules))
+}
+
 pub(crate) async fn read<'e, E>(executor: E, race: Id<Races>) -> sqlx::Result<Option<Snapshot>>
 where
     E: sqlx::Executor<'e, Database = Postgres>,
