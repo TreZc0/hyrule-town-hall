@@ -71,7 +71,6 @@ async fn qualifiers_form(
         retry_reserved_at: Option<DateTime<Utc>>,
         retry_committed_at: Option<DateTime<Utc>>,
         retry_released_at: Option<DateTime<Utc>>,
-        attempt_id: Option<i64>,
     }
     let pooled_config =
         pooled_qualifiers::Config::load(&mut transaction, event.series, &event.event).await?;
@@ -103,8 +102,7 @@ async fn qualifiers_form(
                     linked_account.racetime_display_name, linked_account.discord_display_name,
                     result.racetime_name) AS entrant_name,
                 entry.eligible, entry.exclusion_reason, entry.present_at_go,
-                entry.retry_reserved_at, entry.retry_committed_at, entry.retry_released_at,
-                entry.attempt_id
+                entry.retry_reserved_at, entry.retry_committed_at, entry.retry_released_at
             FROM qualifier_live_entries entry
             JOIN qualifier_seeds seed ON seed.id = entry.seed_id
             LEFT JOIN users user_account ON user_account.racetime_id = entry.racetime_entrant_id
@@ -191,14 +189,12 @@ async fn qualifiers_form(
                                 span(class = "qualifier-badge") : format!("{to_review} to review");
                             }
                             table {
-                                thead { tr { th : "ID"; th : "Entrant"; th : "Mode"; th : "Seed"; th : "Source"; th : "State"; th : "Outcome"; th : "Counted"; th : "Retry of"; th : "Re-attempt declaration"; th : "Review / history"; th : "VOD"; } }
+                                thead { tr { th : "Entrant"; th : "Mode"; th : "Source"; th : "State"; th : "Outcome"; th : "Counted"; th : "Retry of"; th : "Re-attempt declaration"; th : "Review / history"; th : "VOD"; } }
                                 tbody {
                                     @for attempt in attempts {
                                 tr(id = format!("attempt-{}", attempt.id)) {
-                                    td : attempt.id;
                                     td { : &attempt.entrant_name; : format!(" ({})", attempt.team_id.map_or_else(|| "awaiting signup".into(), |team| team.to_string())); }
                                     td : &attempt.mode_name;
-                                    td { a(href = format!("#pool-seed-{}", attempt.seed_id)) : pools::seed_label(attempt.seed_id, &pooled_seeds); }
                                     td : &attempt.source;
                                     td : &attempt.state;
                                     td {
@@ -208,7 +204,11 @@ async fn qualifiers_form(
                                         }
                                     }
                                     td : if attempt.counts_for_entrant { "yes" } else { "no" };
-                                    td : attempt.retry_of.map(|id| id.to_string()).unwrap_or_default();
+                                    td {
+                                        @if let Some(id) = attempt.retry_of {
+                                            a(href = format!("#attempt-{id}")) : "Previous result";
+                                        }
+                                    }
                                     td {
                                         @if let Some(declared_at) = attempt.retry_declared_at {
                                             : if attempt.superseded_by.is_some() { "Used — " } else if attempt.retry_banned_at.is_some() { "Blocked — " } else if attempt.counts_for_entrant && attempt.state != "void" { "Pending — " } else { "Inactive — " };
@@ -335,7 +335,7 @@ async fn qualifiers_form(
                             }
                             @if let Some(room) = &race.room { p { a(href = room) : "Race room"; } }
                             table {
-                                thead { tr { th : "Entrant"; th : "Eligible"; th : "Present at start"; th : "Re-attempt"; th : "Attempt"; th : "Reason"; } }
+                                thead { tr { th : "Entrant"; th : "Eligible"; th : "Present at start"; th : "Re-attempt"; th : "Reason"; } }
                                 tbody {
                                     @for entry in entries {
                                         tr {
@@ -347,9 +347,6 @@ async fn qualifiers_form(
                                             td : entry.eligible.map(|value| if value { "yes" } else { "no" }).unwrap_or("pending");
                                             td : entry.present_at_go.map(|value| if value { "yes" } else { "no" }).unwrap_or("pending");
                                             td : if entry.retry_committed_at.is_some() { "Used" } else if entry.retry_released_at.is_some() { "Not used" } else if entry.retry_reserved_at.is_some() { "Pending" } else { "" };
-                                            td {
-                                                @if let Some(id) = entry.attempt_id { a(href = format!("#attempt-{id}")) : id; }
-                                            }
                                             td : entry.exclusion_reason.as_deref().unwrap_or("");
                                         }
                                     }
