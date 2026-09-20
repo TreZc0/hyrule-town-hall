@@ -40,7 +40,9 @@ pub(super) fn configuration(
                 }
                 @if locked { p : "Format and scoring settings are locked. Deadlines and the pause control can still be updated. Pausing does not unlock the format."; }
             }
-            : full_form(uri!(super::post_pooled_config(series, event)), csrf, html! {
+            form(id = "pooled-config-form", action = uri!(super::post_pooled_config(series, event)).to_string(), method = "post") {
+                : csrf;
+                @for error in ctx.errors() { p(class = "error") : error; }
                 @for (heading, description, fields) in [
                     ("Pool size & participation", "Define how many modes entrants complete and how many seeds and live races each mode needs.", vec![
                         ("required_mode_count", "Required modes", "Must match the number of enabled mode cards.", config.required_mode_count.to_string(), "1", None, "1"),
@@ -97,14 +99,10 @@ pub(super) fn configuration(
                         }
                     }
                 }
-                div(class = "qualifier-activation") {
-                    div(class = "qualifier-checkbox") {
-                        input(type = "checkbox", name = "requests_paused", id = "requests_paused", checked? = if ctx.field_value("required_mode_count").is_some() { ctx.field_value("requests_paused").is_some_and(|value| value == "on") } else { config.requests_paused });
-                        : help::label("requests_paused", "requests_paused", "Pause new requests");
-                    }
-                    p(class = "qualifier-hint") : "Keep paused while preparing the event. Uncheck and save when all readiness checks pass and you want requests to follow the schedule.";
+                fieldset {
+                    input(type = "submit", value = "Save qualifier configuration");
                 }
-            }, ctx.errors().collect_vec(), "Save qualifier configuration");
+            }
         }
     }
 }
@@ -135,7 +133,7 @@ pub(super) fn modes(
             @if modes.is_empty() { p(class = "qualifier-empty") : "No modes yet. Start by naming your first mode and selecting its generator below. Save it, then add the remaining rulesets."; }
             @for mode in modes.iter().chain(iter::once(&new_mode)) {
                 @let is_new = mode.id == 0;
-                details(class = "qualifier-mode-card", open? = is_new) {
+                details(id = format!("qualifier-mode-{}", mode.id), class = "qualifier-mode-card", open? = is_new) {
                     summary {
                         span(class = "qualifier-mode-title") : if is_new { "Add a qualifier mode".to_owned() } else { format!("{}. {}", mode.position, mode.display_name) };
                         @if !is_new { span(class = "qualifier-badge") : if mode.enabled { "Enabled" } else { "Disabled" }; }
@@ -203,7 +201,7 @@ pub(super) fn seed_controls(
                 h4 : "Prepare the private pool";
                 p(class = "qualifier-hint") : format!("Queue missing slots for this mode’s {}-seed pool. Generation runs in the background; reload to check progress.", config.pool_seed_count);
             }, Vec::new(), "Generate missing slots");
-            details(class = "qualifier-disclosure") {
+            details(id = format!("qualifier-generation-retry-{}", mode.id), class = "qualifier-disclosure") {
                 summary : "Generate or retry a specific slot";
                 : full_form(uri!(super::post_pooled_generate(series, event)), csrf, html! {
                     input(type = "hidden", name = "mode_id", value = mode.id);
