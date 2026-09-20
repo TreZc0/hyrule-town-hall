@@ -178,10 +178,22 @@ async fn qualifiers_form(
                 @if pooled_attempts.is_empty() {
                     p : "No attempts have been assigned.";
                 } else {
-                    table {
-                        thead { tr { th : "ID"; th : "Entrant"; th : "Mode"; th : "Seed"; th : "Source"; th : "State"; th : "Outcome"; th : "Counted"; th : "Retry of"; th : "Re-attempt declaration"; th : "Review / history"; th : "VOD"; } }
-                        tbody {
-                            @for attempt in &pooled_attempts {
+                    @for seed in pooled_seeds.iter().filter(|seed| pooled_attempts.iter().any(|attempt| attempt.seed_id == seed.id)) {
+                        @let attempts = pooled_attempts.iter().filter(|attempt| attempt.seed_id == seed.id).collect_vec();
+                        @let (finalized, to_review) = pools::review_counts(&attempts);
+                        details(id = format!("attempt-results-{}", seed.id), class = "qualifier-pool-card") {
+                            summary {
+                                : pools::seed_title(seed.id, &pooled_seeds);
+                                @if let Some(mode_name) = attempts.first().map(|attempt| attempt.mode_name.as_str()) {
+                                    : format!(" — {mode_name}");
+                                }
+                                span(class = "qualifier-badge") : format!("{finalized} finalized");
+                                span(class = "qualifier-badge") : format!("{to_review} to review");
+                            }
+                            table {
+                                thead { tr { th : "ID"; th : "Entrant"; th : "Mode"; th : "Seed"; th : "Source"; th : "State"; th : "Outcome"; th : "Counted"; th : "Retry of"; th : "Re-attempt declaration"; th : "Review / history"; th : "VOD"; } }
+                                tbody {
+                                    @for attempt in attempts {
                                 tr(id = format!("attempt-{}", attempt.id)) {
                                     td : attempt.id;
                                     td { : &attempt.entrant_name; : format!(" ({})", attempt.team_id.map_or_else(|| "awaiting signup".into(), |team| team.to_string())); }
@@ -280,6 +292,8 @@ async fn qualifiers_form(
                                         @if let Some(ref vod) = attempt.vod {
                                             a(href = vod) : "VOD";
                                         }
+                                    }
+                                }
                                     }
                                 }
                             }
@@ -2989,6 +3003,14 @@ pub(crate) mod route_tests {
             assert!(setup.as_node().select_first("#pooled-modes").is_ok());
             assert!(setup.as_node().select_first("#pooled-standings").is_err());
             assert!(setup.as_node().select_first("#seeding-race").is_err());
+            let attempt_groups = document.select("details[id^=\"attempt-results-\"]").unwrap().collect_vec();
+            assert!(!attempt_groups.is_empty());
+            for group in attempt_groups {
+                let summary = group.as_node().select_first("summary").unwrap().text_contents();
+                assert!(summary.contains(" finalized"));
+                assert!(summary.contains(" to review"));
+                assert!(group.as_node().select_first("tr[id^=\"attempt-\"]").is_ok());
+            }
             assert!(
                 document
                     .select_first("#qualifier-setup + hr + details#seeding-race")

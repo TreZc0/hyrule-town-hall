@@ -103,6 +103,30 @@ pub(super) fn seed_label(id: i64, seeds: &[SeedRow]) -> String {
     )
 }
 
+pub(super) fn seed_title(id: i64, seeds: &[SeedRow]) -> String {
+    seeds.iter().find(|seed| seed.id == id).map_or_else(
+        || format!("Seed {id}"),
+        |seed| match (seed.pool_position, seed.live_race_id) {
+            (Some(slot), _) => format!("Async slot {slot}"),
+            (_, Some(_)) => seed.live_round.as_deref().filter(|round| !round.trim().is_empty()).unwrap_or("Live qualifier").to_owned(),
+            _ => format!("Seed {id}"),
+        },
+    )
+}
+
+pub(super) fn review_counts(attempts: &[&AttemptRow]) -> (usize, usize) {
+    (
+        attempts
+            .iter()
+            .filter(|attempt| attempt.state == "finalized")
+            .count(),
+        attempts
+            .iter()
+            .filter(|attempt| attempt.state == "awaiting_verification")
+            .count(),
+    )
+}
+
 fn seed_metadata(seed: &SeedRow) -> RawHtml<String> {
     let Some(payload) = seed.seed_data.as_ref() else {
         return html! { : "—"; };
@@ -411,6 +435,7 @@ mod tests {
         forfeit.par_eligible = false;
         attempts.push(forfeit);
         let stats = population(&config, &attempts.iter().collect_vec());
+        assert_eq!(review_counts(&attempts.iter().collect_vec()), (8, 1));
         assert_eq!(
             (
                 stats.assigned,
@@ -451,6 +476,8 @@ mod tests {
             },
         ];
         let html = overview(&config, 1, &seeds, &attempts, Some(456)).0;
+        assert_eq!(seed_title(1, &seeds), "Async slot 2");
+        assert_eq!(seed_title(2, &seeds), "Live qualifier <1>");
         for text in [
             "Async slot 2",
             "Live qualifier &lt;1&gt;",
