@@ -274,6 +274,7 @@ mod tests {
 
     fn flow() -> serde_json::Value {
         json!({
+            "opens": "2026-12-01T00:00:00Z",
             "closes": "2027-01-01T00:00:00Z",
             "sections": [
                 {"id": "general", "label": "General"},
@@ -315,7 +316,7 @@ mod tests {
     }
 
     #[test]
-    fn layout_round_trip_keeps_assignments_and_deadline() {
+    fn layout_round_trip_keeps_assignments_and_signup_window() {
         assert_eq!(apply_layout(flow(), &layout()).unwrap(), flow());
     }
 

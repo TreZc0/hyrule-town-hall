@@ -13,7 +13,15 @@ use {
 pub(super) struct Flow {
     pub(crate) sections: Vec<Section>,
     requirements: Vec<RequirementEntry>,
+    opens: Option<DateTime<Utc>>,
     closes: Option<DateTime<Utc>>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SignupWindow {
+    NotOpen,
+    Open,
+    Closed,
 }
 
 #[serde_as]
@@ -66,12 +74,14 @@ impl<'de> Deserialize<'de> for Flow {
             #[serde(default)]
             sections: Vec<Section>,
             requirements: Vec<serde_json::Value>,
+            opens: Option<DateTime<Utc>>,
             closes: Option<DateTime<Utc>>,
         }
 
         let RawFlow {
             sections,
             requirements,
+            opens,
             closes,
         } = RawFlow::deserialize(deserializer)?;
         let mut parsed_requirements = Vec::with_capacity(requirements.len());
@@ -94,6 +104,7 @@ impl<'de> Deserialize<'de> for Flow {
         let flow = Self {
             sections,
             requirements: parsed_requirements,
+            opens,
             closes,
         };
         flow.validate().map_err(D::Error::custom)?;
@@ -103,6 +114,14 @@ impl<'de> Deserialize<'de> for Flow {
 
 impl Flow {
     fn validate(&self) -> Result<(), String> {
+        if self
+            .opens
+            .as_ref()
+            .zip(self.closes.as_ref())
+            .is_some_and(|(opens, closes)| opens >= closes)
+        {
+            return Err("signup opening time must be before the closing time".to_owned());
+        }
         let mut section_ids = HashSet::new();
         for section in &self.sections {
             if section.id.trim().is_empty() {
@@ -150,6 +169,16 @@ impl Flow {
 
     pub(crate) fn iter_requirements(&self) -> impl Iterator<Item = &Requirement> {
         self.requirements.iter().map(|entry| &entry.requirement)
+    }
+
+    fn signup_window(&self, now: DateTime<Utc>) -> SignupWindow {
+        if self.opens.as_ref().is_some_and(|opens| now < *opens) {
+            SignupWindow::NotOpen
+        } else if self.closes.as_ref().is_some_and(|closes| now >= *closes) {
+            SignupWindow::Closed
+        } else {
+            SignupWindow::Open
+        }
     }
 
     pub(crate) fn display_items(
@@ -1619,6 +1648,18 @@ pub(crate) async fn enter_form(
                 p : "You can no longer enter this event since it has already started.";
             }
         }
+    } else if data
+        .enter_flow
+        .as_ref()
+        .is_some_and(|flow| flow.signup_window(Utc::now()) == SignupWindow::NotOpen)
+    {
+        html! { article { p : "Signups for this event are not open yet."; } }
+    } else if data
+        .enter_flow
+        .as_ref()
+        .is_some_and(|flow| flow.signup_window(Utc::now()) == SignupWindow::Closed)
+    {
+        html! { article { p : "The deadline to enter this event has passed."; } }
     } else {
         match (data.series, &*data.event) {
             (Series::BattleRoyale, "1") => ohko::enter_form(),
@@ -1646,12 +1687,6 @@ pub(crate) async fn enter_form(
                             html! {
                                 article {
                                     p : "You can no longer enter this event since you have already opted out.";
-                                }
-                            }
-                        } else if flow.closes.is_some_and(|closes| closes <= Utc::now()) {
-                            html! {
-                                article {
-                                    p : "The deadline to enter this event has passed.";
                                 }
                             }
                         } else if flow.is_empty() {
@@ -2020,6 +2055,25 @@ pub(crate) async fn post(
     let mut form = form.into_inner();
     form.verify(&csrf);
     if let Some(ref value) = form.value {
+        let signup_window_open = match data
+            .enter_flow
+            .as_ref()
+            .map(|flow| flow.signup_window(Utc::now()))
+        {
+            Some(SignupWindow::NotOpen) => {
+                form.context.push_error(form::Error::validation(
+                    "Signups for this event are not open yet.",
+                ));
+                false
+            }
+            Some(SignupWindow::Closed) => {
+                form.context.push_error(form::Error::validation(
+                    "The deadline to enter this event has passed.",
+                ));
+                false
+            }
+            Some(SignupWindow::Open) | None => true,
+        };
         if data.qualifier_mode == "pooled_by_mode" {
             super::pooled_qualifiers::lock_event(&mut transaction, series, event).await?;
             let closed =
@@ -2039,17 +2093,13 @@ pub(crate) async fn post(
             TeamConfig::Solo => {
                 let mut request_qualifier = None;
                 if let Some(ref flow) = data.enter_flow {
-                    if flow.closes.is_some_and(|closes| closes <= Utc::now()) {
-                        form.context.push_error(form::Error::validation(
-                            "The deadline to enter this event has passed.",
-                        ));
-                    } else if flow.is_empty() {
+                    if flow.is_empty() {
                         if data.is_single_race() {
                             form.context.push_error(form::Error::validation(
                                 "Signups for this event are not handled by Hyrule Town Hall.",
                             ));
                         }
-                    } else {
+                    } else if signup_window_open {
                         for requirement in flow.iter_requirements() {
                             requirement
                                 .check_form(
@@ -2908,6 +2958,41 @@ pub(crate) async fn post(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn signup_window_honors_opening_and_closing_times() {
+        let flow: Flow = serde_json::from_str(
+            r#"{
+                "opens": "2027-01-01T00:00:00Z",
+                "closes": "2027-02-01T00:00:00Z",
+                "requirements": []
+            }"#,
+        )
+        .expect("signup window should deserialize");
+
+        assert_eq!(
+            flow.signup_window("2026-12-31T23:59:59Z".parse().unwrap()),
+            SignupWindow::NotOpen
+        );
+        assert_eq!(
+            flow.signup_window("2027-01-01T00:00:00Z".parse().unwrap()),
+            SignupWindow::Open
+        );
+        assert_eq!(
+            flow.signup_window("2027-02-01T00:00:00Z".parse().unwrap()),
+            SignupWindow::Closed
+        );
+    }
+
+    #[test]
+    fn signup_window_rejects_opening_at_or_after_closing() {
+        for opens in ["2027-02-01T00:00:00Z", "2027-03-01T00:00:00Z"] {
+            let json = format!(
+                r#"{{"opens":"{opens}","closes":"2027-02-01T00:00:00Z","requirements":[]}}"#
+            );
+            assert!(serde_json::from_str::<Flow>(&json).is_err());
+        }
+    }
 
     #[test]
     fn legacy_enter_flow_without_sections_still_deserializes() {

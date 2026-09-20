@@ -1096,7 +1096,7 @@ pub(crate) async fn rocket(
             event::configure::video_url_suggestions,
             event::configure::enter_flow_get,
             event::configure::enter_flow_layout::save,
-            event::configure::enter_flow_set_closes,
+            event::configure::enter_flow_set_window,
             event::configure::enter_flow_add,
             event::configure::enter_flow_add_radio_choice,
             event::configure::enter_flow_remove,

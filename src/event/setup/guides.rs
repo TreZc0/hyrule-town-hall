@@ -45,6 +45,7 @@ fn requirements() -> Vec<(&'static str, &'static str, serde_json::Value)> {
 
 fn sectioned_flow() -> serde_json::Value {
     json!({
+        "opens": "2027-01-01T00:00:00Z",
         "closes": "2027-01-31T23:59:59Z",
         "sections": [
             {"id": "accounts", "label": "Accounts and rules"},
@@ -67,10 +68,11 @@ pub(crate) fn enter_flow() -> RawHtml<String> {
             summary : "Enter Flow guide — every requirement, key, default and example";
             p : "Enter Flow defines registration checks and questions. The visual editor and Setup's Enter Flow JSON edit the same configuration. Examples inside a requirement reference are single requirements: place them inside the requirements array when using the JSON editor. The complete example below can be used as a structural starting point; replace dates, links and event-specific questions.";
             details {
-                summary : "1. JSON structure, optional fields and signup deadline";
+                summary : "1. JSON structure, optional fields and signup window";
                 : fields(&[
                     ("requirements", "required array of objects", "Each object needs a case-sensitive type and the fields documented for that type. An empty array means no additional requirements. The raw Setup editor also accepts a completely empty field to clear the flow; {} by itself is not a complete flow."),
                     ("sections", "optional array; default []", "Groups requirements under headings, optionally nested. Sections change presentation only; a heading named McBoss or Qualifier does not select a baseline or enable scoring."),
+                    ("opens", "optional date/time string; default immediately", "Use an explicit offset: 2027-01-01T00:00:00Z is UTC, or use +01:00 for that offset. Before this instant signup is blocked. The visual editor's opening input is UTC."),
                     ("closes", "optional date/time string; default no separate deadline", "Use an explicit offset: 2027-01-31T23:59:59Z is UTC, or use +01:00 for that offset. At or after this instant signup is closed. The event's end and other eligibility checks still apply. The visual editor's deadline input is UTC."),
                     ("type", "required string on every requirement", "Use the exact camelCase spelling in the reference, including raceTime and startGG. Only the listed variants exist; a descriptive name cannot introduce new behavior."),
                     ("section", "optional string on any requirement", "Names an existing section id. Omitted/null leaves it ungrouped. This is a sibling of type, key and label, not a nested requirement object."),

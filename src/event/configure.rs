@@ -4852,6 +4852,11 @@ async fn enter_flow_form(
                 .and_then(|v| v.as_array())
                 .cloned()
                 .unwrap_or_default();
+            let opens_str = flow
+                .get("opens")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            let opens_input = to_datetime_input(opens_str);
             let closes_str = flow
                 .get("closes")
                 .and_then(|v| v.as_str())
@@ -4897,14 +4902,16 @@ async fn enter_flow_form(
                 p : "Define what participants must fulfill to sign up for this event.";
                 : super::setup::guides::enter_flow();
 
-                h3 : "Sign-up deadline";
-                : full_form(uri!(enter_flow_set_closes(event.series, &*event.event)), csrf, html! {
+                h3 : "Sign-up window";
+                : full_form(uri!(enter_flow_set_window(event.series, &*event.event)), csrf, html! {
                     fieldset {
+                        label(for = "opens") : "Opens (UTC):";
+                        input(type = "datetime-local", id = "opens", name = "opens", value = ctx.field_value("opens").unwrap_or(opens_input));
                         label(for = "closes") : "Closes (UTC):";
-                        input(type = "datetime-local", id = "closes", name = "closes", value = closes_input);
-                        label(class = "help") : "Leave blank to keep sign-ups open until the event ends.";
+                        input(type = "datetime-local", id = "closes", name = "closes", value = ctx.field_value("closes").unwrap_or(closes_input));
+                        label(class = "help") : "Leave Opens blank to allow immediate sign-up. Leave Closes blank to keep sign-ups open until the event ends.";
                     }
-                }, vec![], "Save deadline");
+                }, ctx.errors().filter(|error| error.is_for("opens") || error.is_for("closes") || error.is_for("signup_window") || error.is_for("csrf")).collect(), "Save sign-up window");
 
                 h3 : "Requirements";
                 p : "Choose a section and edit order numbers, then save sections and order below. Swap two numbers to swap requirements, or use the arrows for immediate moves. Ungrouped requirements appear first; within each section, requirements follow their order numbers, followed by child sections. Arrow moves do not save pending field edits.";
@@ -5086,22 +5093,24 @@ pub(crate) async fn enter_flow_get(
 }
 
 #[derive(FromForm, CsrfForm)]
-pub(crate) struct EnterFlowClosesForm {
+pub(crate) struct EnterFlowWindowForm {
     #[field(default = String::new())]
     csrf: String,
+    #[field(default = String::new())]
+    opens: String,
     #[field(default = String::new())]
     closes: String,
 }
 
-#[rocket::post("/event/<series>/<event>/configure/enter-flow/closes", data = "<form>")]
-pub(crate) async fn enter_flow_set_closes(
+#[rocket::post("/event/<series>/<event>/configure/enter-flow/window", data = "<form>")]
+pub(crate) async fn enter_flow_set_window(
     pool: &State<PgPool>,
     me: User,
-    _uri: Origin<'_>,
+    uri: Origin<'_>,
     csrf: Option<CsrfToken>,
     series: Series,
     event: &str,
-    form: Form<Contextual<'_, EnterFlowClosesForm>>,
+    form: Form<Contextual<'_, EnterFlowWindowForm>>,
 ) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
     let mut transaction = pool.begin().await?;
     let data = Data::new(&mut transaction, series, event)
@@ -5116,20 +5125,47 @@ pub(crate) async fn enter_flow_set_closes(
             ))));
         }
         let mut flow = load_flow_json(&mut transaction, series, event).await?;
-        let closes_trimmed = value.closes.trim();
-        if closes_trimmed.is_empty() {
-            if let Some(obj) = flow.as_object_mut() {
-                obj.remove("closes");
+        for (field, input) in [("opens", &value.opens), ("closes", &value.closes)] {
+            let input = input.trim();
+            if input.is_empty() {
+                if let Some(obj) = flow.as_object_mut() {
+                    obj.remove(field);
+                }
+            } else if let Some(dt) = parse_datetime_input(input) {
+                flow[field] = json!(dt.format("%Y-%m-%dT%H:%M:%SZ").to_string());
+            } else {
+                form.context.push_error(
+                    form::Error::validation("Enter a valid UTC date and time.").with_name(field),
+                );
             }
-        } else if let Some(dt) = parse_datetime_input(closes_trimmed) {
-            flow["closes"] = json!(dt.format("%Y-%m-%dT%H:%M:%SZ").to_string());
         }
-        save_flow_json(&mut transaction, flow, series, event).await?;
-        transaction.commit().await?;
+        if form.context.errors().next().is_none() {
+            if let Err(error) = serde_json::from_value::<enter::Flow>(flow.clone()) {
+                form.context.push_error(
+                    form::Error::validation(format!("Invalid sign-up window: {error}"))
+                        .with_name("signup_window"),
+                );
+            }
+        }
+        if form.context.errors().next().is_none() {
+            save_flow_json(&mut transaction, flow, series, event).await?;
+            transaction.commit().await?;
+            return Ok(RedirectOrContent::Redirect(Redirect::to(uri!(
+                enter_flow_get(series, event)
+            ))));
+        }
     }
-    Ok(RedirectOrContent::Redirect(Redirect::to(uri!(
-        enter_flow_get(series, event)
-    ))))
+    Ok(RedirectOrContent::Content(
+        enter_flow_form(
+            transaction,
+            Some(me),
+            uri,
+            csrf.as_ref(),
+            data,
+            form.context,
+        )
+        .await?,
+    ))
 }
 
 #[derive(FromForm, CsrfForm)]
