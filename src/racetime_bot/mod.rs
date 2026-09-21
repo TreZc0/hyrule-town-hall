@@ -8895,8 +8895,8 @@ async fn try_discord_send(
     // nonce for every attempt so Discord returns the original message instead of creating a
     // duplicate when that happens.
     let message = message
-        .nonce(serenity::all::Nonce::String(
-            Alphanumeric.sample_string(&mut rand::rng(), 25),
+        .nonce(Nonce::String(
+            Alphanumeric.sample_string(&mut rng(), 25),
         ))
         .enforce_nonce(true);
     for attempt in 0..3u8 {
