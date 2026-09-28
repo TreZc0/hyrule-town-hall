@@ -670,8 +670,11 @@ async fn check_scheduled_workflow(
             Ok(m) => m,
             Err(e) => {
                 eprintln!(
-                    "Failed to send scheduled ping for workflow {}: {}",
-                    workflow.id, e
+                    "Failed to send scheduled ping for workflow {} ({}/{}): {}",
+                    workflow.id,
+                    series.slug(),
+                    event,
+                    e
                 );
                 return Ok(());
             }
