@@ -346,7 +346,7 @@ pub(crate) async fn get(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>)
                     }
                     div {
                         strong : "Wait for approval";
-                        span : "Auto-approved roles become available immediately. Otherwise the request stays Pending: game administrators or a restream coordinator for that language review game roles, while event organizers review event-specific roles.";
+                        span : "Auto-approved roles become available immediately. Otherwise the request stays Pending: game administrators or a restream coordinator for that language review game roles, while event organizers and volunteer managers review event-specific roles.";
                     }
                     div {
                         strong : "Join the eligible pool";
@@ -373,7 +373,7 @@ pub(crate) async fn get(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>)
                     }
                     div {
                         strong : "Pending is not assigned";
-                        span : "An organizer or restream coordinator reviews the interested volunteers, staffing target, notes, language, and possible overlaps.";
+                        span : "An organizer, restream coordinator, or volunteer manager with race signup permission reviews the interested volunteers, staffing target, notes, language, and possible overlaps.";
                     }
                     div {
                         strong : "Confirmed is assigned";
@@ -474,7 +474,7 @@ pub(crate) async fn get(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>)
 
             section(id = "access", class = "hth-info-section") {
                 h2 : "Roles and access";
-                p : "These roles are additive: one person may be an organizer, a restream coordinator, and an approved volunteer at the same time. Permissions come from each role separately; organizer access does not automatically approve someone for a volunteer role.";
+                p : "These roles are additive: one person may be an organizer, a restream coordinator, a volunteer manager, and an approved volunteer at the same time. Permissions come from each role separately; organizer access does not automatically approve someone for a volunteer role.";
                 div(class = "hth-info-role-grid") {
                     article {
                         p(class = "hth-info-card-kicker") : "Event-wide operations";
@@ -511,6 +511,14 @@ pub(crate) async fn get(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>)
                         }
                     }
                     article {
+                        p(class = "hth-info-card-kicker") : "Event volunteer applications";
+                        h3 : "Volunteer manager";
+                        p : "Appointed by an event organizer to approve or reject pending event-specific volunteer role requests in all languages.";
+                        p : "Managers can view race signups and notes. Organizers can also enable confirmation or rejection of pending race signups for the event, including signups using shared game roles.";
+                        p : "This role grants no game-level role approval, role-definition editing, event or race editing, or permission to revoke or reopen previous decisions.";
+                        p : "Organizers manage this role under Configure → Manage volunteer managers. Copy from another event adds its managers without replacing existing managers or changing the target event's signup permission.";
+                    }
+                    article {
                         p(class = "hth-info-card-kicker") : "A specific production role";
                         h3 : "Volunteer";
                         p : "An approved commentator, tracker, or other helper. Approval is role- and language-specific and is separate from assignment to a race.";
@@ -536,6 +544,7 @@ pub(crate) async fn get(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>)
                                 th : "Capability";
                                 th : "Organizer";
                                 th : "Restream coordinator";
+                                th : "Volunteer manager";
                                 th : "Volunteer";
                             }
                         }
@@ -545,10 +554,12 @@ pub(crate) async fn get(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>)
                                 td(class = "hth-info-permission-yes") : "Yes";
                                 td(class = "hth-info-permission-yes") : "Yes";
                                 td(class = "hth-info-permission-yes") : "Yes";
+                                td(class = "hth-info-permission-yes") : "Yes";
                             }
                             tr {
                                 th : "Configure event rules, rounds, and deadlines";
                                 td(class = "hth-info-permission-yes") : "Yes";
+                                td(class = "hth-info-permission-no") : "No";
                                 td(class = "hth-info-permission-no") : "No";
                                 td(class = "hth-info-permission-no") : "No";
                             }
@@ -557,11 +568,13 @@ pub(crate) async fn get(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>)
                                 td(class = "hth-info-permission-yes") : "Yes";
                                 td(class = "hth-info-permission-no") : "No";
                                 td(class = "hth-info-permission-no") : "No";
+                                td(class = "hth-info-permission-no") : "No";
                             }
                             tr {
                                 th : "Maintain restream URLs and assignments";
                                 td(class = "hth-info-permission-yes") : "Yes";
                                 td(class = "hth-info-permission-limited") : "Coverage scope";
+                                td(class = "hth-info-permission-no") : "No";
                                 td(class = "hth-info-permission-no") : "No";
                             }
                             tr {
@@ -569,21 +582,25 @@ pub(crate) async fn get(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>)
                                 td(class = "hth-info-permission-yes") : "Yes";
                                 td(class = "hth-info-permission-no") : "No";
                                 td(class = "hth-info-permission-no") : "No";
+                                td(class = "hth-info-permission-no") : "No";
                             }
                             tr {
                                 th : "Review volunteer role requests";
                                 td(class = "hth-info-permission-limited") : "Event roles";
                                 td(class = "hth-info-permission-limited") : "Game roles, assigned language";
+                                td(class = "hth-info-permission-limited") : "Event roles";
                                 td(class = "hth-info-permission-no") : "No";
                             }
                             tr {
                                 th : "Confirm or decline race volunteer signups";
                                 td(class = "hth-info-permission-yes") : "Yes";
                                 td(class = "hth-info-permission-limited") : "Coverage scope";
+                                td(class = "hth-info-permission-limited") : "When enabled by organizers";
                                 td(class = "hth-info-permission-no") : "No";
                             }
                             tr {
                                 th : "Apply and sign up as a volunteer";
+                                td(class = "hth-info-permission-limited") : "If approved";
                                 td(class = "hth-info-permission-limited") : "If approved";
                                 td(class = "hth-info-permission-limited") : "If approved";
                                 td(class = "hth-info-permission-yes") : "Yes";
@@ -593,10 +610,12 @@ pub(crate) async fn get(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>)
                                 td(class = "hth-info-permission-yes") : "Yes";
                                 td(class = "hth-info-permission-no") : "No";
                                 td(class = "hth-info-permission-no") : "No";
+                                td(class = "hth-info-permission-no") : "No";
                             }
                             tr {
                                 th : "Change foundational event or game setup";
                                 td(class = "hth-info-permission-limited") : "Admin role required";
+                                td(class = "hth-info-permission-no") : "No";
                                 td(class = "hth-info-permission-no") : "No";
                                 td(class = "hth-info-permission-no") : "No";
                             }

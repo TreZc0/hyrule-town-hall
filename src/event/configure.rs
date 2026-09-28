@@ -254,6 +254,9 @@ async fn configure_form(
                 h2 : "More options";
                 ul {
                     li {
+                        a(href = uri!(super::volunteer_managers::settings(event.series, &*event.event))) : "Manage volunteer managers";
+                    }
+                    li {
                         a(href = uri!(restreamers_get(event.series, &*event.event, _))) : "Manage restream coordinators";
                     }
                     li {

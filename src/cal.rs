@@ -4258,7 +4258,14 @@ pub(crate) async fn race_table(
                 .push((row.player_name, row.video.parse()?));
         }
     }
-    let mut event_permissions = HashMap::<(Series, String), (bool, bool)>::new();
+    #[derive(Clone, Copy, Default)]
+    struct VolunteerAccess {
+        is_organizer: bool,
+        can_edit_restream: bool,
+        can_view_signups: bool,
+        can_decide_signups: bool,
+    }
+    let mut event_permissions = HashMap::<(Series, String), VolunteerAccess>::new();
     if let Some(user) = user {
         let mut event_keys = displayed_races
             .iter()
@@ -4298,7 +4305,12 @@ pub(crate) async fn race_table(
                             JOIN game_restreamers gr ON gr.game_id = gs.game_id
                             WHERE gs.series = e.series AND gr.restreamer = $3
                         )
-                    ) AS "can_manage_volunteers!"
+                    ) AS "can_manage_volunteers!",
+                    EXISTS (
+                        SELECT 1 FROM event_volunteer_managers vm
+                        WHERE vm.series = e.series AND vm.event = e.event AND vm.user_id = $3
+                    ) AS "is_volunteer_manager!",
+                    e.volunteer_managers_can_manage_signups
                 FROM events e
                 WHERE (e.series, e.event) IN (
                     SELECT selected_series::varchar, selected_event::varchar
@@ -4313,7 +4325,17 @@ pub(crate) async fn race_table(
             {
                 event_permissions.insert(
                     (row.series, row.event),
-                    (row.is_organizer, row.can_manage_volunteers),
+                    VolunteerAccess {
+                        is_organizer: row.is_organizer,
+                        can_edit_restream: row.can_manage_volunteers || user.is_global_admin(),
+                        can_view_signups: row.can_manage_volunteers
+                            || user.is_global_admin()
+                            || row.is_volunteer_manager,
+                        can_decide_signups: row.can_manage_volunteers
+                            || user.is_global_admin()
+                            || (row.is_volunteer_manager
+                                && row.volunteer_managers_can_manage_signups),
+                    },
                 );
             }
         }
@@ -4551,13 +4573,13 @@ pub(crate) async fn race_table(
                                     @if scheduled && all_teams_consented {
                                         @if let Some(user) = user {
                                             @let is_admin = user.is_global_admin();
-                                            @let (is_organizer, can_manage_volunteers) = event_permissions
+                                            @let access = event_permissions
                                                 .get(&(race.series, race.event.clone()))
                                                 .copied()
                                                 .unwrap_or_default();
-                                            @let can_inline_edit = show_event && (options.can_edit || is_admin || is_organizer || can_manage_volunteers);
-                                            @if can_manage_volunteers {
-                                                a(class = "clean_button", href = uri!(crate::event::roles::match_signup_page_get(race.series, &race.event, volunteer_race_id, _))) : "Manage Volunteers";
+                                            @let can_inline_edit = show_event && (options.can_edit || is_admin || access.is_organizer || access.can_edit_restream);
+                                            @if access.can_view_signups {
+                                                a(class = "clean_button", href = uri!(crate::event::roles::match_signup_page_get(race.series, &race.event, volunteer_race_id, _))) : if access.can_decide_signups { "Manage Volunteers" } else { "View Volunteer Signups" };
                                                 @if can_inline_edit {
                                                     : " | ";
                                                     a(class = "clean_button", href = uri!(crate::cal::edit_race(race.series, &race.event, race.id, Some(uri)))) : "Edit";
@@ -4663,7 +4685,7 @@ pub(crate) async fn race_table(
                             td {
                                 @if let Some(user) = user {
                                     @let is_admin = user.is_global_admin();
-                                    @let is_organizer = event_permissions.get(&(race.series, race.event.clone())).is_some_and(|(is_organizer, _)| *is_organizer);
+                                    @let is_organizer = event_permissions.get(&(race.series, race.event.clone())).is_some_and(|access| access.is_organizer);
                                     @if is_admin || is_organizer {
                                         a(class = "clean_button", href = uri!(crate::cal::edit_race(race.series, &race.event, race.id, Some(uri)))) : "Edit";
                                     } else if options.can_edit {

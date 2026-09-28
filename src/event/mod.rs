@@ -54,6 +54,7 @@ pub(crate) mod roles;
 pub(crate) mod setup;
 pub(crate) mod speedgaming_export;
 pub(crate) mod teams;
+pub(crate) mod volunteer_managers;
 pub(crate) mod zsr_export;
 
 #[derive(Debug, Clone, Copy, sqlx::Type)]
@@ -233,6 +234,7 @@ pub(crate) struct Data<'a> {
     pub(crate) volunteer_requests_enabled: bool,
     pub(crate) volunteer_request_lead_time_hours: i32,
     pub(crate) force_custom_role_binding: bool,
+    pub(crate) volunteer_managers_can_manage_signups: bool,
     pub(crate) qualifier_score_hiding: QualifierScoreHiding,
     pub(crate) qualifier_notification_role_id: Option<RoleId>,
     pub(crate) async_start_delay: Option<i32>,
@@ -334,6 +336,7 @@ impl<'a> Data<'a> {
             volunteer_requests_enabled,
             volunteer_request_lead_time_hours,
             force_custom_role_binding,
+            volunteer_managers_can_manage_signups,
             qualifier_score_hiding AS "qualifier_score_hiding: QualifierScoreHiding",
             qualifier_notification_role_id,
             racetime_goal_slug,
@@ -408,6 +411,7 @@ impl<'a> Data<'a> {
                 volunteer_requests_enabled: row.volunteer_requests_enabled,
                 volunteer_request_lead_time_hours: row.volunteer_request_lead_time_hours,
                 force_custom_role_binding: row.force_custom_role_binding.unwrap_or(true),
+                volunteer_managers_can_manage_signups: row.volunteer_managers_can_manage_signups,
                 qualifier_score_hiding: row.qualifier_score_hiding,
                 qualifier_notification_role_id: row.qualifier_notification_role_id.map(|id| RoleId::new(id as u64)),
                 racetime_goal_slug: row.racetime_goal_slug,
@@ -1166,6 +1170,13 @@ impl<'a> Data<'a> {
                             a(class = "button", href = uri!(configure::get(self.series, &*self.event))) : "Configure";
                         }
                     }
+                    @if !self.is_ended() && (is_organizer_or_global || volunteer_managers::is_manager(transaction, self, me).await?) {
+                        @if let Tab::VolunteerManagement = tab {
+                            a(class = "button selected", href? = is_subpage.then(|| uri!(volunteer_managers::review(self.series, &*self.event, _)))) : "Volunteer management";
+                        } else {
+                            a(class = "button", href = uri!(volunteer_managers::review(self.series, &*self.event, _))) : "Volunteer management";
+                        }
+                    }
                     @if !self.is_ended() && is_organizer_or_global {
                         @if let Tab::Roles = tab {
                             a(class = "button selected", href? = is_subpage.then(|| uri!(roles::get(self.series, &*self.event, _, _)))) : "Volunteer Setup";
@@ -1231,6 +1242,7 @@ pub(crate) enum Tab {
     Enter,
     FindTeam,
     Volunteer,
+    VolunteerManagement,
     Configure,
     Roles,
     SwissStandings,

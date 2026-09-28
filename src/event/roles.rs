@@ -1,7 +1,10 @@
 use {
     crate::{
         cal::{Entrant, Entrants, Race, RaceSchedule},
-        event::{Data, Tab},
+        event::{
+            Data, Tab,
+            volunteer_managers::{self, Permissions},
+        },
         form::{EmptyForm, button_form_ext_disabled, form_field, full_form, full_form_confirm},
         game,
         http::{PageError, StatusOrError},
@@ -568,6 +571,38 @@ impl RoleRequest {
         Ok(())
     }
 
+    pub(crate) async fn decide_pending(
+        pool: &mut Transaction<'_, Postgres>,
+        id: Id<RoleRequests>,
+        series: Series,
+        event: &str,
+        status: RoleRequestStatus,
+        allow_shared_game_roles: bool,
+    ) -> sqlx::Result<bool> {
+        let result = sqlx::query(
+            "UPDATE role_requests rr SET status = $1, updated_at = NOW()
+             FROM role_bindings rb
+             WHERE rr.id = $2 AND rr.role_binding_id = rb.id AND rr.status = 'pending'
+               AND $1 IN ('approved', 'rejected')
+               AND (
+                   (rb.series = $3 AND rb.event = $4)
+                   OR ($5 AND rb.series IS NULL AND rb.event IS NULL AND EXISTS (
+                       SELECT 1 FROM events e JOIN game_series gs ON gs.series = e.series
+                       WHERE e.series = $3 AND e.event = $4
+                         AND e.force_custom_role_binding = false AND gs.game_id = rb.game_id
+                   ))
+               )",
+        )
+        .bind(status)
+        .bind(i64::from(id))
+        .bind(series.to_string())
+        .bind(event)
+        .bind(allow_shared_game_roles)
+        .execute(&mut **pool)
+        .await?;
+        Ok(result.rows_affected() == 1)
+    }
+
     pub(crate) async fn approved_for_user(
         pool: &mut Transaction<'_, Postgres>,
         role_binding_id: Id<RoleBindings>,
@@ -960,6 +995,19 @@ impl Signup {
         Ok(result.rows_affected() > 0)
     }
 
+    pub(crate) async fn decide_pending(
+        pool: &mut Transaction<'_, Postgres>,
+        id: Id<Signups>,
+        race_id: Id<Races>,
+        series: Series,
+        event: &str,
+        status: VolunteerSignupStatus,
+    ) -> sqlx::Result<bool> {
+        let result = sqlx::query("UPDATE signups s SET status = $1, updated_at = NOW() FROM races r WHERE s.id = $2 AND s.race_id = $3 AND r.id = s.race_id AND r.series = $4 AND r.event = $5 AND s.status = 'pending' AND $1 IN ('confirmed', 'declined')")
+            .bind(status).bind(i64::from(id)).bind(i64::from(race_id)).bind(series.to_string()).bind(event).execute(&mut **pool).await?;
+        Ok(result.rows_affected() == 1)
+    }
+
     pub(crate) async fn active_for_user(
         pool: &mut Transaction<'_, Postgres>,
         race_id: Id<Races>,
@@ -1076,6 +1124,21 @@ async fn roles_page(
     selected_lang: Option<Language>,
     msg: Option<String>,
 ) -> Result<RawHtml<String>, Error> {
+    if let Some(user) = me.as_ref() {
+        let permissions = Permissions::load(&mut transaction, &data, user).await?;
+        if permissions.review_roles && !permissions.manage_managers {
+            return volunteer_managers::review_page(
+                transaction,
+                user.clone(),
+                data,
+                _uri,
+                csrf.as_ref(),
+                &ctx,
+                msg.as_deref(),
+            )
+            .await;
+        }
+    }
     let header = data
         .header(&mut transaction, me.as_ref(), Tab::Roles, false)
         .await?;
@@ -2477,6 +2540,7 @@ pub(crate) async fn approve_role_request(
         .ok_or(StatusOrError::Status(Status::NotFound))?;
     let mut form = form.into_inner();
     form.verify(&csrf);
+    let permissions = Permissions::load(&mut transaction, &data, &me).await?;
 
     Ok(if form.value.is_some() {
         if data.is_ended() {
@@ -2484,9 +2548,9 @@ pub(crate) async fn approve_role_request(
                 "This event has ended and can no longer be configured",
             ));
         }
-        if !data.organizers(&mut transaction).await?.contains(&me) && !me.is_global_admin() {
+        if !permissions.review_roles {
             form.context.push_error(form::Error::validation(
-                "You must be an organizer to manage roles for this event.",
+                "You must be an organizer or volunteer manager to review roles for this event.",
             ));
         }
 
@@ -2527,8 +2591,18 @@ pub(crate) async fn approve_role_request(
             .await?;
 
             // Update the role request status
-            RoleRequest::update_status(&mut transaction, request, RoleRequestStatus::Approved)
-                .await?;
+            if !RoleRequest::decide_pending(
+                &mut transaction,
+                request,
+                data.series,
+                &data.event,
+                RoleRequestStatus::Approved,
+                permissions.manage_managers,
+            )
+            .await?
+            {
+                return Err(StatusOrError::Status(Status::Conflict));
+            }
 
             // Assign Discord roles for this approval
             let user = User::from_id(&mut *transaction, role_request.user_id)
@@ -2566,9 +2640,14 @@ pub(crate) async fn approve_role_request(
 
             transaction.commit().await?;
             let redirect_url = format!(
-                "/event/{}/{}/roles?msg={}",
+                "/event/{}/{}/{}?msg={}",
                 series.slug(),
                 event,
+                if permissions.manage_managers {
+                    "roles"
+                } else {
+                    "volunteer-management"
+                },
                 urlencoding::encode("Role request approved successfully.")
             );
             RedirectOrContent::Redirect(Redirect::to(redirect_url))
@@ -2609,6 +2688,7 @@ pub(crate) async fn reject_role_request(
         .ok_or(StatusOrError::Status(Status::NotFound))?;
     let mut form = form.into_inner();
     form.verify(&csrf);
+    let permissions = Permissions::load(&mut transaction, &data, &me).await?;
 
     Ok(if form.value.is_some() {
         if data.is_ended() {
@@ -2616,9 +2696,9 @@ pub(crate) async fn reject_role_request(
                 "This event has ended and can no longer be configured",
             ));
         }
-        if !data.organizers(&mut transaction).await?.contains(&me) && !me.is_global_admin() {
+        if !permissions.review_roles {
             form.context.push_error(form::Error::validation(
-                "You must be an organizer to manage roles for this event.",
+                "You must be an organizer or volunteer manager to review roles for this event.",
             ));
         }
 
@@ -2644,13 +2724,28 @@ pub(crate) async fn reject_role_request(
                 .await?,
             )
         } else {
-            RoleRequest::update_status(&mut transaction, request, RoleRequestStatus::Rejected)
-                .await?;
+            if !RoleRequest::decide_pending(
+                &mut transaction,
+                request,
+                data.series,
+                &data.event,
+                RoleRequestStatus::Rejected,
+                permissions.manage_managers,
+            )
+            .await?
+            {
+                return Err(StatusOrError::Status(Status::Conflict));
+            }
             transaction.commit().await?;
             let redirect_url = format!(
-                "/event/{}/{}/roles?msg={}",
+                "/event/{}/{}/{}?msg={}",
                 series.slug(),
                 event,
+                if permissions.manage_managers {
+                    "roles"
+                } else {
+                    "volunteer-management"
+                },
                 urlencoding::encode("Role request rejected.")
             );
             RedirectOrContent::Redirect(Redirect::to(redirect_url))
@@ -3709,6 +3804,7 @@ pub(crate) async fn manage_roster(
     let data = Data::new(&mut transaction, series, event)
         .await?
         .ok_or(StatusOrError::Status(Status::NotFound))?;
+    ensure_race_event(&mut transaction, &data, race_id).await?;
     let mut form = form.into_inner();
     form.verify(&csrf);
 
@@ -3719,23 +3815,10 @@ pub(crate) async fn manage_roster(
             ));
         }
 
-        let is_organizer = data.organizers(&mut transaction).await?.contains(&me);
-        let mut is_restreamer = data.restreamers(&mut transaction).await?.contains(&me);
-        if !is_restreamer {
-            if let Some(game) = game::Game::from_series(&mut transaction, data.series)
-                .await
-                .map_err(Error::from)?
-            {
-                is_restreamer = game
-                    .is_restreamer_any_language(&mut transaction, &me)
-                    .await
-                    .map_err(Error::from)?;
-            }
-        }
-
-        if !is_organizer && !is_restreamer && !me.is_global_admin() {
+        let permissions = Permissions::load(&mut transaction, &data, &me).await?;
+        if !permissions.decide_signups {
             form.context.push_error(form::Error::validation(
-                "You must be an organizer or restreamer to manage rosters",
+                "You do not have permission to manage these race signups.",
             ));
         }
 
@@ -3792,8 +3875,18 @@ pub(crate) async fn manage_roster(
                 }
             };
 
-            let status_changed =
-                Signup::update_status(&mut transaction, value.signup_id, status).await?;
+            let status_changed = Signup::decide_pending(
+                &mut transaction,
+                value.signup_id,
+                race_id,
+                data.series,
+                &data.event,
+                status,
+            )
+            .await?;
+            if !status_changed {
+                return Err(StatusOrError::Status(Status::Conflict));
+            }
 
             // If the signup is being confirmed, auto-reject overlapping signups for the same user
             // Only proceed if the status actually changed (guards against double-submit race conditions)
@@ -4090,20 +4183,10 @@ async fn match_signup_page(
     }
 
     let content = if let Some(ref me) = me {
-        let is_organizer = data.organizers(&mut transaction).await?.contains(me);
-        let mut is_restreamer = data.restreamers(&mut transaction).await?.contains(me);
-        if !is_restreamer {
-            if let Some(game) = game::Game::from_series(&mut transaction, data.series)
-                .await
-                .map_err(Error::from)?
-            {
-                is_restreamer = game
-                    .is_restreamer_any_language(&mut transaction, me)
-                    .await
-                    .map_err(Error::from)?;
-            }
-        }
-        let can_manage = is_organizer || is_restreamer || me.is_global_admin();
+        let permissions = Permissions::load(&mut transaction, &data, me).await?;
+        let can_view = permissions.view_signups;
+        let can_manage = permissions.decide_signups && !data.is_ended();
+        let can_revert = permissions.revert_signups && !data.is_ended();
 
         html! {
             h2 : "Match Volunteer Signups";
@@ -4211,8 +4294,8 @@ async fn match_signup_page(
                 : render_language_content_box_start();
             }
 
-            @if can_manage {
-                h3 : "Manage Signups";
+            @if can_view {
+                h3 : "Race signups";
                 @let inactive_signups = signups.iter()
                     .filter(|s| s.language == current_language && matches!(s.status, VolunteerSignupStatus::Declined | VolunteerSignupStatus::Aborted))
                     .collect::<Vec<_>>();
@@ -4241,7 +4324,7 @@ async fn match_signup_page(
                                     p(class = "signup-notes") : notes;
                                 }
                             }
-                            @if matches!(signup.status, VolunteerSignupStatus::Pending) {
+                            @if can_manage && matches!(signup.status, VolunteerSignupStatus::Pending) {
                                 div(class = "signup-actions") {
                                     @let (errors, confirm_button) = button_form_ext(
                                         uri!(manage_roster(data.series, &*data.event, race_id)),
@@ -4274,7 +4357,7 @@ async fn match_signup_page(
                                     : errors;
                                     : decline_button;
                                 }
-                            } else if matches!(signup.status, VolunteerSignupStatus::Confirmed) {
+                            } else if can_revert && matches!(signup.status, VolunteerSignupStatus::Confirmed) {
                                 div(class = "signup-actions") {
                                     @let (errors, revert_button) = button_form_ext(
                                         uri!(revoke_signup(data.series, &*data.event, race_id)),
@@ -4319,6 +4402,7 @@ async fn match_signup_page(
                                             p(class = "signup-notes") : notes;
                                         }
                                     }
+                                    @if can_revert && matches!(signup.status, VolunteerSignupStatus::Declined) {
                                     div(class = "signup-actions") {
                                         @let (errors, revert_button) = button_form_ext(
                                             uri!(revoke_signup(data.series, &*data.event, race_id)),
@@ -4334,6 +4418,7 @@ async fn match_signup_page(
                                         );
                                         : errors;
                                         : revert_button;
+                                    }
                                     }
                                 }
                             }
@@ -4640,6 +4725,25 @@ async fn match_signup_page(
     .await?)
 }
 
+async fn ensure_race_event(
+    transaction: &mut Transaction<'_, Postgres>,
+    data: &Data<'_>,
+    race_id: Id<Races>,
+) -> Result<(), StatusOrError<Error>> {
+    let exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM races WHERE id = $1 AND series = $2 AND event = $3)",
+    )
+    .bind(i64::from(race_id))
+    .bind(data.series.to_string())
+    .bind(&*data.event)
+    .fetch_one(&mut **transaction)
+    .await?;
+    if !exists {
+        return Err(StatusOrError::Status(Status::NotFound));
+    }
+    Ok(())
+}
+
 #[rocket::get("/event/<series>/<event>/races/<race_id>/signups?<lang>")]
 pub(crate) async fn match_signup_page_get(
     pool: &State<PgPool>,
@@ -4654,6 +4758,7 @@ pub(crate) async fn match_signup_page_get(
     let data = Data::new(&mut transaction, series, event)
         .await?
         .ok_or(StatusOrError::Status(Status::NotFound))?;
+    ensure_race_event(&mut transaction, &data, race_id).await?;
     if let Some(primary_id) = sqlx::query_scalar!(
         r#"SELECT id AS "id: Id<Races>" FROM races WHERE companion_race_id = $1"#,
         race_id as _,
@@ -4910,6 +5015,7 @@ pub(crate) async fn revoke_signup(
     let data = Data::new(&mut transaction, series, event)
         .await?
         .ok_or(StatusOrError::Status(Status::NotFound))?;
+    ensure_race_event(&mut transaction, &data, race_id).await?;
     let mut form = form.into_inner();
     form.verify(&csrf);
 
@@ -4920,23 +5026,10 @@ pub(crate) async fn revoke_signup(
             ));
         }
 
-        let is_organizer = data.organizers(&mut transaction).await?.contains(&me);
-        let mut is_restreamer = data.restreamers(&mut transaction).await?.contains(&me);
-        if !is_restreamer {
-            if let Some(game) = game::Game::from_series(&mut transaction, data.series)
-                .await
-                .map_err(Error::from)?
-            {
-                is_restreamer = game
-                    .is_restreamer_any_language(&mut transaction, &me)
-                    .await
-                    .map_err(Error::from)?;
-            }
-        }
-
-        if !is_organizer && !is_restreamer && !me.is_global_admin() {
+        let permissions = Permissions::load(&mut transaction, &data, &me).await?;
+        if !permissions.revert_signups {
             form.context.push_error(form::Error::validation(
-                "You must be an organizer or restreamer to revoke signups",
+                "You do not have permission to manage these race signups.",
             ));
         }
 

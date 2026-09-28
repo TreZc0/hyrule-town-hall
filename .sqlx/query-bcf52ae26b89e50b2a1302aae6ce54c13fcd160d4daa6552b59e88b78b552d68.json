@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE async_teams SET player_finished_at = $3 WHERE team = $1 AND kind = $2 AND player_finished_at IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        {
+          "Custom": {
+            "name": "async_kind",
+            "kind": {
+              "Enum": [
+                "qualifier",
+                "qualifier2",
+                "qualifier3",
+                "tiebreaker1",
+                "tiebreaker2",
+                "seeding"
+              ]
+            }
+          }
+        },
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "bcf52ae26b89e50b2a1302aae6ce54c13fcd160d4daa6552b59e88b78b552d68"
+}
