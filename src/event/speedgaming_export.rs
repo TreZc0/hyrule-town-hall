@@ -149,7 +149,7 @@ pub(crate) async fn get(
         : header;
         article {
             h2 : "SpeedGaming Export";
-            p : "Exports upcoming 1v1 races to one SpeedGaming event. Volunteer signup languages are selected separately.";
+            p : "Exports upcoming 1v1 and open races, including qualifiers, to one SpeedGaming event. Open races are submitted without player details. Volunteer signup languages are selected separately.";
             @if !speedgaming_export::lifecycle::configured() {
                 p(class = "error") : "SpeedGaming username and password must be configured on the server before synchronization can run.";
             }

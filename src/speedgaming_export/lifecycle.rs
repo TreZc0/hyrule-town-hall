@@ -350,6 +350,7 @@ async fn desired(
     });
     let consent = race.as_ref().is_some_and(|r| {
         restream_consent_allows_export(
+            &r.entrants,
             r.restream_consent_required,
             r.teams_opt()
                 .map(|mut teams| teams.all(|t| t.restream_consent)),

@@ -61,8 +61,8 @@ pub(crate) enum Error {
     AmbiguousSubmission(String),
     #[error("event not found")]
     EventNotFound,
-    #[error("SpeedGaming exports only support 1v1 races")]
-    NotOneVsOne,
+    #[error("SpeedGaming exports only support live 1v1 and open races")]
+    UnsupportedRace,
     #[error("runner does not have a current Discord username")]
     MissingDiscordUsername,
     #[error("team does not have exactly one racing member")]
@@ -507,8 +507,7 @@ async fn runner_identity(
 
 struct MatchSubmission {
     slug: String,
-    runner1: RunnerIdentity,
-    runner2: RunnerIdentity,
+    runners: Option<[RunnerIdentity; 2]>,
     start: DateTime<Utc>,
     note: String,
 }
@@ -561,27 +560,71 @@ async fn build_match_submission(
     export: &ExportConfig,
     event_data: &event::Data<'_>,
 ) -> Result<MatchSubmission, Error> {
-    let Entrants::Two(entrants) = &race.entrants else {
-        return Err(Error::NotOneVsOne);
-    };
-    let mut runner1 = runner_identity(transaction, http_client, event_data, &entrants[0]).await?;
-    let mut runner2 = runner_identity(transaction, http_client, event_data, &entrants[1]).await?;
-    if runner1.discord_username.is_none() && runner2.discord_username.is_some() {
-        mem::swap(&mut runner1, &mut runner2);
-    }
-    if runner1.discord_username.is_none() {
-        return Err(Error::MissingDiscordUsername);
-    }
     let RaceSchedule::Live { start, .. } = race.schedule else {
-        return Err(Error::NotOneVsOne);
+        return Err(Error::UnsupportedRace);
+    };
+    let runners = match &race.entrants {
+        Entrants::Open | Entrants::Count { .. } => None,
+        Entrants::Two(entrants) => {
+            let mut runner1 =
+                runner_identity(transaction, http_client, event_data, &entrants[0]).await?;
+            let mut runner2 =
+                runner_identity(transaction, http_client, event_data, &entrants[1]).await?;
+            if runner1.discord_username.is_none() && runner2.discord_username.is_some() {
+                mem::swap(&mut runner1, &mut runner2);
+            }
+            if runner1.discord_username.is_none() {
+                return Err(Error::MissingDiscordUsername);
+            }
+            Some([runner1, runner2])
+        }
+        Entrants::Named(_) | Entrants::Three(_) | Entrants::Many(_) => {
+            return Err(Error::UnsupportedRace);
+        }
     };
     Ok(MatchSubmission {
         slug: export.slug.clone(),
-        runner1,
-        runner2,
+        runners,
         start: lifecycle::minute_precision(start + TimeDelta::minutes(export.delay_minutes.into())),
         note: race_note(race),
     })
+}
+
+fn match_form_fields(
+    submission: &MatchSubmission,
+    csrf: String,
+) -> Result<Vec<(&'static str, String)>, Error> {
+    let (date, time, am_pm) = speedgaming_form_time(submission.start);
+    let mut fields = vec![
+        ("csrfmiddlewaretoken", csrf),
+        ("eventslug", submission.slug.clone()),
+        ("autoapprove", "1".to_owned()),
+        ("whendate", date),
+        ("whentime", time),
+        ("whenampm", am_pm),
+        ("whentimezone", String::new()),
+        ("note", submission.note.clone()),
+        ("submit", "Submit Match".to_owned()),
+    ];
+    // Open races require player fields to be absent, rather than present but empty.
+    if let Some([runner1, runner2]) = &submission.runners {
+        let discord_username = runner1
+            .discord_username
+            .as_deref()
+            .ok_or(Error::MissingDiscordUsername)?;
+        fields.extend([
+            ("person1id", "0".to_owned()),
+            ("discordtag1", discord_username.to_owned()),
+            ("displayname1", runner1.display_name.clone()),
+            (
+                "publicstream1",
+                runner1.twitch_name.clone().unwrap_or_default(),
+            ),
+            ("person2id", "0".to_owned()),
+            ("displayname2", runner2.display_name.clone()),
+        ]);
+    }
+    Ok(fields)
 }
 
 async fn submit_match(
@@ -591,32 +634,7 @@ async fn submit_match(
     let http_client = lifecycle::client()?;
     let url = format!("{BASE_URL}/{}/submit/?autoapprove", submission.slug);
     let form = get_form(http_client, &url, false).await?;
-    let discord_username = submission
-        .runner1
-        .discord_username
-        .as_deref()
-        .ok_or(Error::MissingDiscordUsername)?;
-    let (date, time, am_pm) = speedgaming_form_time(submission.start);
-    let fields = [
-        ("csrfmiddlewaretoken", form.csrf),
-        ("eventslug", submission.slug.clone()),
-        ("autoapprove", "1".to_owned()),
-        ("person1id", "0".to_owned()),
-        ("discordtag1", discord_username.to_owned()),
-        ("displayname1", submission.runner1.display_name.clone()),
-        (
-            "publicstream1",
-            submission.runner1.twitch_name.clone().unwrap_or_default(),
-        ),
-        ("person2id", "0".to_owned()),
-        ("displayname2", submission.runner2.display_name.clone()),
-        ("whendate", date),
-        ("whentime", time),
-        ("whenampm", am_pm),
-        ("whentimezone", String::new()),
-        ("note", submission.note.clone()),
-        ("submit", "Submit Match".to_owned()),
-    ];
+    let fields = match_form_fields(submission, form.csrf)?;
     let response = http_client
         .post(&url)
         .header(COOKIE, form.cookie)
@@ -656,7 +674,11 @@ async fn should_export_race(
     let entrant_consent = race
         .teams_opt()
         .map(|mut teams| teams.all(|team| team.restream_consent));
-    if !restream_consent_allows_export(race.restream_consent_required, entrant_consent) {
+    if !restream_consent_allows_export(
+        &race.entrants,
+        race.restream_consent_required,
+        entrant_consent,
+    ) {
         return Ok(false);
     }
     match export.trigger_condition {
@@ -675,8 +697,15 @@ async fn should_export_race(
     }
 }
 
-fn restream_consent_allows_export(forced_consent: bool, entrant_consent: Option<bool>) -> bool {
-    forced_consent || entrant_consent == Some(true)
+fn restream_consent_allows_export(
+    entrants: &Entrants,
+    forced_consent: bool,
+    entrant_consent: Option<bool>,
+) -> bool {
+    // Open races export only schedule information, with no individual runners.
+    matches!(entrants, Entrants::Open | Entrants::Count { .. })
+        || forced_consent
+        || entrant_consent == Some(true)
 }
 
 async fn claim_race_export(
@@ -1441,11 +1470,100 @@ mod tests {
 
     #[test]
     fn requires_restream_consent_before_export() {
-        assert!(restream_consent_allows_export(false, Some(true)));
-        assert!(!restream_consent_allows_export(false, Some(false)));
-        assert!(!restream_consent_allows_export(false, None));
-        assert!(restream_consent_allows_export(true, Some(false)));
-        assert!(restream_consent_allows_export(true, None));
+        let entrants = Entrants::Two(["Runner 1", "Runner 2"].map(|name| Entrant::Named {
+            name: name.to_owned(),
+            racetime_id: None,
+            twitch_username: None,
+        }));
+        assert!(restream_consent_allows_export(&entrants, false, Some(true)));
+        assert!(!restream_consent_allows_export(
+            &entrants,
+            false,
+            Some(false)
+        ));
+        assert!(!restream_consent_allows_export(&entrants, false, None));
+        assert!(restream_consent_allows_export(&entrants, true, Some(false)));
+        assert!(restream_consent_allows_export(&entrants, true, None));
+    }
+
+    #[test]
+    fn open_races_do_not_require_individual_runner_consent() {
+        for entrants in [
+            Entrants::Open,
+            Entrants::Count {
+                total: 20,
+                finished: 0,
+            },
+        ] {
+            assert!(restream_consent_allows_export(&entrants, false, None));
+        }
+    }
+
+    fn qualifier_submission() -> MatchSubmission {
+        MatchSubmission {
+            slug: "test-event".to_owned(),
+            runners: None,
+            start: Utc.with_ymd_and_hms(2026, 7, 15, 18, 30, 0).unwrap(),
+            note: "Qualifier 1".to_owned(),
+        }
+    }
+
+    #[test]
+    fn open_race_form_omits_all_player_fields() {
+        let fields = match_form_fields(&qualifier_submission(), "token".to_owned()).unwrap();
+        let fields: std::collections::BTreeMap<_, _> = fields.into_iter().collect();
+        assert_eq!(
+            fields,
+            std::collections::BTreeMap::from([
+                ("csrfmiddlewaretoken", "token".to_owned()),
+                ("eventslug", "test-event".to_owned()),
+                ("autoapprove", "1".to_owned()),
+                ("whendate", "07/15/2026".to_owned()),
+                ("whentime", "02:30".to_owned()),
+                ("whenampm", "pm".to_owned()),
+                ("whentimezone", String::new()),
+                ("note", "Qualifier 1".to_owned()),
+                ("submit", "Submit Match".to_owned()),
+            ])
+        );
+    }
+
+    #[test]
+    fn one_vs_one_form_preserves_player_fields() {
+        let mut submission = qualifier_submission();
+        submission.runners = Some([
+            RunnerIdentity {
+                discord_username: Some("runner_one".to_owned()),
+                display_name: "Runner One".to_owned(),
+                twitch_name: Some("runnerone".to_owned()),
+            },
+            RunnerIdentity {
+                discord_username: None,
+                display_name: "Runner Two".to_owned(),
+                twitch_name: None,
+            },
+        ]);
+        let fields: std::collections::BTreeMap<_, _> =
+            match_form_fields(&submission, "token".to_owned())
+                .unwrap()
+                .into_iter()
+                .collect();
+        assert_eq!(fields.len(), 15);
+        for (name, value) in [
+            ("person1id", "0"),
+            ("discordtag1", "runner_one"),
+            ("displayname1", "Runner One"),
+            ("publicstream1", "runnerone"),
+            ("person2id", "0"),
+            ("displayname2", "Runner Two"),
+        ] {
+            assert_eq!(fields[name], value);
+        }
+        submission.runners.as_mut().unwrap()[0].discord_username = None;
+        assert!(matches!(
+            match_form_fields(&submission, "token".to_owned()),
+            Err(Error::MissingDiscordUsername),
+        ));
     }
 
     #[test]
