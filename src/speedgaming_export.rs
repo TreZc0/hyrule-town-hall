@@ -510,6 +510,28 @@ struct MatchSubmission {
     runners: Option<[RunnerIdentity; 2]>,
     start: DateTime<Utc>,
     note: String,
+    category: Option<String>,
+}
+
+fn qualifier_category(
+    is_qualifier: bool,
+    phase: Option<&str>,
+    round: Option<&str>,
+    qualifier_number: Option<i64>,
+) -> Option<String> {
+    is_qualifier.then(|| {
+        let name = phase
+            .into_iter()
+            .chain(round)
+            .map(str::trim)
+            .filter(|part| !part.is_empty())
+            .join(" ");
+        if name.is_empty() {
+            format!("Qualifier {}", qualifier_number.unwrap_or(1))
+        } else {
+            name
+        }
+    })
 }
 
 fn format_race_note(round: Option<&str>, game: Option<i16>) -> String {
@@ -587,6 +609,12 @@ async fn build_match_submission(
         runners,
         start: lifecycle::minute_precision(start + TimeDelta::minutes(export.delay_minutes.into())),
         note: race_note(race),
+        category: qualifier_category(
+            race.is_qualifier,
+            race.phase.as_deref(),
+            race.round.as_deref(),
+            race.qualifier_number,
+        ),
     })
 }
 
@@ -606,6 +634,9 @@ fn match_form_fields(
         ("note", submission.note.clone()),
         ("submit", "Submit Match".to_owned()),
     ];
+    if let Some(category) = &submission.category {
+        fields.push(("category", category.clone()));
+    }
     // Open races require player fields to be absent, rather than present but empty.
     if let Some([runner1, runner2]) = &submission.runners {
         let discord_username = runner1
@@ -1499,12 +1530,60 @@ mod tests {
         }
     }
 
+    #[test]
+    fn qualifier_category_uses_phase_and_round() {
+        assert_eq!(
+            qualifier_category(true, Some("Qualifier"), Some("Live 1"), Some(1)).as_deref(),
+            Some("Qualifier Live 1"),
+        );
+        assert_eq!(
+            qualifier_category(
+                true,
+                Some(" Custom phase "),
+                Some(" Friday evening "),
+                Some(2)
+            )
+            .as_deref(),
+            Some("Custom phase Friday evening"),
+        );
+        assert_eq!(
+            qualifier_category(true, None, Some("Live 1"), Some(1)).as_deref(),
+            Some("Live 1"),
+        );
+        assert_eq!(
+            qualifier_category(true, Some("Qualifier"), Some(" "), Some(1)).as_deref(),
+            Some("Qualifier"),
+        );
+        assert_eq!(
+            qualifier_category(true, Some(" "), None, Some(3)).as_deref(),
+            Some("Qualifier 3"),
+        );
+        assert_eq!(
+            qualifier_category(true, None, None, None).as_deref(),
+            Some("Qualifier 1"),
+        );
+        assert_eq!(
+            qualifier_category(false, Some("Qualifier"), Some("Live 1"), Some(1)),
+            None,
+        );
+    }
+
+    #[test]
+    fn non_qualifier_open_race_omits_category() {
+        let mut submission = qualifier_submission();
+        submission.category = None;
+        let fields = match_form_fields(&submission, "token".to_owned()).unwrap();
+        assert!(!fields.iter().any(|(name, _)| *name == "category"));
+        assert_eq!(fields.len(), 9);
+    }
+
     fn qualifier_submission() -> MatchSubmission {
         MatchSubmission {
             slug: "test-event".to_owned(),
             runners: None,
             start: Utc.with_ymd_and_hms(2026, 7, 15, 18, 30, 0).unwrap(),
             note: "Qualifier 1".to_owned(),
+            category: Some("Qualifier Live 1".to_owned()),
         }
     }
 
@@ -1523,6 +1602,7 @@ mod tests {
                 ("whenampm", "pm".to_owned()),
                 ("whentimezone", String::new()),
                 ("note", "Qualifier 1".to_owned()),
+                ("category", "Qualifier Live 1".to_owned()),
                 ("submit", "Submit Match".to_owned()),
             ])
         );
@@ -1531,6 +1611,7 @@ mod tests {
     #[test]
     fn one_vs_one_form_preserves_player_fields() {
         let mut submission = qualifier_submission();
+        submission.category = None;
         submission.runners = Some([
             RunnerIdentity {
                 discord_username: Some("runner_one".to_owned()),
@@ -1549,6 +1630,7 @@ mod tests {
                 .into_iter()
                 .collect();
         assert_eq!(fields.len(), 15);
+        assert!(!fields.contains_key("category"));
         for (name, value) in [
             ("person1id", "0"),
             ("discordtag1", "runner_one"),
