@@ -2960,32 +2960,29 @@ async fn copy_event_configuration(
     }
 
     // Game-level role bindings retain their IDs; event-level bindings get new IDs.
-    for table in [
-        "event_disabled_role_bindings",
-        "event_discord_role_overrides",
+    for statement in [
+        r#"INSERT INTO event_disabled_role_bindings (series, event, role_binding_id)
+           SELECT $1, $2, CASE WHEN source_binding.game_id IS NULL THEN new_binding.id ELSE source_binding.id END
+           FROM event_disabled_role_bindings source_row
+           JOIN role_bindings source_binding ON source_binding.id = source_row.role_binding_id
+           LEFT JOIN role_bindings new_binding ON source_binding.game_id IS NULL
+               AND new_binding.series = $1 AND new_binding.event = $2
+               AND new_binding.role_type_id = source_binding.role_type_id
+               AND new_binding.language = source_binding.language
+           WHERE source_row.series = $3 AND source_row.event = $4"#,
+        r#"INSERT INTO event_role_binding_overrides
+               (series, event, role_binding_id, discord_role_id, min_count, max_count)
+           SELECT $1, $2, CASE WHEN source_binding.game_id IS NULL THEN new_binding.id ELSE source_binding.id END,
+               source_row.discord_role_id, source_row.min_count, source_row.max_count
+           FROM event_role_binding_overrides source_row
+           JOIN role_bindings source_binding ON source_binding.id = source_row.role_binding_id
+           LEFT JOIN role_bindings new_binding ON source_binding.game_id IS NULL
+               AND new_binding.series = $1 AND new_binding.event = $2
+               AND new_binding.role_type_id = source_binding.role_type_id
+               AND new_binding.language = source_binding.language
+           WHERE source_row.series = $3 AND source_row.event = $4"#,
     ] {
-        let statement = format!(
-            "INSERT INTO {table} (series, event, role_binding_id{}) \
-             SELECT $1, $2, CASE WHEN source_binding.game_id IS NULL THEN new_binding.id ELSE source_binding.id END{} \
-             FROM {table} source_row \
-             JOIN role_bindings source_binding ON source_binding.id = source_row.role_binding_id \
-             LEFT JOIN role_bindings new_binding ON source_binding.game_id IS NULL \
-                AND new_binding.series = $1 AND new_binding.event = $2 \
-                AND new_binding.role_type_id = source_binding.role_type_id \
-                AND new_binding.language = source_binding.language \
-             WHERE source_row.series = $3 AND source_row.event = $4",
-            if table == "event_discord_role_overrides" {
-                ", discord_role_id"
-            } else {
-                ""
-            },
-            if table == "event_discord_role_overrides" {
-                ", source_row.discord_role_id"
-            } else {
-                ""
-            },
-        );
-        sqlx::query(&statement)
+        sqlx::query(statement)
             .bind(series.slug())
             .bind(event)
             .bind(source_series)
