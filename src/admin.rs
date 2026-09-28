@@ -145,7 +145,7 @@ pub(crate) async fn index(
                                     div(class = "actions", style = "display: flex; gap: 8px;") {
                                         button(class = "button edit-btn", onclick = format!("startEditGame('{}')", game.name)) : "Edit";
                                         a(href = uri!(crate::games::get(&game.name, _))) : "Manage";
-                                        a(href = uri!(crate::event::setup::create_get(&game.name))) : "Create Event";
+                                        a(href = uri!(crate::event::setup::create_get(&game.name, _))) : "Create Event";
                                     }
                                 }
                             }

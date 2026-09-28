@@ -2039,59 +2039,93 @@ fn create_form_content(
     ctx: Context<'_>,
     game: &Game,
     series: &[Series],
+    sources: &[(String, String, String)],
+    selected_source: Option<&str>,
+    source_defaults: Option<&HashMap<String, String>>,
+    submitted: bool,
     can_manage: bool,
 ) -> RawHtml<String> {
     if me.is_some() {
         if can_manage {
             let mut errors = ctx.errors().collect_vec();
+            let field_value = |name: &str| {
+                ctx.field_value(name).or_else(|| {
+                    if submitted {
+                        matches!(name, "listed" | "is_custom_goal" | "is_single_race" |
+                            "hide_entrants" | "restrict_chat_in_qualifiers" | "is_live_event")
+                            .then_some("")
+                    } else {
+                        source_defaults.and_then(|defaults| defaults.get(name).map(String::as_str))
+                    }
+                })
+            };
             html! {
                 article {
                     h2 : format!("Create New Event — {}", game.display_name);
 
+                    form(method = "get", action = uri!(create_get(&game.name, _))) {
+                        fieldset {
+                            label(for = "copy_from") : "Copy information from another event";
+                            select(id = "copy_from", name = "copy_from") {
+                                option(value = "") : "Start from scratch";
+                                @for (source_series, source_event, source_name) in sources {
+                                    @let source_id = format!("{source_series}/{source_event}");
+                                    option(value = &source_id, selected? = selected_source == Some(source_id.as_str())) : format!("{source_name} ({source_id})");
+                                }
+                            }
+                            input(type = "submit", value = "Load event");
+                            p(class = "help") : "Selecting an event reloads this form with its setup fields. Creating the event also copies its organizers, volunteer managers, restream coordinators, and other configuration. Event dates and tournament-specific links are cleared, weekly schedules start disabled, and the Discord participant role must be assigned separately.";
+                        }
+                    }
+
                     : full_form(uri!(create_post(&game.name)), csrf, html! {
+                        @if let Some(source) = selected_source {
+                            input(type = "hidden", name = "copy_from", value = source);
+                        }
+
                         : form_field("series", &mut errors, html! {
                             : help::label("series", "Series");
                             select(id = "series", name = "series", style = "width: 100%; max-width: 600px;") {
                                 @for series in series {
-                                    option(value = series.slug(), selected? = ctx.field_value("series").map_or(false, |v| v == series.slug())) : series.display_name();
+                                    option(value = series.slug(), selected? = field_value("series").map_or(false, |v| v == series.slug())) : series.display_name();
                                 }
                             }
                         });
 
                         : form_field("event", &mut errors, html! {
                             : help::label("event", "Event Slug");
-                            input(type = "text", id = "event", name = "event", value = ctx.field_value("event").unwrap_or(&String::new()), style = "width: 100%; max-width: 600px;");
+                            input(type = "text", id = "event", name = "event", value = field_value("event").unwrap_or(&String::new()), style = "width: 100%; max-width: 600px;");
                             label(class = "help") : " (e.g. \"2025\", \"s1\")";
                         });
 
                         : form_field("display_name", &mut errors, html! {
                             label(for = "display_name") : "Display Name";
-                            input(type = "text", id = "display_name", name = "display_name", value = ctx.field_value("display_name").unwrap_or(&String::new()), style = "width: 100%; max-width: 600px;");
+                            input(type = "text", id = "display_name", name = "display_name", value = field_value("display_name").unwrap_or(&String::new()), style = "width: 100%; max-width: 600px;");
                         });
 
                         : form_field("team_config", &mut errors, html! {
                             : help::label("team_config", "Team Configuration");
                             select(id = "team_config", name = "team_config", style = "width: 100%; max-width: 600px;") {
-                                option(value = "solo", selected? = ctx.field_value("team_config").map_or(true, |v| v == "solo")) : "Solo";
-                                option(value = "coop", selected? = ctx.field_value("team_config").map_or(false, |v| v == "coop")) : "Co-op";
-                                option(value = "tfbcoop", selected? = ctx.field_value("team_config").map_or(false, |v| v == "tfbcoop")) : "TFB Co-op";
-                                option(value = "pictionary", selected? = ctx.field_value("team_config").map_or(false, |v| v == "pictionary")) : "Pictionary";
-                                option(value = "multiworld", selected? = ctx.field_value("team_config").map_or(false, |v| v == "multiworld")) : "Multiworld";
+                                option(value = "solo", selected? = field_value("team_config").map_or(true, |v| v == "solo")) : "Solo";
+                                option(value = "coop", selected? = field_value("team_config").map_or(false, |v| v == "coop")) : "Co-op";
+                                option(value = "tfbcoop", selected? = field_value("team_config").map_or(false, |v| v == "tfbcoop")) : "TFB Co-op";
+                                option(value = "pictionary", selected? = field_value("team_config").map_or(false, |v| v == "pictionary")) : "Pictionary";
+                                option(value = "multiworld", selected? = field_value("team_config").map_or(false, |v| v == "multiworld")) : "Multiworld";
                             }
                         });
 
                         : form_field("language", &mut errors, html! {
                             : help::label("language", "Language");
                             select(id = "language", name = "language", style = "width: 100%; max-width: 600px;") {
-                                option(value = "en", selected? = ctx.field_value("language").map_or(true, |v| v == "en")) : "English";
-                                option(value = "fr", selected? = ctx.field_value("language").map_or(false, |v| v == "fr")) : "French";
-                                option(value = "de", selected? = ctx.field_value("language").map_or(false, |v| v == "de")) : "German";
-                                option(value = "pt", selected? = ctx.field_value("language").map_or(false, |v| v == "pt")) : "Portuguese";
+                                option(value = "en", selected? = field_value("language").map_or(true, |v| v == "en")) : "English";
+                                option(value = "fr", selected? = field_value("language").map_or(false, |v| v == "fr")) : "French";
+                                option(value = "de", selected? = field_value("language").map_or(false, |v| v == "de")) : "German";
+                                option(value = "pt", selected? = field_value("language").map_or(false, |v| v == "pt")) : "Portuguese";
                             }
                         });
 
                         : form_field("listed", &mut errors, html! {
-                            input(type = "checkbox", id = "listed", name = "listed", checked? = ctx.field_value("listed").map_or(false, |value| value == "on"));
+                            input(type = "checkbox", id = "listed", name = "listed", checked? = field_value("listed").map_or(false, |value| value == "on"));
                             : help::label("listed", "Listed");
                             label(class = "help") : " (Show this event on the main page)";
                         });
@@ -2100,11 +2134,11 @@ fn create_form_content(
 
                         : form_field("racetime_goal_slug", &mut errors, html! {
                             : help::label("racetime_goal_slug", "Goal Slug");
-                            input(type = "text", id = "racetime_goal_slug", name = "racetime_goal_slug", value = ctx.field_value("racetime_goal_slug").unwrap_or(""), style = "width: 100%; max-width: 600px;", placeholder = "Exact goal string on racetime.gg (empty = no goal)");
+                            input(type = "text", id = "racetime_goal_slug", name = "racetime_goal_slug", value = field_value("racetime_goal_slug").unwrap_or(""), style = "width: 100%; max-width: 600px;", placeholder = "Exact goal string on racetime.gg (empty = no goal)");
                         });
 
                         : form_field("is_custom_goal", &mut errors, html! {
-                            input(type = "checkbox", id = "is_custom_goal", name = "is_custom_goal", checked? = ctx.field_value("is_custom_goal").map_or(true, |value| value == "on"));
+                            input(type = "checkbox", id = "is_custom_goal", name = "is_custom_goal", checked? = field_value("is_custom_goal").map_or(true, |value| value == "on"));
                             : help::label("is_custom_goal", "Is Custom Goal");
                             label(class = "help") : " (When enabled, the racetime.gg goal is a custom goal rather than a standard one.)";
                         });
@@ -2112,7 +2146,7 @@ fn create_form_content(
                         : form_field("draft_kind", &mut errors, html! {
                             : help::label("draft_kind", "Draft Kind");
                             select(id = "draft_kind", name = "draft_kind", style = "width: 100%; max-width: 600px;") {
-                                option(value = "", selected? = ctx.field_value("draft_kind").map_or(true, |v| v.is_empty())) : "None";
+                                option(value = "", selected? = field_value("draft_kind").map_or(true, |v| v.is_empty())) : "None";
                                 @for (slug, label) in &[
                                     ("s7", "S7"),
                                     ("multiworld_s3", "Multiworld S3"),
@@ -2126,7 +2160,7 @@ fn create_form_content(
                                     ("ban_only", "Ban Only (generic, needs config)"),
                                     ("pick_only", "Pick Only (generic, needs config)"),
                                 ] {
-                                    option(value = slug, selected? = ctx.field_value("draft_kind").map_or(false, |v| v == *slug)) : *label;
+                                    option(value = slug, selected? = field_value("draft_kind").map_or(false, |v| v == *slug)) : *label;
                                 }
                             }
                         });
@@ -2134,7 +2168,7 @@ fn create_form_content(
                         : form_field("draft_config", &mut errors, html! {
                             : help::label("draft_config", "Draft Config JSON");
                             textarea(id = "draft_config", name = "draft_config", rows = "6", style = "font-family: monospace; width: 100%; max-width: 800px;") {
-                                : ctx.field_value("draft_config").unwrap_or(&String::new());
+                                : field_value("draft_config").unwrap_or(&String::new());
                             }
                             label(class = "help") : " (JSON configuration for generic draft modes. Leave empty if not applicable.)";
                         });
@@ -2143,7 +2177,7 @@ fn create_form_content(
                             : help::label("qualifier_mode", "Qualification method");
                             select(id = "qualifier_mode", name = "qualifier_mode") {
                                 @for (slug, label) in [("none", "No qualification"), ("rank", "Stored qualifier ranks"), ("single", "Single async qualifier"), ("score", "Configured scoring"), ("pooled_by_mode", "Pooled by mode")] {
-                                    option(value = slug, selected? = ctx.field_value("qualifier_mode").unwrap_or("none") == slug) : label;
+                                    option(value = slug, selected? = field_value("qualifier_mode").unwrap_or("none") == slug) : label;
                                 }
                             }
                             label(class = "help") : "Choose how entrants qualify. For Stored qualifier ranks, assign entrant ranks on the Qualifiers page after creating the event. Ranks and async submissions only affect qualification when their method is selected. Configured scoring combines live qualifier races and qualifier async results.";
@@ -2152,7 +2186,7 @@ fn create_form_content(
                         : form_field("qualifier_score_kind", &mut errors, html! {
                             : help::label("qualifier_score_kind", "Qualifier Score Kind");
                             select(id = "qualifier_score_kind", name = "qualifier_score_kind", style = "width: 100%; max-width: 600px;") {
-                                option(value = "", selected? = ctx.field_value("qualifier_score_kind").map_or(true, |v| v.is_empty())) : "None";
+                                option(value = "", selected? = field_value("qualifier_score_kind").map_or(true, |v| v.is_empty())) : "None";
                                 @for (slug, label) in &[
                                     ("time_relative", "Time relative to par (configurable)"),
                                     ("standard", "Standard"),
@@ -2166,7 +2200,7 @@ fn create_form_content(
                                         .expect("built-in scoring defaults are valid")
                                         .map(|config| serde_json::to_string_pretty(&config).expect("scoring defaults serialize"))
                                         .unwrap_or_else(|| "{}".into());
-                                    option(value = slug, data_score_defaults = defaults, selected? = ctx.field_value("qualifier_score_kind").map_or(false, |v| v == *slug)) : *label;
+                                    option(value = slug, data_score_defaults = defaults, selected? = field_value("qualifier_score_kind").map_or(false, |v| v == *slug)) : *label;
                                 }
                             }
                         });
@@ -2174,34 +2208,34 @@ fn create_form_content(
                         : form_field("qualifier_score_config", &mut errors, html! {
                             : help::label("qualifier_score_config", "Qualifier scoring parameters (JSON)");
                             textarea(id = "qualifier_score_config", name = "qualifier_score_config", rows = "5", style = "font-family: monospace; width: 100%; max-width: 800px;") {
-                                : ctx.field_value("qualifier_score_config").unwrap_or("");
+                                : field_value("qualifier_score_config").unwrap_or("");
                             }
                             label(class = "help") : "Selecting a scoring kind fills in its default parameters. Edit these values to customize scoring. An empty object means this kind has no configurable parameters.";
                         });
 
                         : form_field("is_single_race", &mut errors, html! {
-                            input(type = "checkbox", id = "is_single_race", name = "is_single_race", checked? = ctx.field_value("is_single_race").map_or(false, |value| value == "on"));
+                            input(type = "checkbox", id = "is_single_race", name = "is_single_race", checked? = field_value("is_single_race").map_or(false, |value| value == "on"));
                             : help::label("is_single_race", "Single Race Event");
                         });
 
                         : form_field("hide_entrants", &mut errors, html! {
-                            input(type = "checkbox", id = "hide_entrants", name = "hide_entrants", checked? = ctx.field_value("hide_entrants").map_or(false, |value| value == "on"));
+                            input(type = "checkbox", id = "hide_entrants", name = "hide_entrants", checked? = field_value("hide_entrants").map_or(false, |value| value == "on"));
                             : help::label("hide_entrants", "Hide Entrants");
                         });
 
                         : form_field("start_delay", &mut errors, html! {
                             : help::label("start_delay", "Start Delay (seconds)");
-                            input(type = "number", id = "start_delay", name = "start_delay", value = ctx.field_value("start_delay").unwrap_or(&"15".to_owned()), style = "width: 100%; max-width: 600px;");
+                            input(type = "number", id = "start_delay", name = "start_delay", value = field_value("start_delay").unwrap_or(&"15".to_owned()), style = "width: 100%; max-width: 600px;");
                         });
 
                         : form_field("start_delay_open", &mut errors, html! {
                             : help::label("start_delay_open", "Start Delay Open (seconds)");
-                            input(type = "text", id = "start_delay_open", name = "start_delay_open", value = ctx.field_value("start_delay_open").unwrap_or(&String::new()), style = "width: 100%; max-width: 600px;");
+                            input(type = "text", id = "start_delay_open", name = "start_delay_open", value = field_value("start_delay_open").unwrap_or(&String::new()), style = "width: 100%; max-width: 600px;");
                             label(class = "help") : " (Leave empty to use same as Start Delay)";
                         });
 
                         : form_field("restrict_chat_in_qualifiers", &mut errors, html! {
-                            input(type = "checkbox", id = "restrict_chat_in_qualifiers", name = "restrict_chat_in_qualifiers", checked? = ctx.field_value("restrict_chat_in_qualifiers").map_or(false, |value| value == "on"));
+                            input(type = "checkbox", id = "restrict_chat_in_qualifiers", name = "restrict_chat_in_qualifiers", checked? = field_value("restrict_chat_in_qualifiers").map_or(false, |value| value == "on"));
                             : help::label("restrict_chat_in_qualifiers", "Restrict Chat in Qualifiers");
                         });
 
@@ -2209,7 +2243,7 @@ fn create_form_content(
                             : help::label("preroll_mode", "Preroll Mode");
                             select(id = "preroll_mode", name = "preroll_mode", style = "width: 100%; max-width: 600px;") {
                                 @for (val, label) in &[("none", "None"), ("short", "Short"), ("medium", "Medium"), ("long", "Long")] {
-                                    option(value = val, selected? = ctx.field_value("preroll_mode").map_or(*val == "none", |v| v == *val)) : *label;
+                                    option(value = val, selected? = field_value("preroll_mode").map_or(*val == "none", |v| v == *val)) : *label;
                                 }
                             }
                         });
@@ -2218,7 +2252,7 @@ fn create_form_content(
                             : help::label("spoiler_unlock", "Spoiler Log Unlock");
                             select(id = "spoiler_unlock", name = "spoiler_unlock", style = "width: 100%; max-width: 600px;") {
                                 @for (val, label) in &[("never", "Never"), ("after", "After race"), ("immediately", "Immediately")] {
-                                    option(value = val, selected? = ctx.field_value("spoiler_unlock").map_or(*val == "never", |v| v == *val)) : *label;
+                                    option(value = val, selected? = field_value("spoiler_unlock").map_or(*val == "never", |v| v == *val)) : *label;
                                 }
                             }
                         });
@@ -2226,7 +2260,7 @@ fn create_form_content(
 
 
                         : form_field("is_live_event", &mut errors, html! {
-                            input(type = "checkbox", id = "is_live_event", name = "is_live_event", checked? = ctx.field_value("is_live_event").map_or(false, |value| value == "on"));
+                            input(type = "checkbox", id = "is_live_event", name = "is_live_event", checked? = field_value("is_live_event").map_or(false, |value| value == "on"));
                             : help::label("is_live_event", "Is Live Event");
                             label(class = "help") : " (In-person event: scheduled races after the event starts send notifications instead of creating racetime.gg rooms.)";
                         });
@@ -2236,19 +2270,20 @@ fn create_form_content(
                         : form_field("seed_gen_type", &mut errors, html! {
                             : help::label("seed_gen_type", "Seed Gen Type");
                             select(id = "seed_gen_type", name = "seed_gen_type", style = "width: 100%; max-width: 600px;") {
-                                option(value = "", selected? = ctx.field_value("seed_gen_type").map_or(true, |v| v.is_empty())) : "None (manual / external)";
+                                option(value = "", selected? = field_value("seed_gen_type").map_or(true, |v| v.is_empty())) : "None (manual / external)";
                                 @for (val, label) in &[
                                     ("alttpr_dr", "ALTTPR Door Rando"),
                                     ("alttpr_avianart", "ALTTPR Avianart"),
                                     ("owr", "ALTTPR OWR (regular build)"),
                                     ("owr_tourney", "ALTTPR OWR (tournament build)"),
                                     ("ootr", "OoTR"),
+                                    ("ootr_web", "OoTR Web"),
                                     ("ootr_tfb", "OoTR Triforce Blitz"),
                                     ("ootr_rsl", "OoTR RSL"),
                                     ("twwr", "The Wind Waker Randomizer"),
                                     ("mmr", "MMR"),
                                 ] {
-                                    option(value = val, selected? = ctx.field_value("seed_gen_type").map_or(false, |v| v == *val)) : *label;
+                                    option(value = val, selected? = field_value("seed_gen_type").map_or(false, |v| v == *val)) : *label;
                                 }
                             }
                             label(class = "help") : "Choose OWR (regular build) for /opt/owr or OWR (tournament build) for /opt/owr_tourney. The selection applies to this event's live, async and practice seeds. Both accept the same JSON structure; use settings supported by the installed build.";
@@ -2259,7 +2294,7 @@ fn create_form_content(
                             label(for = "choice_resolution") : "Resolve random player choices";
                             select(id = "choice_resolution", name = "choice_resolution") {
                                 @for (value, label) in [("race_creation", "On race creation / import"), ("room_opening", "On room opening"), ("seed_rolling", "On seed reveal")] {
-                                    option(value = value, selected? = ctx.field_value("choice_resolution").unwrap_or("seed_rolling") == value) : label;
+                                    option(value = value, selected? = field_value("choice_resolution").unwrap_or("seed_rolling") == value) : label;
                                 }
                             }
                             p(class = "help") : "For OWR and Door Rando mutual choices. Each game's result is saved and reused for all rooms and seed rerolls. Scheduling threads always show agreed settings and rules; only creation/import also reveals random results there. Room opening posts in each race room or private async thread; without a room it falls back to seed reveal. Seed reveal posts settings beside the seed, separately for each async participant. This selector sets choice_resolution in Seed Config JSON; changing it affects only unresolved races.";
@@ -2269,11 +2304,12 @@ fn create_form_content(
                         : form_field("seed_config", &mut errors, html! {
                             : help::label("seed_config", "Seed Config JSON");
                             textarea(id = "seed_config", name = "seed_config", rows = "6", style = "font-family: monospace; width: 100%; max-width: 800px;") {
-                                : ctx.field_value("seed_config").unwrap_or(&String::new());
+                                : field_value("seed_config").unwrap_or(&String::new());
                             }
                             label(class = "help") : " (JSON config for the seed gen type. Leave empty if not applicable.)";
                         });
                     }, errors.clone(), "Create Event");
+                    script(src = static_url!("event-copy.js")) {}
                     script(src = static_url!("qualifier-score-config.js")) {}
                     script(src = static_url!("setting-help.js")) {}
                 }
@@ -2289,7 +2325,7 @@ fn create_form_content(
         html! {
             article {
                 p {
-                    a(href = uri!(auth::login(Some(uri!(create_get(&game.name)))))) : "Sign in or create a Hyrule Town Hall account";
+                    a(href = uri!(auth::login(Some(uri!(create_get(&game.name, _)))))) : "Sign in or create a Hyrule Town Hall account";
                     : " to access this page.";
                 }
             }
@@ -2297,13 +2333,102 @@ fn create_form_content(
     }
 }
 
-#[rocket::get("/games/<game_name>/event/new")]
+async fn create_sources(
+    transaction: &mut Transaction<'_, Postgres>,
+    game: &Game,
+) -> Result<Vec<(String, String, String)>, sqlx::Error> {
+    sqlx::query_as(
+        "SELECT e.series, e.event, e.display_name FROM events e JOIN game_series gs ON gs.series = e.series WHERE gs.game_id = $1 ORDER BY e.series, e.event DESC",
+    )
+    .bind(game.id)
+    .fetch_all(&mut **transaction)
+    .await
+}
+
+fn selected_create_source(
+    sources: &[(String, String, String)],
+    selected: Option<&str>,
+) -> Option<(String, String)> {
+    let selected = selected?;
+    sources
+        .iter()
+        .find(|(series, event, _)| selected == format!("{series}/{event}"))
+        .map(|(series, event, _)| (series.clone(), event.clone()))
+}
+
+async fn create_source_defaults(
+    transaction: &mut Transaction<'_, Postgres>,
+    game: &Game,
+    source: &str,
+) -> Result<Option<HashMap<String, String>>, sqlx::Error> {
+    let Some((series, event)) = source.split_once('/') else {
+        return Ok(None);
+    };
+    let row: Option<serde_json::Value> = sqlx::query_scalar(
+        "SELECT to_jsonb(e) FROM events e JOIN game_series gs ON gs.series = e.series WHERE gs.game_id = $1 AND e.series = $2 AND e.event = $3",
+    )
+    .bind(game.id)
+    .bind(series)
+    .bind(event)
+    .fetch_optional(&mut **transaction)
+    .await?;
+    Ok(row.and_then(|row| {
+        row.as_object().map(|values| {
+            let mut defaults = HashMap::new();
+            for name in [
+                "series",
+                "display_name",
+                "team_config",
+                "language",
+                "racetime_goal_slug",
+                "draft_kind",
+                "draft_config",
+                "qualifier_mode",
+                "qualifier_score_kind",
+                "qualifier_score_config",
+                "is_single_race",
+                "hide_entrants",
+                "start_delay",
+                "start_delay_open",
+                "restrict_chat_in_qualifiers",
+                "preroll_mode",
+                "spoiler_unlock",
+                "is_custom_goal",
+                "is_live_event",
+                "seed_gen_type",
+                "seed_config",
+            ] {
+                let value = values.get(name).unwrap_or(&serde_json::Value::Null);
+                let value = match value {
+                    serde_json::Value::Null => String::new(),
+                    serde_json::Value::String(s) => s.clone(),
+                    serde_json::Value::Bool(value) => if *value { "on" } else { "" }.into(),
+                    serde_json::Value::Object(_) | serde_json::Value::Array(_) => {
+                        serde_json::to_string_pretty(value).expect("database JSON serializes")
+                    }
+                    value => value.to_string(),
+                };
+                defaults.insert(name.to_owned(), value);
+            }
+            let resolution = values
+                .get("seed_config")
+                .and_then(|config| config.get("choice_resolution"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("seed_rolling");
+            defaults.insert("choice_resolution".into(), resolution.into());
+            defaults
+        })
+    }))
+}
+
+#[rocket::get("/games/<game_name>/event/new?<copy_from>")]
 pub(crate) async fn create_get(
     pool: &State<PgPool>,
     me: Option<User>,
     uri: Origin<'_>,
     csrf: Option<CsrfToken>,
     game_name: &str,
+    copy_from: Option<&str>,
 ) -> Result<RawHtml<String>, StatusOrError<event::Error>> {
     let mut transaction = pool.begin().await?;
     let game = Game::from_name(&mut transaction, game_name)
@@ -2315,12 +2440,33 @@ pub(crate) async fn create_get(
     } else {
         false
     };
+    let sources = if can_manage {
+        create_sources(&mut transaction, &game).await?
+    } else {
+        Vec::new()
+    };
+    let source_defaults = if can_manage {
+        match copy_from {
+            Some(source) if !source.is_empty() => Some(
+                create_source_defaults(&mut transaction, &game, source)
+                    .await?
+                    .ok_or(StatusOrError::Status(Status::NotFound))?,
+            ),
+            _ => None,
+        }
+    } else {
+        None
+    };
     let content = create_form_content(
         &me,
         csrf.as_ref(),
         Context::default(),
         &game,
         &series,
+        &sources,
+        copy_from,
+        source_defaults.as_ref(),
+        false,
         can_manage,
     );
     Ok(page(
@@ -2338,6 +2484,7 @@ pub(crate) async fn create_get(
 pub(crate) struct CreateEventForm {
     #[field(default = String::new())]
     csrf: String,
+    copy_from: Option<String>,
     series: String,
     event: String,
     display_name: String,
@@ -2382,6 +2529,11 @@ pub(crate) async fn create_post(
         .ok_or(StatusOrError::Status(Status::NotFound))?;
     let allowed_series = game.series(&mut transaction).await?;
     let can_manage = can_manage_game(&mut transaction, &me, &game).await?;
+    let sources = if can_manage {
+        create_sources(&mut transaction, &game).await?
+    } else {
+        Vec::new()
+    };
     let mut form = form.into_inner();
     form.verify(&csrf);
 
@@ -2390,6 +2542,17 @@ pub(crate) async fn create_post(
             form.context.push_error(form::Error::validation(
                 "You must be a global admin or an admin for this game to create events.",
             ));
+        }
+        let source = selected_create_source(&sources, value.copy_from.as_deref());
+        if value
+            .copy_from
+            .as_deref()
+            .is_some_and(|source| !source.is_empty())
+            && source.is_none()
+        {
+            form.context.push_error(
+                form::Error::validation("Select an event from this game.").with_name("copy_from"),
+            );
         }
 
         // Parse series
@@ -2599,6 +2762,10 @@ pub(crate) async fn create_post(
                 form.context,
                 &game,
                 &allowed_series,
+                &sources,
+                value.copy_from.as_deref(),
+                None,
+                true,
                 can_manage,
             );
             return Ok(RedirectOrContent::Content(
@@ -2616,8 +2783,65 @@ pub(crate) async fn create_post(
 
         let series = series.expect("series should be valid if no errors");
 
-        // Insert the new event
-        sqlx::query!(r#"
+        if let Some((source_series, source_event)) = &source {
+            // Clone the event configuration, then apply the reviewed creation fields below.
+            // Lifecycle dates and external event links refer to the old event and must be reset.
+            let inserted = sqlx::query(
+                r#"INSERT INTO events
+                   SELECT (jsonb_populate_record(NULL::events,
+                       to_jsonb(source) || jsonb_build_object(
+                           'series', $1::text, 'event', $2::text,
+                           'start', NULL, 'end_time', NULL,
+                           'url', NULL, 'video_url', NULL,
+                           'enter_url', NULL, 'teams_url', NULL,
+                           'speedgaming_slug', NULL, 'speedgaming_in_person_id', NULL,
+                           'listed', false))).*
+                   FROM events source WHERE source.series = $3 AND source.event = $4"#,
+            )
+            .bind(series.slug())
+            .bind(&value.event)
+            .bind(source_series)
+            .bind(source_event)
+            .execute(&mut *transaction)
+            .await?;
+            if inserted.rows_affected() != 1 {
+                return Err(StatusOrError::Status(Status::Conflict));
+            }
+
+            sqlx::query(
+                r#"UPDATE events SET display_name = $3, team_config = $4, language = $5, listed = $6,
+                    racetime_goal_slug = $7, draft_kind = $8, draft_config = $9, qualifier_score_kind = $10,
+                    is_single_race = $11, hide_entrants = $12, start_delay = $13, start_delay_open = $14,
+                    restrict_chat_in_qualifiers = $15, preroll_mode = $16, spoiler_unlock = $17,
+                    is_custom_goal = $18, is_live_event = $19, seed_gen_type = $20, seed_config = $21,
+                    settings_string = CASE WHEN $20 = 'twwr' THEN settings_string ELSE NULL END
+                   WHERE series = $1 AND event = $2"#,
+            )
+            .bind(series.slug())
+            .bind(&value.event)
+            .bind(&value.display_name)
+            .bind(team_config)
+            .bind(language)
+            .bind(value.listed)
+            .bind(&racetime_goal_slug)
+            .bind(&draft_kind)
+            .bind(&draft_config_json)
+            .bind(&qualifier_score_kind)
+            .bind(value.is_single_race)
+            .bind(value.hide_entrants)
+            .bind(value.start_delay)
+            .bind(start_delay_open)
+            .bind(value.restrict_chat_in_qualifiers)
+            .bind(&value.preroll_mode)
+            .bind(&value.spoiler_unlock)
+            .bind(value.is_custom_goal)
+            .bind(value.is_live_event)
+            .bind(&seed_gen_type)
+            .bind(&seed_config_json)
+            .execute(&mut *transaction)
+            .await?;
+        } else {
+            sqlx::query!(r#"
             INSERT INTO events (series, event, display_name, team_config, language, listed,
                 racetime_goal_slug, draft_kind, draft_config, qualifier_score_kind,
                 is_single_race, hide_entrants, start_delay, start_delay_open, restrict_chat_in_qualifiers,
@@ -2625,28 +2849,40 @@ pub(crate) async fn create_post(
                 seed_gen_type, seed_config)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
         "#,
-            series as _,
-            &value.event,
-            &value.display_name,
-            team_config as _,
-            language as _,
-            value.listed,
-            racetime_goal_slug,
-            draft_kind,
-            draft_config_json as _,
-            qualifier_score_kind,
-            value.is_single_race,
-            value.hide_entrants,
-            value.start_delay,
-            start_delay_open,
-            value.restrict_chat_in_qualifiers,
-            &value.preroll_mode,
-            &value.spoiler_unlock,
-            value.is_custom_goal,
-            value.is_live_event,
-            seed_gen_type,
-            seed_config_json as _,
-        ).execute(&mut *transaction).await?;
+                series as _,
+                &value.event,
+                &value.display_name,
+                team_config as _,
+                language as _,
+                value.listed,
+                racetime_goal_slug,
+                draft_kind,
+                draft_config_json as _,
+                qualifier_score_kind,
+                value.is_single_race,
+                value.hide_entrants,
+                value.start_delay,
+                start_delay_open,
+                value.restrict_chat_in_qualifiers,
+                &value.preroll_mode,
+                &value.spoiler_unlock,
+                value.is_custom_goal,
+                value.is_live_event,
+                seed_gen_type,
+                seed_config_json as _,
+            ).execute(&mut *transaction).await?;
+        }
+
+        if let Some((source_series, source_event)) = &source {
+            copy_event_configuration(
+                &mut transaction,
+                series,
+                &value.event,
+                source_series,
+                source_event,
+            )
+            .await?;
+        }
 
         mirror_twwr_permalink(&mut transaction, series, &value.event).await?;
         save_score_config(
@@ -2667,12 +2903,17 @@ pub(crate) async fn create_post(
         RedirectOrContent::Redirect(Redirect::to(uri!(get(series, &*value.event))))
     } else {
         let me = Some(me);
+        let selected_source = form.context.field_value("copy_from").map(str::to_owned);
         let content = create_form_content(
             &me,
             csrf.as_ref(),
             form.context,
             &game,
             &allowed_series,
+            &sources,
+            selected_source.as_deref(),
+            None,
+            true,
             can_manage,
         );
         RedirectOrContent::Content(
@@ -2687,6 +2928,143 @@ pub(crate) async fn create_post(
             .await?,
         )
     })
+}
+
+async fn copy_event_configuration(
+    transaction: &mut Transaction<'_, Postgres>,
+    series: Series,
+    event: &str,
+    source_series: &str,
+    source_event: &str,
+) -> Result<(), sqlx::Error> {
+    // These rows describe the event itself; participant and race records stay behind.
+    for statement in [
+        "INSERT INTO event_descriptions (series, event, content) SELECT $1, $2, content FROM event_descriptions WHERE series = $3 AND event = $4",
+        "INSERT INTO event_round_configs (series, event, round, restream_consent_required, scheduling_deadline) SELECT $1, $2, round, restream_consent_required, NULL FROM event_round_configs WHERE series = $3 AND event = $4",
+        "INSERT INTO phase_round_options (series, event, phase, round, display_fr) SELECT $1, $2, phase, round, display_fr FROM phase_round_options WHERE series = $3 AND event = $4",
+        "INSERT INTO startgg_phase_round_mappings (series, event, original_phase, original_round, mapped_phase, mapped_round) SELECT $1, $2, original_phase, original_round, mapped_phase, mapped_round FROM startgg_phase_round_mappings WHERE series = $3 AND event = $4",
+        "INSERT INTO startgg_pool_name_mappings (series, event, original_identifier, mapped_name) SELECT $1, $2, original_identifier, mapped_name FROM startgg_pool_name_mappings WHERE series = $3 AND event = $4",
+        "INSERT INTO event_restreamer_discord_roles (series, event, language, discord_role_id) SELECT $1, $2, language, discord_role_id FROM event_restreamer_discord_roles WHERE series = $3 AND event = $4",
+        "INSERT INTO organizers (series, event, organizer) SELECT $1, $2, organizer FROM organizers WHERE series = $3 AND event = $4",
+        "INSERT INTO event_volunteer_managers (series, event, user_id) SELECT $1, $2, user_id FROM event_volunteer_managers WHERE series = $3 AND event = $4",
+        "INSERT INTO restreamers (series, event, restreamer, language) SELECT $1, $2, restreamer, language FROM restreamers WHERE series = $3 AND event = $4",
+        "INSERT INTO role_bindings (series, event, role_type_id, min_count, max_count, discord_role_id, game_id, auto_approve, language, custom_pool) SELECT $1, $2, role_type_id, min_count, max_count, discord_role_id, NULL, auto_approve, language, custom_pool FROM role_bindings WHERE series = $3 AND event = $4 AND game_id IS NULL",
+    ] {
+        sqlx::query(statement)
+            .bind(series.slug())
+            .bind(event)
+            .bind(source_series)
+            .bind(source_event)
+            .execute(&mut **transaction)
+            .await?;
+    }
+
+    // Game-level role bindings retain their IDs; event-level bindings get new IDs.
+    for table in [
+        "event_disabled_role_bindings",
+        "event_discord_role_overrides",
+    ] {
+        let statement = format!(
+            "INSERT INTO {table} (series, event, role_binding_id{}) \
+             SELECT $1, $2, CASE WHEN source_binding.game_id IS NULL THEN new_binding.id ELSE source_binding.id END{} \
+             FROM {table} source_row \
+             JOIN role_bindings source_binding ON source_binding.id = source_row.role_binding_id \
+             LEFT JOIN role_bindings new_binding ON source_binding.game_id IS NULL \
+                AND new_binding.series = $1 AND new_binding.event = $2 \
+                AND new_binding.role_type_id = source_binding.role_type_id \
+                AND new_binding.language = source_binding.language \
+             WHERE source_row.series = $3 AND source_row.event = $4",
+            if table == "event_discord_role_overrides" {
+                ", discord_role_id"
+            } else {
+                ""
+            },
+            if table == "event_discord_role_overrides" {
+                ", source_row.discord_role_id"
+            } else {
+                ""
+            },
+        );
+        sqlx::query(&statement)
+            .bind(series.slug())
+            .bind(event)
+            .bind(source_series)
+            .bind(source_event)
+            .execute(&mut **transaction)
+            .await?;
+    }
+
+    let pooled = sqlx::query(
+        r#"INSERT INTO pooled_qualifier_configs (
+            series, event, required_mode_count, pool_seed_count, live_races_per_mode,
+            async_run_limit, live_entry_close_lead, retry_limit, allocation_spread,
+            par_finishers, score_scale, score_offset, score_minimum, score_maximum,
+            requests_paused)
+           SELECT $1, $2, required_mode_count, pool_seed_count, live_races_per_mode,
+            async_run_limit, live_entry_close_lead, retry_limit, allocation_spread,
+            par_finishers, score_scale, score_offset, score_minimum, score_maximum, TRUE
+           FROM pooled_qualifier_configs WHERE series = $3 AND event = $4
+             AND EXISTS (SELECT 1 FROM events WHERE series = $1 AND event = $2 AND qualifier_mode = 'pooled_by_mode')"#,
+    )
+    .bind(series.slug()).bind(event).bind(source_series).bind(source_event)
+    .execute(&mut **transaction).await?;
+    if pooled.rows_affected() != 0 {
+        let modes: Vec<(i16, String, String, serde_json::Value, String, String, bool)> =
+            sqlx::query_as(
+                "SELECT position, display_name, seed_gen_type, seed_config, generator_profile, settings_fingerprint, enabled FROM qualifier_modes WHERE series = $1 AND event = $2 ORDER BY position",
+            )
+            .bind(source_series).bind(source_event)
+            .fetch_all(&mut **transaction).await?;
+        for (position, name, generator, config, profile, fingerprint, enabled) in modes {
+            sqlx::query(
+                "INSERT INTO qualifier_modes (series, event, position, slug, display_name, seed_gen_type, seed_config, generator_profile, settings_fingerprint, enabled) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",
+            )
+            .bind(series.slug()).bind(event).bind(position)
+            .bind(format!("{}-{position}", super::qualifiers::pooled_mode_slug(series, event, &name)))
+            .bind(name).bind(generator).bind(config).bind(profile).bind(fingerprint).bind(enabled)
+            .execute(&mut **transaction).await?;
+        }
+    }
+
+    let source_series: Series = source_series
+        .parse()
+        .map_err(|()| sqlx::Error::Protocol("Unknown source series".into()))?;
+    for mut schedule in WeeklySchedule::for_event(transaction, source_series, source_event).await? {
+        schedule.id = Id::new(transaction).await?;
+        schedule.series = series;
+        schedule.event = event.to_owned();
+        schedule.active = false;
+        schedule.save(transaction).await?;
+    }
+
+    let workflow_ids: Vec<i32> = sqlx::query_scalar(
+        "SELECT id FROM volunteer_ping_workflows WHERE series = $1 AND event = $2 ORDER BY id",
+    )
+    .bind(source_series.slug())
+    .bind(source_event)
+    .fetch_all(&mut **transaction)
+    .await?;
+    for source_id in workflow_ids {
+        let target_id: i32 = sqlx::query_scalar(
+            r#"INSERT INTO volunteer_ping_workflows
+                (series, event, language, discord_ping_channel, delete_after_race,
+                 workflow_type, ping_interval, schedule_time, schedule_day_of_week)
+               SELECT $1, $2, language, discord_ping_channel, delete_after_race,
+                      workflow_type, ping_interval, schedule_time, schedule_day_of_week
+               FROM volunteer_ping_workflows WHERE id = $3 RETURNING id"#,
+        )
+        .bind(series.slug())
+        .bind(event)
+        .bind(source_id)
+        .fetch_one(&mut **transaction)
+        .await?;
+        sqlx::query(
+            "INSERT INTO volunteer_ping_lead_times (workflow_id, lead_time_hours) SELECT $1, lead_time_hours FROM volunteer_ping_lead_times WHERE workflow_id = $2",
+        )
+        .bind(target_id).bind(source_id)
+        .execute(&mut **transaction).await?;
+    }
+    Ok(())
 }
 
 async fn mirror_twwr_permalink(
@@ -2743,6 +3121,63 @@ async fn save_score_config(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn event_copy_source_must_be_in_this_games_dropdown() {
+        let sources = vec![("alttprmain".into(), "2026".into(), "Tournament".into())];
+        assert_eq!(
+            selected_create_source(&sources, Some("alttprmain/2026")),
+            Some(("alttprmain".into(), "2026".into()))
+        );
+        assert_eq!(selected_create_source(&sources, Some("ootr/2026")), None);
+        assert_eq!(selected_create_source(&sources, Some("alttprmain/2025")), None);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires HTH_TEST_DATABASE_URL pointing to a migrated production-copy *_test database"]
+    async fn database_event_copy_preserves_pooled_configuration() {
+        let pool = event::configuration::test_pool().await;
+        let mut transaction = pool.begin().await.unwrap();
+        let source_series: String = sqlx::query_scalar(
+            "SELECT e.series FROM events e JOIN game_series gs ON gs.series = e.series LIMIT 1",
+        )
+        .fetch_one(&mut *transaction).await.unwrap();
+        let series: Series = source_series.parse().unwrap();
+        let game = Game::from_series(&mut transaction, series).await.unwrap().unwrap();
+        let source_event = format!("c{:016x}", rand::random::<u64>());
+        let target_event = format!("c{:016x}", rand::random::<u64>());
+        for (slug, name) in [(&source_event, "Source"), (&target_event, "Target")] {
+            sqlx::query(
+                "INSERT INTO events (series, event, display_name, team_config, qualifier_mode) VALUES ($1,$2,$3,'solo','pooled_by_mode')",
+            )
+            .bind(&source_series).bind(slug).bind(name)
+            .execute(&mut *transaction).await.unwrap();
+        }
+        sqlx::query("INSERT INTO event_descriptions (series, event, content) VALUES ($1,$2,'Copied rules')")
+            .bind(&source_series).bind(&source_event)
+            .execute(&mut *transaction).await.unwrap();
+        sqlx::query("INSERT INTO pooled_qualifier_configs (series, event, required_mode_count, requests_paused) VALUES ($1,$2,4,FALSE)")
+            .bind(&source_series).bind(&source_event)
+            .execute(&mut *transaction).await.unwrap();
+        sqlx::query("INSERT INTO qualifier_modes (series,event,position,slug,display_name,seed_gen_type,seed_config,generator_profile,settings_fingerprint) VALUES ($1,$2,1,$3,'Mode A','ootr','{}'::jsonb,'default','ootr:default:{}')")
+            .bind(&source_series).bind(&source_event).bind(format!("{source_series}-{source_event}-mode-a"))
+            .execute(&mut *transaction).await.unwrap();
+
+        let sources = create_sources(&mut transaction, &game).await.unwrap();
+        assert!(selected_create_source(&sources, Some(&format!("{source_series}/{source_event}"))).is_some());
+        copy_event_configuration(&mut transaction, series, &target_event, &source_series, &source_event).await.unwrap();
+
+        let description: String = sqlx::query_scalar("SELECT content FROM event_descriptions WHERE series=$1 AND event=$2")
+            .bind(&source_series).bind(&target_event).fetch_one(&mut *transaction).await.unwrap();
+        assert_eq!(description, "Copied rules");
+        let (required, paused): (i16, bool) = sqlx::query_as("SELECT required_mode_count, requests_paused FROM pooled_qualifier_configs WHERE series=$1 AND event=$2")
+            .bind(&source_series).bind(&target_event).fetch_one(&mut *transaction).await.unwrap();
+        assert_eq!((required, paused), (4, true));
+        let mode_count: i64 = sqlx::query_scalar("SELECT count(*) FROM qualifier_modes WHERE series=$1 AND event=$2")
+            .bind(&source_series).bind(&target_event).fetch_one(&mut *transaction).await.unwrap();
+        assert_eq!(mode_count, 1);
+        transaction.rollback().await.unwrap();
+    }
 
     #[test]
     fn named_baseline_practice_and_help_render_safely() {

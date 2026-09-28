@@ -867,7 +867,7 @@ pub(crate) async fn post_pooled_config(
     )))
 }
 
-fn pooled_mode_slug(series: Series, event: &str, name: &str) -> String {
+pub(super) fn pooled_mode_slug(series: Series, event: &str, name: &str) -> String {
     format!("{}-{event}-{name}", series.slug())
         .to_lowercase()
         .split(|ch: char| !ch.is_ascii_alphanumeric())
