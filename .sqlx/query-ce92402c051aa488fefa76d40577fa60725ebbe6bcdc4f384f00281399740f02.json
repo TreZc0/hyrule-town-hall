@@ -1,0 +1,51 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT language AS \"language: Language\", workflow_type AS \"workflow_type: crate::volunteer_pings::PingWorkflowTypeDb\"\n               FROM volunteer_ping_workflows WHERE id = $1 AND game_id = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "language: Language",
+        "type_info": {
+          "Custom": {
+            "name": "language",
+            "kind": {
+              "Enum": [
+                "en",
+                "fr",
+                "de",
+                "pt"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "workflow_type: crate::volunteer_pings::PingWorkflowTypeDb",
+        "type_info": {
+          "Custom": {
+            "name": "ping_workflow_type",
+            "kind": {
+              "Enum": [
+                "scheduled",
+                "per_race"
+              ]
+            }
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "ce92402c051aa488fefa76d40577fa60725ebbe6bcdc4f384f00281399740f02"
+}

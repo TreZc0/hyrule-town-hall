@@ -3046,10 +3046,21 @@ async fn copy_event_configuration(
             r#"INSERT INTO volunteer_ping_workflows
                 (series, event, language, discord_ping_channel, delete_after_race,
                  workflow_type, ping_interval, schedule_time, schedule_day_of_week,
-                 schedule_timezone, cutoff_hours)
+                 schedule_timezone, cutoff_hours, role_binding_ids)
                SELECT $1, $2, language, discord_ping_channel, delete_after_race,
                       workflow_type, ping_interval, schedule_time, schedule_day_of_week,
-                      schedule_timezone, cutoff_hours
+                      schedule_timezone, cutoff_hours,
+                      CASE WHEN role_binding_ids IS NULL THEN NULL ELSE (
+                          SELECT COALESCE(jsonb_agg(
+                              CASE WHEN source_binding.game_id IS NULL THEN new_binding.id ELSE source_binding.id END
+                          ) FILTER (WHERE source_binding.game_id IS NOT NULL OR new_binding.id IS NOT NULL), '[]'::jsonb)
+                          FROM jsonb_array_elements_text(role_binding_ids) selected(id)
+                          JOIN role_bindings source_binding ON source_binding.id = selected.id::bigint
+                          LEFT JOIN role_bindings new_binding ON source_binding.game_id IS NULL
+                              AND new_binding.series = $1 AND new_binding.event = $2
+                              AND new_binding.role_type_id = source_binding.role_type_id
+                              AND new_binding.language = source_binding.language
+                      ) END
                FROM volunteer_ping_workflows WHERE id = $3 RETURNING id"#,
         )
         .bind(series.slug())

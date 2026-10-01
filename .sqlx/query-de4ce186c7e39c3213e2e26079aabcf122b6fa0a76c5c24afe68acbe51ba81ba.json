@@ -1,0 +1,52 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT language AS \"language: Language\", workflow_type AS \"workflow_type: crate::volunteer_pings::PingWorkflowTypeDb\"\n               FROM volunteer_ping_workflows WHERE id = $1 AND series = $2 AND event = $3",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "language: Language",
+        "type_info": {
+          "Custom": {
+            "name": "language",
+            "kind": {
+              "Enum": [
+                "en",
+                "fr",
+                "de",
+                "pt"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "workflow_type: crate::volunteer_pings::PingWorkflowTypeDb",
+        "type_info": {
+          "Custom": {
+            "name": "ping_workflow_type",
+            "kind": {
+              "Enum": [
+                "scheduled",
+                "per_race"
+              ]
+            }
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "de4ce186c7e39c3213e2e26079aabcf122b6fa0a76c5c24afe68acbe51ba81ba"
+}

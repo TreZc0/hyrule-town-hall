@@ -1375,6 +1375,10 @@ pub(crate) async fn delete_restream_channel(
 
 #[derive(FromForm, CsrfForm)]
 pub(crate) struct AddGamePingWorkflowForm {
+    #[field(default = "all".to_owned())]
+    role_selection: String,
+    #[field(default = Vec::new())]
+    role_binding_ids: Vec<Id<RoleBindings>>,
     #[field(default = String::new())]
     csrf: String,
     language: Language,
@@ -1445,7 +1449,26 @@ pub(crate) async fn add_game_ping_workflow(
             value.discord_ping_channel.parse::<i64>().ok()
         };
 
-        if is_scheduled {
+        let role_choices =
+            event::roles::GameRoleBinding::for_game(&mut transaction, game.id)
+                .await
+                .map_err(Error::from)?
+                .into_iter()
+                .map(|binding| crate::volunteer_pings::RoleChoice {
+                    id: binding.id,
+                    name: binding.role_type_name,
+                    language: binding.language,
+                })
+                .collect::<Vec<_>>();
+        let role_selection = crate::volunteer_pings::RoleSelection::parse(
+            &value.role_selection,
+            &value.role_binding_ids,
+            &role_choices,
+            value.language,
+        )
+        .map_err(|_| StatusOrError::Status(Status::BadRequest))?;
+
+        let workflow_id = if is_scheduled {
             let settings = crate::volunteer_pings::ScheduledSettings::parse(
                 &value.ping_interval,
                 &value.schedule_time,
@@ -1455,11 +1478,11 @@ pub(crate) async fn add_game_ping_workflow(
             )
             .map_err(|_| StatusOrError::Status(Status::BadRequest))?;
 
-            sqlx::query_unchecked!(
+            sqlx::query_scalar_unchecked!(
                 r#"INSERT INTO volunteer_ping_workflows
                     (game_id, language, discord_ping_channel, delete_after_race, workflow_type, ping_interval, schedule_time, schedule_day_of_week,
                      schedule_timezone, cutoff_hours)
-                VALUES ($1, $2, $3, $4, 'scheduled', $5::ping_interval, $6, $7, $8, $9)"#,
+                VALUES ($1, $2, $3, $4, 'scheduled', $5::ping_interval, $6, $7, $8, $9) RETURNING id"#,
                 game.id,
                 value.language as _,
                 discord_ping_channel,
@@ -1470,9 +1493,9 @@ pub(crate) async fn add_game_ping_workflow(
                 settings.timezone.name(),
                 settings.cutoff_hours,
             )
-            .execute(&mut *transaction)
+            .fetch_one(&mut *transaction)
             .await
-            .map_err(Error::from)?;
+            .map_err(Error::from)?
         } else {
             let workflow_id = sqlx::query_scalar!(
                 r#"INSERT INTO volunteer_ping_workflows
@@ -1505,7 +1528,13 @@ pub(crate) async fn add_game_ping_workflow(
                     }
                 }
             }
-        }
+            workflow_id
+        };
+
+        role_selection
+            .save(&mut transaction, workflow_id)
+            .await
+            .map_err(Error::from)?;
 
         transaction.commit().await.map_err(Error::from)?;
     }
@@ -1578,6 +1607,10 @@ pub(crate) async fn delete_game_ping_workflow(
 
 #[derive(FromForm, CsrfForm)]
 pub(crate) struct EditGamePingWorkflowForm {
+    #[field(default = "all".to_owned())]
+    role_selection: String,
+    #[field(default = Vec::new())]
+    role_binding_ids: Vec<Id<RoleBindings>>,
     #[field(default = String::new())]
     csrf: String,
     #[field(default = String::new())]
@@ -1637,7 +1670,7 @@ pub(crate) async fn edit_game_ping_workflow(
         };
 
         let wf = sqlx::query!(
-            r#"SELECT workflow_type AS "workflow_type: crate::volunteer_pings::PingWorkflowTypeDb"
+            r#"SELECT language AS "language: Language", workflow_type AS "workflow_type: crate::volunteer_pings::PingWorkflowTypeDb"
                FROM volunteer_ping_workflows WHERE id = $1 AND game_id = $2"#,
             workflow_id,
             game.id,
@@ -1647,6 +1680,24 @@ pub(crate) async fn edit_game_ping_workflow(
         .map_err(Error::from)?;
 
         if let Some(wf) = wf {
+            let role_choices =
+                event::roles::GameRoleBinding::for_game(&mut transaction, game.id)
+                    .await
+                    .map_err(Error::from)?
+                    .into_iter()
+                    .map(|binding| crate::volunteer_pings::RoleChoice {
+                        id: binding.id,
+                        name: binding.role_type_name,
+                        language: binding.language,
+                    })
+                    .collect::<Vec<_>>();
+            let role_selection = crate::volunteer_pings::RoleSelection::parse(
+                &value.role_selection,
+                &value.role_binding_ids,
+                &role_choices,
+                wf.language,
+            )
+            .map_err(|_| StatusOrError::Status(Status::BadRequest))?;
             match wf.workflow_type {
                 crate::volunteer_pings::PingWorkflowTypeDb::Scheduled => {
                     let settings = crate::volunteer_pings::ScheduledSettings::parse(
@@ -1718,8 +1769,16 @@ pub(crate) async fn edit_game_ping_workflow(
                     }
                 }
             }
+            role_selection
+                .save(&mut transaction, workflow_id)
+                .await
+                .map_err(Error::from)?;
             transaction.commit().await.map_err(Error::from)?;
+        } else {
+            return Err(StatusOrError::Status(Status::NotFound));
         }
+    } else {
+        return Err(StatusOrError::Status(Status::BadRequest));
     }
 
     Ok(rocket::http::Status::Ok)

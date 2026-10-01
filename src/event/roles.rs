@@ -1240,6 +1240,15 @@ async fn roles_page(
                 );
             let base_url = format!("/event/{}/{}/roles", data.series.slug(), &data.event);
 
+            let ping_role_choices = effective_role_bindings
+                .iter()
+                .map(|binding| crate::volunteer_pings::RoleChoice {
+                    id: binding.id,
+                    name: binding.role_type_name.clone(),
+                    language: binding.language,
+                })
+                .collect::<Vec<_>>();
+            let mut ping_role_selections = std::collections::HashMap::new();
             // Fetch event-level ping workflows for display
             let event_ping_workflows = sqlx::query!(
                 r#"SELECT
@@ -1266,6 +1275,10 @@ async fn roles_page(
             let mut ping_workflow_lead_times: std::collections::HashMap<i32, Vec<i32>> =
                 std::collections::HashMap::new();
             for wf in &event_ping_workflows {
+                ping_role_selections.insert(
+                    wf.id,
+                    crate::volunteer_pings::RoleSelection::load(&mut transaction, wf.id).await?,
+                );
                 if matches!(
                     wf.workflow_type,
                     crate::volunteer_pings::PingWorkflowTypeDb::PerRace
@@ -1306,6 +1319,11 @@ async fn roles_page(
                     let mut lt_map: std::collections::HashMap<i32, Vec<i32>> =
                         std::collections::HashMap::new();
                     for wf in &wfs {
+                        ping_role_selections.insert(
+                            wf.id,
+                            crate::volunteer_pings::RoleSelection::load(&mut transaction, wf.id)
+                                .await?,
+                        );
                         if matches!(
                             wf.workflow_type,
                             crate::volunteer_pings::PingWorkflowTypeDb::PerRace
@@ -1367,6 +1385,7 @@ async fn roles_page(
                                 th : "Language";
                                 th : "Type";
                                 th : "Details";
+                                th : "Roles";
                                 th : "Ping Channel";
                                 th : "Delete After Race";
                                 th : "Actions";
@@ -1441,6 +1460,13 @@ async fn roles_page(
                                             }
                                         }
                                     }
+                                    td(class = "wf-roles") {
+                                        @let selection = &ping_role_selections[&wf.id];
+                                        span(class = "wf-role-summary") : selection.label(&ping_role_choices, wf.language);
+                                        div(class = "wf-role-editor", style = "display:none") {
+                                            : selection.fields(&ping_role_choices, Some(wf.language), "");
+                                        }
+                                    }
                                     td(class = "wf-channel", data_value = wf_channel_val) {
                                         @if let Some(chan) = wf.discord_ping_channel {
                                             : chan.to_string();
@@ -1484,6 +1510,7 @@ async fn roles_page(
                                     th : "Language";
                                     th : "Type";
                                     th : "Details";
+                                    th : "Roles";
                                     th : "Ping Channel";
                                     th : "Delete After Race";
                                 }
@@ -1530,6 +1557,7 @@ async fn roles_page(
                                                 }
                                             }
                                         }
+                                        td : ping_role_selections[&wf.id].label(&ping_role_choices, wf.language);
                                         td {
                                             @if let Some(chan) = wf.discord_ping_channel {
                                                 : chan.to_string();
@@ -1571,6 +1599,7 @@ async fn roles_page(
                         }
                     });
                     : crate::volunteer_pings::scheduled_fields("pw");
+                    : crate::volunteer_pings::RoleSelection::default().fields(&ping_role_choices, None, "pw_language");
                     : form_field("discord_ping_channel", &mut ping_errors, html! {
                         label(for = "pw_channel") : "Discord ping channel ID (optional, falls back to volunteer info channel):";
                         input(type = "text", name = "discord_ping_channel", id = "pw_channel", placeholder = "e.g. 123456789012345678");
@@ -6443,6 +6472,10 @@ pub(crate) async fn trigger_volunteer_requests(
 
 #[derive(FromForm, CsrfForm)]
 pub(crate) struct AddPingWorkflowForm {
+    #[field(default = "all".to_owned())]
+    role_selection: String,
+    #[field(default = Vec::new())]
+    role_binding_ids: Vec<Id<RoleBindings>>,
     #[field(default = String::new())]
     csrf: String,
     language: Language,
@@ -6500,7 +6533,24 @@ pub(crate) async fn add_ping_workflow(
             value.discord_ping_channel.parse::<i64>().ok()
         };
 
-        if is_scheduled {
+        let role_choices = EffectiveRoleBinding::for_event(&mut transaction, series, event)
+            .await?
+            .into_iter()
+            .map(|binding| crate::volunteer_pings::RoleChoice {
+                id: binding.id,
+                name: binding.role_type_name,
+                language: binding.language,
+            })
+            .collect::<Vec<_>>();
+        let role_selection = crate::volunteer_pings::RoleSelection::parse(
+            &value.role_selection,
+            &value.role_binding_ids,
+            &role_choices,
+            value.language,
+        )
+        .map_err(|_| StatusOrError::Status(Status::BadRequest))?;
+
+        let workflow_id = if is_scheduled {
             let settings = crate::volunteer_pings::ScheduledSettings::parse(
                 &value.ping_interval,
                 &value.schedule_time,
@@ -6510,11 +6560,11 @@ pub(crate) async fn add_ping_workflow(
             )
             .map_err(|_| StatusOrError::Status(Status::BadRequest))?;
 
-            sqlx::query_unchecked!(
+            sqlx::query_scalar_unchecked!(
                 r#"INSERT INTO volunteer_ping_workflows
                     (series, event, language, discord_ping_channel, delete_after_race, workflow_type, ping_interval, schedule_time, schedule_day_of_week,
                      schedule_timezone, cutoff_hours)
-                VALUES ($1, $2, $3, $4, $5, 'scheduled', $6::ping_interval, $7, $8, $9, $10)"#,
+                VALUES ($1, $2, $3, $4, $5, 'scheduled', $6::ping_interval, $7, $8, $9, $10) RETURNING id"#,
                 series.slug(),
                 event,
                 value.language as _,
@@ -6526,8 +6576,8 @@ pub(crate) async fn add_ping_workflow(
                 settings.timezone.name(),
                 settings.cutoff_hours,
             )
-            .execute(&mut *transaction)
-            .await?;
+            .fetch_one(&mut *transaction)
+            .await?
         } else {
             let workflow_id = sqlx::query_scalar!(
                 r#"INSERT INTO volunteer_ping_workflows
@@ -6559,7 +6609,10 @@ pub(crate) async fn add_ping_workflow(
                     }
                 }
             }
-        }
+            workflow_id
+        };
+
+        role_selection.save(&mut transaction, workflow_id).await?;
 
         transaction.commit().await?;
     }
@@ -6615,6 +6668,10 @@ pub(crate) async fn delete_ping_workflow(
 
 #[derive(FromForm, CsrfForm)]
 pub(crate) struct EditPingWorkflowForm {
+    #[field(default = "all".to_owned())]
+    role_selection: String,
+    #[field(default = Vec::new())]
+    role_binding_ids: Vec<Id<RoleBindings>>,
     #[field(default = String::new())]
     csrf: String,
     #[field(default = String::new())]
@@ -6671,7 +6728,7 @@ pub(crate) async fn edit_ping_workflow(
 
         // Look up workflow type
         let wf = sqlx::query!(
-            r#"SELECT workflow_type AS "workflow_type: crate::volunteer_pings::PingWorkflowTypeDb"
+            r#"SELECT language AS "language: Language", workflow_type AS "workflow_type: crate::volunteer_pings::PingWorkflowTypeDb"
                FROM volunteer_ping_workflows WHERE id = $1 AND series = $2 AND event = $3"#,
             workflow_id,
             series.slug(),
@@ -6681,6 +6738,22 @@ pub(crate) async fn edit_ping_workflow(
         .await?;
 
         if let Some(wf) = wf {
+            let role_choices = EffectiveRoleBinding::for_event(&mut transaction, series, event)
+                .await?
+                .into_iter()
+                .map(|binding| crate::volunteer_pings::RoleChoice {
+                    id: binding.id,
+                    name: binding.role_type_name,
+                    language: binding.language,
+                })
+                .collect::<Vec<_>>();
+            let role_selection = crate::volunteer_pings::RoleSelection::parse(
+                &value.role_selection,
+                &value.role_binding_ids,
+                &role_choices,
+                wf.language,
+            )
+            .map_err(|_| StatusOrError::Status(Status::BadRequest))?;
             match wf.workflow_type {
                 crate::volunteer_pings::PingWorkflowTypeDb::Scheduled => {
                     let settings = crate::volunteer_pings::ScheduledSettings::parse(
@@ -6749,8 +6822,13 @@ pub(crate) async fn edit_ping_workflow(
                     }
                 }
             }
+            role_selection.save(&mut transaction, workflow_id).await?;
             transaction.commit().await?;
+        } else {
+            return Err(StatusOrError::Status(Status::NotFound));
         }
+    } else {
+        return Err(StatusOrError::Status(Status::BadRequest));
     }
 
     Ok(rocket::http::Status::Ok)
