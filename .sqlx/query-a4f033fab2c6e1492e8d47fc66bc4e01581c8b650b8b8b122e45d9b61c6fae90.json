@@ -1,0 +1,31 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE volunteer_ping_workflows\n                           SET discord_ping_channel = $1, delete_after_race = $2,\n                               ping_interval = $3::ping_interval, schedule_time = $4,\n                               schedule_day_of_week = $5, schedule_timezone = $6,\n                               cutoff_hours = $7,\n                               updated_at = NOW()\n                           WHERE id = $8",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Bool",
+        {
+          "Custom": {
+            "kind": {
+              "Enum": [
+                "daily",
+                "weekly"
+              ]
+            },
+            "name": "ping_interval"
+          }
+        },
+        "Time",
+        "Int2",
+        "Text",
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a4f033fab2c6e1492e8d47fc66bc4e01581c8b650b8b8b122e45d9b61c6fae90"
+}

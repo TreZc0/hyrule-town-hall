@@ -3045,9 +3045,11 @@ async fn copy_event_configuration(
         let target_id: i32 = sqlx::query_scalar(
             r#"INSERT INTO volunteer_ping_workflows
                 (series, event, language, discord_ping_channel, delete_after_race,
-                 workflow_type, ping_interval, schedule_time, schedule_day_of_week)
+                 workflow_type, ping_interval, schedule_time, schedule_day_of_week,
+                 schedule_timezone, cutoff_hours)
                SELECT $1, $2, language, discord_ping_channel, delete_after_race,
-                      workflow_type, ping_interval, schedule_time, schedule_day_of_week
+                      workflow_type, ping_interval, schedule_time, schedule_day_of_week,
+                      schedule_timezone, cutoff_hours
                FROM volunteer_ping_workflows WHERE id = $3 RETURNING id"#,
         )
         .bind(series.slug())

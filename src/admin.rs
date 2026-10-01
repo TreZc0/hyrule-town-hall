@@ -1385,6 +1385,10 @@ pub(crate) struct AddGamePingWorkflowForm {
     schedule_time: String,
     #[field(default = String::new())]
     schedule_day_of_week: String,
+    #[field(default = "UTC".to_owned())]
+    schedule_timezone: String,
+    #[field(default = String::new())]
+    cutoff_hours: String,
     #[field(default = String::new())]
     discord_ping_channel: String,
     #[field(default = String::new())]
@@ -1442,33 +1446,29 @@ pub(crate) async fn add_game_ping_workflow(
         };
 
         if is_scheduled {
-            let ping_interval = if value.ping_interval == "weekly" {
-                "weekly"
-            } else {
-                "daily"
-            };
-            let schedule_time_str = if value.schedule_time.is_empty() {
-                "18:00".to_string()
-            } else {
-                value.schedule_time.clone()
-            };
-            let schedule_day: Option<i16> = if value.ping_interval == "weekly" {
-                value.schedule_day_of_week.parse::<i16>().ok()
-            } else {
-                None
-            };
+            let settings = crate::volunteer_pings::ScheduledSettings::parse(
+                &value.ping_interval,
+                &value.schedule_time,
+                &value.schedule_day_of_week,
+                &value.schedule_timezone,
+                &value.cutoff_hours,
+            )
+            .map_err(|_| StatusOrError::Status(Status::BadRequest))?;
 
             sqlx::query_unchecked!(
                 r#"INSERT INTO volunteer_ping_workflows
-                    (game_id, language, discord_ping_channel, delete_after_race, workflow_type, ping_interval, schedule_time, schedule_day_of_week)
-                VALUES ($1, $2, $3, $4, 'scheduled', $5::ping_interval, $6::time, $7)"#,
+                    (game_id, language, discord_ping_channel, delete_after_race, workflow_type, ping_interval, schedule_time, schedule_day_of_week,
+                     schedule_timezone, cutoff_hours)
+                VALUES ($1, $2, $3, $4, 'scheduled', $5::ping_interval, $6, $7, $8, $9)"#,
                 game.id,
                 value.language as _,
                 discord_ping_channel,
                 value.delete_after_race,
-                ping_interval,
-                schedule_time_str,
-                schedule_day,
+                settings.interval_name(),
+                settings.time,
+                settings.day,
+                settings.timezone.name(),
+                settings.cutoff_hours,
             )
             .execute(&mut *transaction)
             .await
@@ -1590,6 +1590,10 @@ pub(crate) struct EditGamePingWorkflowForm {
     schedule_time: String,
     #[field(default = String::new())]
     schedule_day_of_week: String,
+    #[field(default = "UTC".to_owned())]
+    schedule_timezone: String,
+    #[field(default = String::new())]
+    cutoff_hours: String,
     #[field(default = String::new())]
     lead_times: String,
 }
@@ -1645,32 +1649,30 @@ pub(crate) async fn edit_game_ping_workflow(
         if let Some(wf) = wf {
             match wf.workflow_type {
                 crate::volunteer_pings::PingWorkflowTypeDb::Scheduled => {
-                    let ping_interval = if value.ping_interval == "weekly" {
-                        "weekly"
-                    } else {
-                        "daily"
-                    };
-                    let schedule_time_str = if value.schedule_time.is_empty() {
-                        "18:00".to_string()
-                    } else {
-                        value.schedule_time.clone()
-                    };
-                    let schedule_day: Option<i16> = if value.ping_interval == "weekly" {
-                        value.schedule_day_of_week.parse::<i16>().ok()
-                    } else {
-                        None
-                    };
+                    let settings = crate::volunteer_pings::ScheduledSettings::parse(
+                        &value.ping_interval,
+                        &value.schedule_time,
+                        &value.schedule_day_of_week,
+                        &value.schedule_timezone,
+                        &value.cutoff_hours,
+                    )
+                    .map_err(|_| StatusOrError::Status(Status::BadRequest))?;
+
                     sqlx::query_unchecked!(
                         r#"UPDATE volunteer_ping_workflows
                            SET discord_ping_channel = $1, delete_after_race = $2,
-                               ping_interval = $3::ping_interval, schedule_time = $4::time,
-                               schedule_day_of_week = $5, updated_at = NOW()
-                           WHERE id = $6"#,
+                               ping_interval = $3::ping_interval, schedule_time = $4,
+                               schedule_day_of_week = $5, schedule_timezone = $6,
+                               cutoff_hours = $7,
+                               updated_at = NOW()
+                           WHERE id = $8"#,
                         discord_ping_channel,
                         value.delete_after_race,
-                        ping_interval,
-                        schedule_time_str,
-                        schedule_day,
+                        settings.interval_name(),
+                        settings.time,
+                        settings.day,
+                        settings.timezone.name(),
+                        settings.cutoff_hours,
                         workflow_id,
                     )
                     .execute(&mut *transaction)

@@ -643,7 +643,9 @@ pub(crate) async fn manage_roles(
             w.workflow_type AS "workflow_type: volunteer_pings::PingWorkflowTypeDb",
             w.ping_interval AS "ping_interval: volunteer_pings::PingInterval",
             w.schedule_time,
-            w.schedule_day_of_week
+            w.schedule_day_of_week,
+            w.schedule_timezone,
+            w.cutoff_hours
         FROM volunteer_ping_workflows w
         WHERE w.game_id = $1
         ORDER BY w.id"#,
@@ -952,6 +954,8 @@ pub(crate) async fn manage_roles(
                                 data_interval = wf_interval_str,
                                 data_schedule_time = wf_time_str,
                                 data_schedule_dow = wf_dow_str,
+                                data_schedule_timezone = &wf.schedule_timezone,
+                                data_cutoff_hours = wf.cutoff_hours.map(|h| h.to_string()).unwrap_or_default(),
                                 data_lead_times = wf_lead_times_str,
                                 data_edit_path = wf_edit_path,
                                 data_delete_path = wf_delete_path,
@@ -967,8 +971,10 @@ pub(crate) async fn manage_roles(
                                     @match wf.workflow_type {
                                         volunteer_pings::PingWorkflowTypeDb::Scheduled => {
                                             @if let Some(t) = wf.schedule_time {
-                                                : format!("{} UTC", t.format("%H:%M"));
+                                                : format!("{} {}", t.format("%H:%M"), wf.schedule_timezone);
                                             }
+                                            br;
+                                            : volunteer_pings::cutoff_label(wf.cutoff_hours);
                                             @if let Some(interval) = wf.ping_interval {
                                                 @match interval {
                                                     volunteer_pings::PingInterval::Daily => { : " (daily)"; }
@@ -1046,25 +1052,7 @@ pub(crate) async fn manage_roles(
                         option(value = "per_race") : "Per Race";
                     }
                 });
-                div(id = "gpw-scheduled-fields", data_ping_form_scheduled = "gpw_type") {
-                    : form_field("ping_interval", &mut ping_errors, html! {
-                        label(for = "gpw_interval") : "Interval:";
-                        select(name = "ping_interval", id = "gpw_interval") {
-                            option(value = "daily") : "Daily";
-                            option(value = "weekly") : "Weekly";
-                        }
-                    });
-                    : form_field("schedule_time", &mut ping_errors, html! {
-                        label(for = "gpw_time") : "Schedule time UTC (HH:MM):";
-                        input(type = "time", name = "schedule_time", id = "gpw_time");
-                    });
-                    div(id = "gpw-weekly-field", data_ping_form_weekly = "gpw_interval") {
-                        : form_field("schedule_day_of_week", &mut ping_errors, html! {
-                            label(for = "gpw_dow") : "Day of week (0=Mon..6=Sun):";
-                            input(type = "number", name = "schedule_day_of_week", id = "gpw_dow", min = "0", max = "6", placeholder = "0–6");
-                        });
-                    }
-                }
+                : volunteer_pings::scheduled_fields("gpw");
                 : form_field("discord_ping_channel", &mut ping_errors, html! {
                     label(for = "gpw_channel") : "Discord ping channel ID (optional):";
                     input(type = "text", name = "discord_ping_channel", id = "gpw_channel", placeholder = "e.g. 123456789012345678");

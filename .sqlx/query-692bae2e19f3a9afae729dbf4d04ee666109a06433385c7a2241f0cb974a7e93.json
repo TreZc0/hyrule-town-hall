@@ -1,19 +1,18 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT\n                    w.id,\n                    w.language AS \"language: Language\",\n                    w.discord_ping_channel,\n                    w.delete_after_race,\n                    w.workflow_type AS \"workflow_type: crate::volunteer_pings::PingWorkflowTypeDb\",\n                    w.ping_interval AS \"ping_interval: crate::volunteer_pings::PingInterval\",\n                    w.schedule_time,\n                    w.schedule_day_of_week\n                FROM volunteer_ping_workflows w\n                WHERE w.series = $1 AND w.event = $2\n                ORDER BY w.id",
+  "query": "SELECT\n                            w.id,\n                            w.language AS \"language: Language\",\n                            w.discord_ping_channel,\n                            w.delete_after_race,\n                            w.workflow_type AS \"workflow_type: crate::volunteer_pings::PingWorkflowTypeDb\",\n                            w.ping_interval AS \"ping_interval: crate::volunteer_pings::PingInterval\",\n                            w.schedule_time,\n                            w.schedule_day_of_week,\n                            w.schedule_timezone,\n                            w.cutoff_hours\n                        FROM volunteer_ping_workflows w\n                        WHERE w.game_id = $1\n                        ORDER BY w.id",
   "describe": {
     "columns": [
       {
-        "ordinal": 0,
         "name": "id",
+        "ordinal": 0,
         "type_info": "Int4"
       },
       {
-        "ordinal": 1,
         "name": "language: Language",
+        "ordinal": 1,
         "type_info": {
           "Custom": {
-            "name": "language",
             "kind": {
               "Enum": [
                 "en",
@@ -21,65 +20,75 @@
                 "de",
                 "pt"
               ]
-            }
+            },
+            "name": "language"
           }
         }
       },
       {
-        "ordinal": 2,
         "name": "discord_ping_channel",
+        "ordinal": 2,
         "type_info": "Int8"
       },
       {
-        "ordinal": 3,
         "name": "delete_after_race",
+        "ordinal": 3,
         "type_info": "Bool"
       },
       {
-        "ordinal": 4,
         "name": "workflow_type: crate::volunteer_pings::PingWorkflowTypeDb",
+        "ordinal": 4,
         "type_info": {
           "Custom": {
-            "name": "ping_workflow_type",
             "kind": {
               "Enum": [
                 "scheduled",
                 "per_race"
               ]
-            }
+            },
+            "name": "ping_workflow_type"
           }
         }
       },
       {
-        "ordinal": 5,
         "name": "ping_interval: crate::volunteer_pings::PingInterval",
+        "ordinal": 5,
         "type_info": {
           "Custom": {
-            "name": "ping_interval",
             "kind": {
               "Enum": [
                 "daily",
                 "weekly"
               ]
-            }
+            },
+            "name": "ping_interval"
           }
         }
       },
       {
-        "ordinal": 6,
         "name": "schedule_time",
+        "ordinal": 6,
         "type_info": "Time"
       },
       {
-        "ordinal": 7,
         "name": "schedule_day_of_week",
+        "ordinal": 7,
         "type_info": "Int2"
+      },
+      {
+        "name": "schedule_timezone",
+        "ordinal": 8,
+        "type_info": "Text"
+      },
+      {
+        "name": "cutoff_hours",
+        "ordinal": 9,
+        "type_info": "Int4"
       }
     ],
     "parameters": {
       "Left": [
-        "Text",
-        "Text"
+        "Int4"
       ]
     },
     "nullable": [
@@ -90,8 +99,10 @@
       false,
       true,
       true,
+      true,
+      false,
       true
     ]
   },
-  "hash": "4b304b82e5616ba17c78f3389110e260537836556720fbb124e2c906a70bac7e"
+  "hash": "692bae2e19f3a9afae729dbf4d04ee666109a06433385c7a2241f0cb974a7e93"
 }

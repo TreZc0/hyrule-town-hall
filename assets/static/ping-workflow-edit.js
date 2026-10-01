@@ -1,36 +1,93 @@
 document.addEventListener('DOMContentLoaded', function() {
-    // Auto-wire show/hide for ping workflow add forms.
-    // Divs with data-ping-form-scheduled="<typeSelectId>" are shown only when type = "scheduled".
-    // Divs with data-ping-form-per-race="<typeSelectId>" are shown only when type = "per_race".
-    // Divs with data-ping-form-weekly="<intervalSelectId>" are shown only when interval = "weekly".
+    document.querySelectorAll('[data-ping-timezone]').forEach(function(select) {
+        try {
+            const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+            if (Array.from(select.options).some(option => option.value === timezone)) {
+                select.value = timezone;
+            }
+        } catch (_) { /* Keep UTC if detection is unavailable. */ }
+    });
+
+    function toggleFields(container, visible) {
+        if (!container) return;
+        container.style.display = visible ? '' : 'none';
+        container.querySelectorAll('input, select').forEach(field => { field.disabled = !visible; });
+    }
 
     document.querySelectorAll('[data-ping-form-scheduled]').forEach(function(scheduledDiv) {
         const typeId = scheduledDiv.getAttribute('data-ping-form-scheduled');
         const typeSelect = document.getElementById(typeId);
         if (!typeSelect) return;
-
-        // Find the per-race counterpart driven by the same type select
         const perRaceDiv = document.querySelector(`[data-ping-form-per-race="${typeId}"]`);
-
-        // Find the weekly sub-div inside the scheduled div (if any)
         const weeklyDiv = scheduledDiv.querySelector('[data-ping-form-weekly]');
-        const intervalSelectId = weeklyDiv ? weeklyDiv.getAttribute('data-ping-form-weekly') : null;
-        const intervalSelect = intervalSelectId ? document.getElementById(intervalSelectId) : null;
-
+        const intervalSelect = weeklyDiv && document.getElementById(weeklyDiv.getAttribute('data-ping-form-weekly'));
         function update() {
-            const isScheduled = typeSelect.value === 'scheduled';
-            scheduledDiv.style.display = isScheduled ? '' : 'none';
-            if (perRaceDiv) perRaceDiv.style.display = isScheduled ? 'none' : '';
-            if (weeklyDiv && intervalSelect) {
-                weeklyDiv.style.display = (isScheduled && intervalSelect.value === 'weekly') ? '' : 'none';
-            }
+            const scheduled = typeSelect.value === 'scheduled';
+            toggleFields(scheduledDiv, scheduled);
+            toggleFields(perRaceDiv, !scheduled);
+            toggleFields(weeklyDiv, scheduled && intervalSelect.value === 'weekly');
         }
-
         typeSelect.addEventListener('change', update);
-        if (intervalSelect) intervalSelect.addEventListener('change', update);
+        intervalSelect.addEventListener('change', update);
         update();
     });
 });
+
+function renderScheduledEditor(row, cell) {
+    cell.replaceChildren();
+    function select(name, choices, value) {
+        const field = document.createElement('select');
+        field.name = name;
+        choices.forEach(([key, text]) => field.add(new Option(text, key)));
+        field.value = value;
+        return field;
+    }
+    function input(name, type, value, min, max) {
+        const field = document.createElement('input');
+        field.name = name;
+        field.type = type;
+        field.value = value;
+        field.required = true;
+        if (min !== undefined) field.min = min;
+        if (max !== undefined) field.max = max;
+        return field;
+    }
+    function label(text, field) {
+        const wrapper = document.createElement('label');
+        wrapper.append(text + ' ', field);
+        cell.append(wrapper, document.createElement('br'));
+    }
+    const interval = select('ping_interval', [['daily', 'Daily'], ['weekly', 'Weekly']], row.dataset.interval || 'daily');
+    const time = input('schedule_time', 'time', row.dataset.scheduleTime || '18:00');
+    const timezone = document.querySelector('.ping-timezone-picker').cloneNode(true);
+    timezone.removeAttribute('id');
+    timezone.removeAttribute('data-ping-timezone');
+    timezone.disabled = false;
+    timezone.value = row.dataset.scheduleTimezone || 'UTC';
+    const day = input('schedule_day_of_week', 'number', row.dataset.scheduleDow || '0', 0, 6);
+    const hours = input('cutoff_hours', 'number', row.dataset.cutoffHours || '', 1, 168);
+    hours.required = false;
+    hours.placeholder = 'Uses event request lead time';
+    label('Interval:', interval);
+    label('Ping time:', time);
+    label('Timezone:', timezone);
+    label('Weekday (0=Mon..6=Sun):', day);
+    label('Race window (hours after ping):', hours);
+    function update() {
+        day.disabled = interval.value !== 'weekly';
+        day.parentElement.style.display = day.disabled ? 'none' : '';
+    }
+    interval.addEventListener('change', update);
+    update();
+}
+
+function scheduledWorkflowText(row) {
+    let text = `${row.dataset.scheduleTime} ${row.dataset.scheduleTimezone || 'UTC'} (${row.dataset.interval}`;
+    if (row.dataset.interval === 'weekly') text += `, day ${row.dataset.scheduleDow}`;
+    text += ') — ';
+    if (row.dataset.cutoffHours) return text + `Next ${row.dataset.cutoffHours} hours`;
+    return text + 'Uses event request lead time';
+}
 
 function startEditWorkflow(id) {
     const row = document.querySelector(`tr[data-workflow-id="${id}"]`);
@@ -51,16 +108,7 @@ function startEditWorkflow(id) {
     // Replace details cell based on type
     const detailsCell = row.querySelector('.wf-details');
     if (type === 'scheduled') {
-        const interval = row.getAttribute('data-interval') || 'daily';
-        const scheduleTime = row.getAttribute('data-schedule-time') || '';
-        const scheduleDow = row.getAttribute('data-schedule-dow') || '';
-        detailsCell.innerHTML =
-            `<select name="ping_interval">` +
-            `<option value="daily" ${interval === 'daily' ? 'selected' : ''}>Daily</option>` +
-            `<option value="weekly" ${interval === 'weekly' ? 'selected' : ''}>Weekly</option>` +
-            `</select> ` +
-            `<input type="time" name="schedule_time" value="${scheduleTime}" style="width:8em;"> UTC ` +
-            `<input type="number" name="schedule_day_of_week" value="${scheduleDow}" min="0" max="6" placeholder="0–6 (weekly)" style="width:5em;">`;
+        renderScheduledEditor(row, detailsCell);
     } else {
         const leadTimes = row.getAttribute('data-lead-times') || '';
         detailsCell.innerHTML =
@@ -68,7 +116,6 @@ function startEditWorkflow(id) {
     }
 
     // Replace actions cell
-    const editPath = row.getAttribute('data-edit-path');
     const actionsDiv = row.querySelector('.wf-actions');
     actionsDiv.innerHTML =
         `<button class="button save-btn" onclick="saveEditWorkflow(${id})">Save</button> ` +
@@ -94,15 +141,7 @@ function cancelEditWorkflow(id) {
     // Restore details cell
     const detailsCell = row.querySelector('.wf-details');
     if (type === 'scheduled') {
-        const interval = row.getAttribute('data-interval') || 'daily';
-        const scheduleTime = row.getAttribute('data-schedule-time') || '';
-        const scheduleDow = row.getAttribute('data-schedule-dow') || '';
-        let text = `${scheduleTime} UTC (${interval}`;
-        if (interval === 'weekly' && scheduleDow !== '') {
-            text += `, day ${scheduleDow}`;
-        }
-        text += ')';
-        detailsCell.textContent = text;
+        detailsCell.textContent = scheduledWorkflowText(row);
     } else {
         const leadTimes = row.getAttribute('data-lead-times') || '';
         detailsCell.textContent = leadTimes ? `Lead times: ${leadTimes}h` : 'No lead times configured';
@@ -130,12 +169,12 @@ function saveEditWorkflow(id) {
     formData.append('delete_after_race', deleteInput ? deleteInput.checked : false);
 
     if (type === 'scheduled') {
-        const intervalSelect = row.querySelector('select[name="ping_interval"]');
-        const timeInput = row.querySelector('input[name="schedule_time"]');
-        const dowInput = row.querySelector('input[name="schedule_day_of_week"]');
-        formData.append('ping_interval', intervalSelect ? intervalSelect.value : 'daily');
-        formData.append('schedule_time', timeInput ? timeInput.value : '');
-        formData.append('schedule_day_of_week', dowInput ? dowInput.value : '');
+        for (const name of ['ping_interval', 'schedule_time', 'schedule_timezone', 'schedule_day_of_week',
+            'cutoff_hours']) {
+            const field = row.querySelector(`[name="${name}"]`);
+            if (!field.disabled && !field.reportValidity()) return;
+            formData.append(name, field.disabled ? '' : field.value);
+        }
     } else {
         const ltInput = row.querySelector('input[name="lead_times"]');
         formData.append('lead_times', ltInput ? ltInput.value : '');
@@ -156,6 +195,8 @@ function saveEditWorkflow(id) {
                     row.setAttribute('data-interval', formData.get('ping_interval'));
                     row.setAttribute('data-schedule-time', formData.get('schedule_time'));
                     row.setAttribute('data-schedule-dow', formData.get('schedule_day_of_week'));
+                    row.setAttribute('data-schedule-timezone', formData.get('schedule_timezone'));
+                    row.setAttribute('data-cutoff-hours', formData.get('cutoff_hours'));
                 } else {
                     row.setAttribute('data-lead-times', formData.get('lead_times'));
                 }

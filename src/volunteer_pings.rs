@@ -1,3 +1,7 @@
+mod schedule;
+
+pub(crate) use schedule::{ScheduledSettings, cutoff_label, scheduled_fields};
+
 use {
     crate::{
         cal::{Entrant, Entrants, Race, RaceSchedule},
@@ -21,6 +25,8 @@ const MAX_RACES_PER_SCHEDULED_PING: usize = 5;
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum Error {
+    #[error("Invalid ping timezone: {0}")]
+    InvalidTimezone(String),
     #[error(transparent)]
     Cal(#[from] cal::Error),
     #[error(transparent)]
@@ -48,14 +54,8 @@ pub(crate) enum PingWorkflowTypeDb {
 }
 
 pub(crate) enum PingWorkflowType {
-    Scheduled {
-        interval: PingInterval,
-        schedule_time: NaiveTime,
-        schedule_day_of_week: Option<i16>,
-    },
-    PerRace {
-        lead_times: Vec<i32>,
-    },
+    Scheduled(ScheduledSettings),
+    PerRace { lead_times: Vec<i32> },
 }
 
 #[allow(dead_code)]
@@ -86,7 +86,9 @@ async fn resolve_workflows_for_event(
             w.workflow_type AS "workflow_type: PingWorkflowTypeDb",
             w.ping_interval AS "ping_interval: PingInterval",
             w.schedule_time,
-            w.schedule_day_of_week
+            w.schedule_day_of_week,
+            w.schedule_timezone,
+            w.cutoff_hours
         FROM volunteer_ping_workflows w
         WHERE w.series = $1 AND w.event = $2
         ORDER BY w.id"#,
@@ -105,11 +107,16 @@ async fn resolve_workflows_for_event(
                     let schedule_time = row
                         .schedule_time
                         .unwrap_or_else(|| NaiveTime::from_hms_opt(18, 0, 0).unwrap());
-                    PingWorkflowType::Scheduled {
+                    PingWorkflowType::Scheduled(ScheduledSettings {
                         interval,
-                        schedule_time,
-                        schedule_day_of_week: row.schedule_day_of_week,
-                    }
+                        time: schedule_time,
+                        day: row.schedule_day_of_week,
+                        timezone: row
+                            .schedule_timezone
+                            .parse()
+                            .map_err(|_| Error::InvalidTimezone(row.schedule_timezone.clone()))?,
+                        cutoff_hours: row.cutoff_hours,
+                    })
                 }
                 PingWorkflowTypeDb::PerRace => {
                     let lead_times = sqlx::query_scalar!(
@@ -148,7 +155,9 @@ async fn resolve_workflows_for_event(
                 w.workflow_type AS "workflow_type: PingWorkflowTypeDb",
                 w.ping_interval AS "ping_interval: PingInterval",
                 w.schedule_time,
-                w.schedule_day_of_week
+                w.schedule_day_of_week,
+                w.schedule_timezone,
+                w.cutoff_hours
             FROM volunteer_ping_workflows w
             WHERE w.game_id = $1
             ORDER BY w.id"#,
@@ -165,11 +174,16 @@ async fn resolve_workflows_for_event(
                     let schedule_time = row
                         .schedule_time
                         .unwrap_or_else(|| NaiveTime::from_hms_opt(18, 0, 0).unwrap());
-                    PingWorkflowType::Scheduled {
+                    PingWorkflowType::Scheduled(ScheduledSettings {
                         interval,
-                        schedule_time,
-                        schedule_day_of_week: row.schedule_day_of_week,
-                    }
+                        time: schedule_time,
+                        day: row.schedule_day_of_week,
+                        timezone: row
+                            .schedule_timezone
+                            .parse()
+                            .map_err(|_| Error::InvalidTimezone(row.schedule_timezone.clone()))?,
+                        cutoff_hours: row.cutoff_hours,
+                    })
                 }
                 PingWorkflowTypeDb::PerRace => {
                     let lead_times = sqlx::query_scalar!(
@@ -205,53 +219,6 @@ fn resolve_ping_channel(
         .discord_ping_channel
         .or(event_info_channel)
         .map(|id| ChannelId::new(id as u64))
-}
-
-/// Checks whether a scheduled workflow should fire right now.
-fn scheduled_workflow_should_fire(
-    interval: PingInterval,
-    schedule_time: NaiveTime,
-    schedule_day_of_week: Option<i16>,
-    last_sent_at: Option<DateTime<Utc>>,
-) -> bool {
-    let now = Utc::now();
-    let now_time = now.time();
-
-    // Window: fire if we're within 3 minutes after the scheduled time
-    let window_minutes = 3i64;
-    let target = schedule_time;
-    let target_seconds = target.num_seconds_from_midnight() as i64;
-    let now_seconds = now_time.num_seconds_from_midnight() as i64;
-    let diff_seconds = now_seconds - target_seconds;
-
-    // Must be within [0, window_minutes * 60) seconds past schedule_time
-    if diff_seconds < 0 || diff_seconds >= window_minutes * 60 {
-        return false;
-    }
-
-    // For weekly: also check day of week
-    if interval == PingInterval::Weekly {
-        if let Some(day) = schedule_day_of_week {
-            // 0=Mon..6=Sun, chrono weekday: Mon=0..Sun=6
-            let current_day = now.weekday().num_days_from_monday() as i16;
-            if current_day != day {
-                return false;
-            }
-        }
-    }
-
-    // Dedup: if we already fired within the last [interval] period, skip
-    if let Some(last) = last_sent_at {
-        let min_gap = match interval {
-            PingInterval::Daily => Duration::hours(23),
-            PingInterval::Weekly => Duration::days(6),
-        };
-        if now - last < min_gap {
-            return false;
-        }
-    }
-
-    true
 }
 
 /// Builds a ping message for a set of role IDs needing pings and a list of races.
@@ -369,7 +336,7 @@ fn build_per_race_ping_message(
     CreateMessage::new().content(msg.build())
 }
 
-/// Top-level function called every 10 minutes to send scheduled and per-race pings.
+/// Top-level function called every 3 minutes to send scheduled and per-race pings.
 pub(crate) async fn check_and_send_volunteer_pings(
     pool: &PgPool,
     discord_ctx: &DiscordCtx,
@@ -422,11 +389,7 @@ pub(crate) async fn check_and_send_volunteer_pings(
             );
 
             match &workflow.workflow_type {
-                PingWorkflowType::Scheduled {
-                    interval,
-                    schedule_time,
-                    schedule_day_of_week,
-                } => {
+                PingWorkflowType::Scheduled(settings) => {
                     if let Err(e) = check_scheduled_workflow(
                         pool,
                         discord_ctx,
@@ -437,9 +400,7 @@ pub(crate) async fn check_and_send_volunteer_pings(
                         info_channel,
                         guild_id,
                         lead_time_hours,
-                        *interval,
-                        *schedule_time,
-                        *schedule_day_of_week,
+                        settings,
                         &volunteer_page_url,
                     )
                     .await
@@ -497,9 +458,7 @@ async fn check_scheduled_workflow(
     info_channel: Option<i64>,
     guild_id: Option<i64>,
     lead_time_hours: i32,
-    interval: PingInterval,
-    schedule_time: NaiveTime,
-    schedule_day_of_week: Option<i16>,
+    settings: &ScheduledSettings,
     volunteer_page_url: &str,
 ) -> Result<(), Error> {
     // Check when we last sent a scheduled ping for this workflow
@@ -512,7 +471,8 @@ async fn check_scheduled_workflow(
     .fetch_optional(pool)
     .await?;
 
-    if !scheduled_workflow_should_fire(interval, schedule_time, schedule_day_of_week, last_sent) {
+    let now = Utc::now();
+    if !settings.should_fire(now, last_sent) {
         return Ok(());
     }
 
@@ -521,9 +481,8 @@ async fn check_scheduled_workflow(
         None => return Ok(()),
     };
 
-    // Find races within the lead_time window that need volunteers for this workflow's language
-    let now = Utc::now();
-    let cutoff = now + Duration::hours(lead_time_hours as i64);
+    // Each scheduled workflow defines its own race window.
+    let cutoff = settings.cutoff(now, lead_time_hours);
 
     let race_ids: Vec<i64> = sqlx::query_scalar!(
         r#"SELECT id FROM races

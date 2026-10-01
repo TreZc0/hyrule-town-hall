@@ -393,7 +393,7 @@ pub(crate) async fn get(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>)
                     figcaption : "A pending match signup means interested, not assigned. Organizers and authorized coordinators confirm or decline the final roster.";
                 }
                 h3 : "Finding volunteers automatically";
-                p : "Organizers choose how far before a race HTH posts a volunteer request. The announcement groups upcoming races, shows confirmed and pending coverage, and offers signup buttons. Separate ping workflows can send a daily or weekly digest, or ping per race at chosen lead times. Event-level workflows override game defaults, and ping messages can be removed after the race starts.";
+                p : "Organizers choose how far before a race HTH posts a volunteer request. The announcement groups upcoming races, shows confirmed and pending coverage, and offers signup buttons. Separate ping workflows can send a daily or weekly digest in a chosen timezone, with their own race window in hours after the ping, or ping per race at chosen lead times. Event-level workflows override game defaults, and ping messages can be removed after the race starts.";
                 figure(class = "hth-info-screenshot") {
                     a(href = static_url!("hth-info/real-casboots-volunteer-setup.png"), target = "_blank", rel = "noopener noreferrer") {
                         img(src = static_url!("hth-info/real-casboots-volunteer-setup.png"), alt = "Volunteer Setup page with request lead time and Discord ping workflows", loading = "lazy");
