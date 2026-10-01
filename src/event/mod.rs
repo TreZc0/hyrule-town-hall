@@ -3384,18 +3384,22 @@ pub(crate) async fn resign_post(
                     }
                 }
             }
-            if let Some(organizer_channel) = data.discord_organizer_channel {
-                //TODO don't post this message for unconfirmed (or unqualified?) teams
-                organizer_channel
-                    .say(&*discord_ctx.read().await, msg)
-                    .await?;
-            }
             if !keep_record {
                 sqlx::query!("DELETE FROM teams WHERE id = $1", team.id as _)
                     .execute(&mut *transaction)
                     .await?;
             }
             transaction.commit().await?;
+            if let Some(organizer_channel) = data.discord_organizer_channel {
+                // Notification failures must not prevent a resignation from succeeding.
+                //TODO don't post this message for unconfirmed (or unqualified?) teams
+                if let Err(e) = organizer_channel.say(&*discord_ctx.read().await, msg).await {
+                    log::warn!(
+                        "Failed to post resignation notification for team {} in event {series}/{event} to Discord channel {organizer_channel}: {e:?}",
+                        team.id,
+                    );
+                }
+            }
             RedirectOrContent::Redirect(Redirect::to(uri!(teams::get(series, event))))
         })
     } else {
