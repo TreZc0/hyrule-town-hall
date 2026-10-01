@@ -100,13 +100,12 @@ impl RoleSelection {
         language_field: &str,
     ) -> RawHtml<String> {
         html! {
-            div(class = "ping-role-selection", data_role_language = language_field) {
-                label {
-                    : "Roles to ping: ";
-                    select(name = "role_selection") {
-                        option(value = "all", selected? = self.ids.is_none()) : "All roles in this language";
-                        option(value = "selected", selected? = self.ids.is_some()) : "Selected roles";
-                    }
+            fieldset(class = "ping-role-selection", data_role_language = language_field) {
+                legend : "Roles to ping";
+                p(class = "ping-role-help") : "Give commentators, trackers, or other roles their own ping schedule by choosing specific roles.";
+                select(name = "role_selection", aria_label = "Roles to ping") {
+                    option(value = "all", selected? = self.ids.is_none()) : "All roles in this language";
+                    option(value = "selected", selected? = self.ids.is_some()) : "Choose specific roles…";
                 }
                 div(class = "ping-role-choices") {
                     @for choice in choices.iter().filter(|choice| language.is_none_or(|language| choice.language == language)) {
@@ -115,9 +114,8 @@ impl RoleSelection {
                                 checked? = self.ids.as_ref().is_some_and(|ids| ids.contains(&choice.id)));
                             : &choice.name;
                         }
-                        : " ";
                     }
-                    p : "Choose the roles this workflow should request when volunteers are still needed.";
+                    p(class = "ping-role-help") : "Only selected roles with unfilled volunteer slots will be requested.";
                 }
             }
         }
