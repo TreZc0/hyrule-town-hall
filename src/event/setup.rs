@@ -376,6 +376,14 @@ async fn setup_form(
                             input(type = "text", id = "open_stream_delay", name = "open_stream_delay", value = ctx.field_value("open_stream_delay").unwrap_or(&unparse_duration(event.open_stream_delay)), style = "width: 100%; max-width: 600px;");
                             label(class = "help") : " (Format: '15s')";
                         });
+                        : form_field("live_room_open_minutes_before", &mut errors, html! {
+                            : help::label("live_room_open_minutes_before", "Open live rooms (minutes before start)");
+                            input(type = "number", id = "live_room_open_minutes_before", name = "live_room_open_minutes_before", min = "15", max = "60", required, value = ctx.field_value("live_room_open_minutes_before").unwrap_or(&event.live_room_open_minutes_before.to_string()));
+                        });
+                        : form_field("async_room_open_minutes_before", &mut errors, html! {
+                            : help::label("async_room_open_minutes_before", "Open async rooms (minutes before start)");
+                            input(type = "number", id = "async_room_open_minutes_before", name = "async_room_open_minutes_before", min = "15", max = "60", required, value = ctx.field_value("async_room_open_minutes_before").unwrap_or(&event.async_room_open_minutes_before.to_string()));
+                        });
 
                         : form_field("invitational_stream_delay", &mut errors, html! {
                             : help::label("invitational_stream_delay", "Invitational Stream Delay");
@@ -783,6 +791,10 @@ pub(crate) struct SetupForm {
     language: String,
     default_game_count: i16,
     open_stream_delay: String,
+    #[field(default = 30, validate = range(15..=60))]
+    live_room_open_minutes_before: i16,
+    #[field(default = 30, validate = range(15..=60))]
+    async_room_open_minutes_before: i16,
     invitational_stream_delay: String,
     hide_teams_tab: bool,
     hide_races_tab: bool,
@@ -1474,6 +1486,16 @@ pub(crate) async fn post(
             sqlx::query!(
                 "UPDATE events SET auto_start_with_restream = $1 WHERE series = $2 AND event = $3",
                 value.auto_start_with_restream,
+                event_data.series as _,
+                &event_data.event,
+            )
+            .execute(&mut *transaction)
+            .await?;
+
+            sqlx::query!(
+                "UPDATE events SET live_room_open_minutes_before = $1, async_room_open_minutes_before = $2 WHERE series = $3 AND event = $4",
+                value.live_room_open_minutes_before,
+                value.async_room_open_minutes_before,
                 event_data.series as _,
                 &event_data.event,
             )

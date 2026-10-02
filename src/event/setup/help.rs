@@ -110,6 +110,14 @@ pub(super) fn label(field: &str, title: &str) -> RawHtml<String> {
             "The event's required stream delay for open races, including races represented by an entrant count rather than a fixed invitational matchup. Enter a duration such as 5m, not a timestamp.",
             "The bot can communicate and use this delay in its race preparation workflow. It does not configure OBS or your streaming service. The racetime countdown and seed-preroll policy are separate settings.",
         ],
+        "live_room_open_minutes_before" => &[
+            "How many minutes before the scheduled start to open live race rooms. Enter 15–60 minutes; the default is 30. Weekly schedules use their own room-opening setting.",
+            "Scheduling a race inside its opening window opens the room immediately. Changing this setting affects unopened rooms; it does not reopen existing rooms or change async timing.",
+        ],
+        "async_room_open_minutes_before" => &[
+            "How many minutes before each scheduled async part to open its room or begin its Discord async workflow. Enter 15–60 minutes; the default is 30, independently of live race timing.",
+            "Applies to scheduled async races, not on-demand qualifier requests. Scheduling inside this window opens immediately. Seed release and the force-start delay follow their own settings.",
+        ],
         "invitational_stream_delay" => &[
             "The required stream delay for races with known invited entrants. Enter a duration such as 5m; choose it according to your event's spoiler and restream policy.",
             "This is independent of Open Stream Delay and the racetime countdown. Entrants still need to configure their streaming software themselves; the site cannot apply their broadcast delay.",
