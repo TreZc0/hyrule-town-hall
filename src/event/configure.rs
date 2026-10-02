@@ -153,8 +153,16 @@ async fn configure_form(
                     None
                 };
             let mut errors = ctx.errors().collect_vec();
+            let listed = ctx
+                .field_value("listed")
+                .map_or(event.listed && errors.is_empty(), |value| value == "on");
             html! {
                 : full_form(uri!(post(event.series, &*event.event)), csrf, html! {
+                        : form_field("listed", &mut errors, html! {
+                            input(type = "checkbox", id = "listed", name = "listed", checked? = listed);
+                            label(for = "listed") : "Listed";
+                            label(class = "help") : " (Publish this event on the main page)";
+                        });
                         @if matches!(event.match_source(), MatchSource::StartGG(_) | MatchSource::Challonge { .. }) {
                             : form_field("auto_import", &mut errors, html! {
                                 input(type = "checkbox", id = "auto_import", name = "auto_import", checked? = ctx.field_value("auto_import").map_or(event.auto_import, |value| value == "on"));
@@ -364,6 +372,7 @@ pub(crate) async fn get(
 pub(crate) struct ConfigureForm {
     #[field(default = String::new())]
     csrf: String,
+    listed: bool,
     auto_import: bool,
     #[field(default = String::new())]
     min_schedule_notice: String,
@@ -543,6 +552,16 @@ pub(crate) async fn post(
                 .await?,
             )
         } else {
+            if value.listed != data.listed {
+                sqlx::query!(
+                    "UPDATE events SET listed = $1 WHERE series = $2 AND event = $3",
+                    value.listed,
+                    data.series as _,
+                    &data.event
+                )
+                .execute(&mut *transaction)
+                .await?;
+            }
             if let MatchSource::StartGG(_) = data.match_source() {
                 sqlx::query!(
                     "UPDATE events SET auto_import = $1 WHERE series = $2 AND event = $3",
