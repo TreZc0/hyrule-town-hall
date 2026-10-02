@@ -525,7 +525,7 @@ impl seed_gen_type::SeedGenType {
                 ctx.say("!seed: The permalink validation hash for the race.")
                     .await?;
             }
-            Self::OoTR | Self::Mmr => {
+            Self::OoTR | Self::Mmr { .. } => {
                 ctx.say("!seed: The settings used for this event.").await?;
             }
             Self::Owr { .. } => {
@@ -544,7 +544,7 @@ impl seed_gen_type::SeedGenType {
         args: &[String],
     ) -> Result<SeedCommandParseResult, Error> {
         Ok(match self {
-            Self::AlttprDoorRando { .. } | Self::AlttprAvianart { .. } => match args {
+            Self::Mmr { .. } | Self::AlttprDoorRando { .. } | Self::AlttprAvianart { .. } => match args {
                 [] => SeedCommandParseResult::ConfiguredEvent { unlock_spoiler_log },
                 [arg] if arg == "base" => SeedCommandParseResult::ConfiguredEvent { unlock_spoiler_log },
                 [..] => SeedCommandParseResult::SendPresets { language: English, msg: "I didn’t quite understand that" },
@@ -666,7 +666,7 @@ impl seed_gen_type::SeedGenType {
                 },
                 [..] => SeedCommandParseResult::SendPresets { language: English, msg: "I didn’t quite understand that" },
             },
-            Self::OoTR | Self::Mmr => return Ok(SeedCommandParseResult::Error { language: English, msg: "This seed type rolls settings from the event config; use the bot’s !seed command in the race room instead.".into() }),
+            Self::OoTR => return Ok(SeedCommandParseResult::Error { language: English, msg: "This seed type rolls settings from the event config; use the bot’s !seed command in the race room instead.".into() }),
             Self::Owr { .. } => match args {
                 [] => SeedCommandParseResult::ConfiguredEvent { unlock_spoiler_log },
                 [arg] if arg == "base" => SeedCommandParseResult::ConfiguredEvent { unlock_spoiler_log },
@@ -740,8 +740,8 @@ pub(crate) struct GlobalState {
     restream_team_members: Arc<RwLock<HashMap<String, (Instant, HashSet<String>)>>>,
     #[cfg_attr(not(unix), allow(dead_code))]
     avianart_api_key: Option<String>,
-    #[allow(dead_code)]
-    pub(crate) mmr_api_key: Option<String>,
+    pub(crate) mmr_api_client: Arc<crate::mmr_web::ApiClient>,
+    pub(crate) mmr_async_lock: tokio::sync::Mutex<()>,
 }
 
 impl TypeMapKey for GlobalState {
@@ -765,6 +765,7 @@ impl GlobalState {
         avianart_api_key: Option<String>,
         mmr_api_key: Option<String>,
     ) -> Self {
+        let mmr_api_client = Arc::new(crate::mmr_web::ApiClient::new(http_client.clone(), mmr_api_key));
         Self {
             host_info: racetime::HostInfo {
                 hostname: Cow::Borrowed(racetime_host()),
@@ -783,7 +784,8 @@ impl GlobalState {
             clean_shutdown,
             seed_metadata,
             avianart_api_key,
-            mmr_api_key,
+            mmr_api_client,
+            mmr_async_lock: tokio::sync::Mutex::new(()),
             extra_room_senders: Arc::new(RwLock::new(HashMap::default())),
             restream_team_members: Arc::new(RwLock::new(HashMap::default())),
         }
@@ -1453,10 +1455,54 @@ impl GlobalState {
         update_rx
     }
 
-    /// Unified seed rolling dispatcher: rolls a seed for an event based on its `seed_gen_type`.
-    ///
-    /// Replaces the `match goal { ... }` dispatch blocks in `handle_race()` and elsewhere.
-    /// Each `SeedGenType` variant calls the appropriate existing rolling method.
+    /// Serializes MMR race generation and reuses the same seed across async parts.
+    pub(crate) fn roll_mmr_seed(
+        self: Arc<Self>,
+        config: crate::mmr_web::Settings,
+        purpose: crate::mmr_web::Purpose,
+        race_id: Option<Id<Races>>,
+        roll_at: Option<DateTime<Utc>>,
+        unlock_spoiler_log: UnlockSpoilerLog,
+    ) -> mpsc::Receiver<SeedRollUpdate> {
+        let (tx, rx) = mpsc::channel(16);
+        tokio::spawn(async move {
+            if matches!(unlock_spoiler_log, UnlockSpoilerLog::Now | UnlockSpoilerLog::Progression) {
+                tx.send(SeedRollUpdate::Error(crate::mmr_web::Error::Invalid("MMR seeds must be locked until the race ends".into()).into())).await.allow_unreceived();
+                return;
+            }
+            let result = async {
+                if let Some(delay) = roll_at.and_then(|at| (at - Utc::now()).to_std().ok()) { sleep(delay).await; }
+                let _guard = if race_id.is_some() { Some(self.mmr_async_lock.lock().await) } else { None };
+                if let Some(race_id) = race_id {
+                    let existing: Option<serde_json::Value> = sqlx::query_scalar("SELECT seed_data FROM races WHERE id=$1")
+                        .bind(i64::from(race_id)).fetch_one(&self.db_pool).await?;
+                    if let Some(existing) = existing {
+                        if !matches!(seed::Files::from_seed_data(&existing), Some(seed::Files::MmrWeb { .. }))
+                            || existing["encrypted"] != true || existing["locked"] != true {
+                            return Err(crate::mmr_web::Error::Invalid("The race already has an incompatible or unlocked seed".into()).into());
+                        }
+                        return Ok(seed::Data::from_seed_data_only(Some(existing), None, false));
+                    }
+                }
+                let seed = self.mmr_api_client.roll(config, purpose, &tx).await?;
+                if let Some(race_id) = race_id {
+                    let saved = sqlx::query("UPDATE races SET seed_data=$2 WHERE id=$1 AND seed_data IS NULL")
+                        .bind(i64::from(race_id)).bind(seed.to_seed_data()).execute(&self.db_pool).await?;
+                    if saved.rows_affected() != 1 {
+                        return Err(crate::mmr_web::Error::Invalid("The race seed changed while MMR was generating".into()).into());
+                    }
+                }
+                Ok::<_, RollError>(seed)
+            }.await;
+            match result {
+                Ok(seed) => tx.send(SeedRollUpdate::Done { seed, rsl_preset: None, version: None, unlock_spoiler_log, resolved_randoms: None }).await.allow_unreceived(),
+                Err(error) => tx.send(SeedRollUpdate::Error(error.into())).await.allow_unreceived(),
+            }
+        });
+        rx
+    }
+
+    /// Rolls a seed using the event's configured generator.
     pub(crate) async fn roll_seed_for_event(
         self: Arc<Self>,
         seed_gen_type: &seed_gen_type::SeedGenType,
@@ -1470,6 +1516,7 @@ impl GlobalState {
             _ => UnlockSpoilerLog::Never,
         };
         match seed_gen_type {
+            SeedGenType::Mmr { config } => self.roll_mmr_seed(config.clone(), crate::mmr_web::Purpose::Competition, Some(cal_event.race.id), None, unlock_spoiler_log),
             SeedGenType::AlttprDoorRando {
                 source: AlttprDrSource::Boothisman,
                 ..
@@ -1975,6 +2022,7 @@ pub(crate) fn start_practice_seed_roll(
             match updates.recv().await {
                 Some(SeedRollUpdate::Done { seed, .. }) => {
                     break match seed.files() {
+                        Some(seed::Files::MmrWeb { id, hash }) => event::PracticeSeedStatus::Done(event::PracticeSeedResult::SeedLink { url: format!("https://mmrandomizer.com/seed/get?id={id}"), label: "Open Seed on MM Randomizer".into(), seed_hash: Some(hash) }),
                         Some(seed::Files::AvianartSeed {
                             ref hash,
                             ref seed_hash,
@@ -1982,7 +2030,7 @@ pub(crate) fn start_practice_seed_roll(
                             event::PracticeSeedStatus::Done(event::PracticeSeedResult::SeedLink {
                                 url: format!("https://avianart.games/perm/{hash}"),
                                 label: "Open Seed on Avianart".to_string(),
-                                seed_hash: seed_hash.clone(),
+                                seed_hash: seed_hash.as_ref().map(|hash| hash.to_vec()),
                             })
                         }
                         Some(seed::Files::AlttprDoorRando { uuid, is_owr }) => {
@@ -2322,6 +2370,8 @@ async fn roll_seed_locally(
 #[cfg_attr(unix, derive(Protocol))]
 #[cfg_attr(unix, async_proto(via = (String, String)))]
 pub(crate) enum RollError {
+    #[error(transparent)]
+    Mmr(#[from] crate::mmr_web::Error),
     #[error("This seed generator does not support automated async races")]
     UnsupportedGenerator,
     #[error(transparent)]
@@ -2473,9 +2523,9 @@ impl SeedRollUpdate {
         roll_failed: &Arc<AtomicBool>,
     ) -> Result<(), Error> {
         match self {
-            Self::Queued(0) => ctx.say("I'm already rolling other multiworld seeds so your seed has been queued. It is at the front of the queue so it will be rolled next.").await?,
-            Self::Queued(1) => ctx.say("I'm already rolling other multiworld seeds so your seed has been queued. There is 1 seed in front of it in the queue.").await?,
-            Self::Queued(pos) => ctx.say(format!("I'm already rolling other multiworld seeds so your seed has been queued. There are {pos} seeds in front of it in the queue.")).await?,
+            Self::Queued(0) => ctx.say("Your seed is at the front of the generation queue and will be rolled next.").await?,
+            Self::Queued(1) => ctx.say("Your seed is queued. There is 1 seed in front of it.").await?,
+            Self::Queued(pos) => ctx.say(format!("Your seed is queued. There are {pos} seeds in front of it.")).await?,
             Self::MovedForward(0) => ctx.say("The queue has moved and your seed is now at the front so it will be rolled next.").await?,
             Self::MovedForward(1) => ctx.say("The queue has moved and there is only 1 more seed in front of yours.").await?,
             Self::MovedForward(pos) => ctx.say(format!("The queue has moved and there are now {pos} seeds in front of yours.")).await?,
@@ -2545,7 +2595,7 @@ impl SeedRollUpdate {
                         }
                         if let Some(preset) = rsl_preset {
                             match seed.files().expect("received seed with no files") {
-                                seed::Files::AlttprDoorRando { .. } => unreachable!(), // ALTTPR Mystery not supported
+                                seed::Files::MmrWeb { .. } | seed::Files::AlttprDoorRando { .. } => unreachable!(), // no MMR RSL
                                 seed::Files::MidosHouse { file_stem, .. } => {
                                     sqlx::query!(
                                         "INSERT INTO rsl_seeds (room, file_stem, preset, hash1, hash2, hash3, hash4, hash5) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
@@ -2579,6 +2629,7 @@ impl SeedRollUpdate {
                         patcher_url.to_string()
                     }
                     seed::Files::MidosHouse { file_stem, .. } => format!("{}/seed/{file_stem}", base_uri()),
+                    seed::Files::MmrWeb { id, .. } => format!("https://mmrandomizer.com/seed/get?id={id}"),
                     seed::Files::OotrWeb { id, .. } => format!("https://ootrandomizer.com/seed/get?id={id}"),
                     seed::Files::TriforceBlitz { is_dev: false, uuid } => format!("https://www.triforceblitz.com/seed/{uuid}"),
                     seed::Files::TriforceBlitz { is_dev: true, uuid } => format!("https://dev.triforceblitz.com/seeds/{uuid}"),
@@ -2609,7 +2660,11 @@ impl SeedRollUpdate {
                     1 // Default to OOTR if no official data
                 };
 
-                if let Some(ref file_hash) = extra.file_hash {
+                if let Some(seed::Files::MmrWeb { hash, .. }) = seed.files() {
+                    let mut transaction = ctx.global_state.db_pool.begin().await.to_racetime()?;
+                    let formatted = format_hash_with_game_id(hash, &mut transaction, game_id_for_hash).await.to_racetime()?;
+                    ctx.say(format!("Seed Hash: {formatted}")).await?;
+                } else if let Some(ref file_hash) = extra.file_hash {
                     let mut transaction = ctx.global_state.db_pool.begin().await.to_racetime()?;
                     let formatted_hash = format_hash_with_game_id(file_hash.clone(), &mut transaction, game_id_for_hash).await.to_racetime()?;
                     transaction.commit().await.to_racetime()?;
@@ -2661,8 +2716,7 @@ impl SeedRollUpdate {
                         } else {
                             unimplemented!("distant future Triforce Blitz SotD")
                         }
-                    } else if matches!(seed.files(), Some(seed::Files::OotrWeb { .. }) | Some(seed::Files::MidosHouse { .. })) {
-                        // Only show spoiler log message for OOTR seeds
+                    } else if matches!(seed.files(), Some(seed::Files::MmrWeb { .. }) | Some(seed::Files::OotrWeb { .. }) | Some(seed::Files::MidosHouse { .. })) {
                         ctx.say(if let French = language {
                             "Le spoiler log sera disponible sur le lien de la seed après la seed."
                         } else {
@@ -2902,7 +2956,7 @@ async fn get_racetime_credentials_for_category(
 }
 
 async fn format_hash_with_game_id(
-    file_hash: [String; 5],
+    file_hash: impl IntoIterator<Item = String>,
     transaction: &mut Transaction<'_, Postgres>,
     game_id: i32,
 ) -> Result<String, sqlx::Error> {
@@ -2913,8 +2967,8 @@ async fn format_hash_with_game_id(
         {
             if let Some(emoji) = hash_icon_data.racetime_emoji.as_ref() {
                 emojis.push(emoji.clone());
-            }
-        }
+            } else { emojis.push(icon_name); }
+        } else { emojis.push(icon_name); }
     }
     Ok(emojis.join(" "))
 }
@@ -3124,7 +3178,10 @@ async fn set_bot_raceinfo(
     // For TWWR, we handle the format differently (permalink + seed hash on one line)
     let is_twwr = matches!(seed.files(), Some(seed::Files::TwwrPermalink { .. }));
 
-    let file_hash_str = if !is_twwr && extra.file_hash.is_some() {
+    let mmr_hash = match seed.files() { Some(seed::Files::MmrWeb { hash, .. }) => Some(hash), _ => None };
+    let file_hash_str = if let Some(hash) = mmr_hash.clone() {
+        format_hash_with_game_id(hash, transaction, game_id).await.to_racetime()?
+    } else if !is_twwr && extra.file_hash.is_some() {
         format_hash_with_game_id(extra.file_hash.clone().unwrap(), transaction, game_id)
             .await
             .to_racetime()?
@@ -3149,7 +3206,7 @@ async fn set_bot_raceinfo(
             .filter(|_| show_password)
             .map(|password| format_password(password).to_string())
             .unwrap_or_default(),
-        newline = if (!is_twwr && extra.file_hash.is_some())
+        newline = if mmr_hash.is_some() || (!is_twwr && extra.file_hash.is_some())
             || extra.password.is_some() && show_password
         {
             "\n"
@@ -3157,6 +3214,7 @@ async fn set_bot_raceinfo(
             ""
         },
         seed_url = match seed.files().expect("received seed with no files") {
+            seed::Files::MmrWeb { id, .. } => format!("https://mmrandomizer.com/seed/get?id={id}"),
             seed::Files::AlttprDoorRando { uuid, is_owr } => {
                 let prefix = if is_owr { "OR_" } else { "DR_" };
                 let mut patcher_url = Url::parse("https://alttprpatch.synack.live/patcher.html")
@@ -5732,10 +5790,21 @@ impl Handler {
                 )
                 .await;
             }
+            Some(seed_gen_type::SeedGenType::Mmr { config }) => {
+                let release_at = cal_event.start().map(|start| start - DEFAULT_SEED_RELEASE_LEAD);
+                let roll_at = match self.effective_preroll_mode() {
+                    PrerollMode::None => release_at,
+                    PrerollMode::Short => release_at.map(|at| at - TimeDelta::minutes(5)),
+                    PrerollMode::Medium => release_at.map(|at| at - TimeDelta::minutes(15)),
+                    PrerollMode::Long => None,
+                };
+                let updates = Arc::clone(&ctx.global_state).roll_mmr_seed(config, crate::mmr_web::Purpose::Competition, Some(cal_event.race.id), roll_at, unlock_spoiler_log);
+                self.roll_seed_inner(ctx, cal_event.start().map(|start| start - DEFAULT_SEED_RELEASE_LEAD), updates,
+                    language, article, "Majora's Mask Randomizer seed".into(), false).await;
+            }
             Some(
                 seed_gen_type::SeedGenType::OoTR
-                | seed_gen_type::SeedGenType::OotrRsl
-                | seed_gen_type::SeedGenType::Mmr,
+                | seed_gen_type::SeedGenType::OotrRsl,
             )
             | None => {
                 let Some(settings) = settings.or_else(|| official_data.event.single_settings.clone()) else {
@@ -6010,6 +6079,7 @@ impl Handler {
                 RaceState::Rolled(ref seed) if seed.seed_data.is_some() => if self.official_data.as_ref().is_none_or(|official_data| !official_data.cal_event.is_private_async_part()) {
                     if let UnlockSpoilerLog::Progression | UnlockSpoilerLog::After = self.effective_unlock_spoiler_log(false /* we may try to unlock a log that's already unlocked, but other than that, this assumption doesn't break anything */) {
                         match seed.files() {
+                            Some(seed::Files::MmrWeb { .. }) => {} // Completion reconciliation checks every linked race.
                             Some(seed::Files::AlttprDoorRando { .. }) => unreachable!(),
                             Some(seed::Files::MidosHouse { file_stem, locked_spoiler_log_path }) => if let Some(locked_spoiler_log_path) = locked_spoiler_log_path {
                                 lock!(@write seed_metadata = ctx.global_state.seed_metadata; seed_metadata.remove(&*file_stem));
@@ -7413,6 +7483,7 @@ impl RaceHandler<GlobalState> for Handler {
                             | seed_gen_type::SeedGenType::OotrTriforceBlitz
                             | seed_gen_type::SeedGenType::OotrRsl
                             | seed_gen_type::SeedGenType::TWWR { .. }
+                            | seed_gen_type::SeedGenType::Mmr { .. }
                         )) {
                         let mut transaction = ctx.global_state.db_pool.begin().await.to_racetime()?;
                         let unlock_spoiler_log = self.effective_unlock_spoiler_log(
@@ -8705,6 +8776,25 @@ async fn prepare_seeds(
             if event.qualifier_mode == "pooled_by_mode" && race.is_qualifier {
                 continue;
             }
+            if let Some(seed_gen_type::SeedGenType::Mmr { config }) = &event.seed_gen_type {
+                if event.preroll_mode == "long" && race.cal_events().filter_map(|part| part.start()).min().is_some_and(|start| start > Utc::now()) {
+                    let config = config.clone();
+                    let unlock = if event.spoiler_unlock == "after" { UnlockSpoilerLog::After } else { UnlockSpoilerLog::Never };
+                    transaction.commit().await?;
+                    let mut updates = Arc::clone(&global_state).roll_mmr_seed(config, crate::mmr_web::Purpose::Competition, Some(race.id), None, unlock);
+                    loop {
+                        select! {
+                            () = &mut shutdown => break 'outer,
+                            update = updates.recv() => match update {
+                                Some(SeedRollUpdate::Done { .. }) | None => break,
+                                Some(SeedRollUpdate::Error(error)) => { log::warn!("MMR preroll failed for race {}: {error}", race.id); break; }
+                                _ => (),
+                            }
+                        }
+                    }
+                }
+                continue;
+            }
             if event.seed_gen_type.is_some() && event.preroll_mode == "long" {
                 if let Some(settings) = race.single_settings(&mut transaction).await? {
                     let unlock_spoiler_log = match event.spoiler_unlock.as_str() {
@@ -8772,14 +8862,17 @@ async fn prepare_seeds(
         }
         // Global prerolled seed pool: query events that have fixed settings and long preroll.
         // This replaces the old all::<Goal>() iteration — seeds are now keyed by event.racetime_goal_slug.
-        let pool_events = sqlx::query!(
-            r#"SELECT racetime_goal_slug, preroll_mode AS "preroll_mode!", spoiler_unlock AS "spoiler_unlock!",
-               rando_version AS "rando_version: sqlx::types::Json<VersionedBranch>",
-               single_settings AS "single_settings: sqlx::types::Json<seed::Settings>"
-               FROM events
-               WHERE seed_gen_type IS NOT NULL AND preroll_mode = 'long'
-               AND single_settings IS NOT NULL
-               AND (end_time IS NULL OR end_time > NOW())"#
+        #[derive(sqlx::FromRow)]
+        struct PoolEvent {
+            racetime_goal_slug: Option<String>,
+            spoiler_unlock: String,
+            rando_version: Option<sqlx::types::Json<VersionedBranch>>,
+            single_settings: Option<sqlx::types::Json<seed::Settings>>,
+        }
+        let pool_events = sqlx::query_as::<_, PoolEvent>(
+            "SELECT racetime_goal_slug, spoiler_unlock, rando_version, single_settings FROM events
+             WHERE seed_gen_type IS NOT NULL AND seed_gen_type <> 'mmr' AND preroll_mode='long'
+               AND single_settings IS NOT NULL AND (end_time IS NULL OR end_time > NOW())"
         ).fetch_all(&global_state.db_pool).await?;
         for row in pool_events {
             let goal_name = row.racetime_goal_slug.as_deref().unwrap_or("unknown");

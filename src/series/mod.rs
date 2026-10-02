@@ -56,6 +56,7 @@ pub(crate) enum Series {
     Crosskeys,
     League,
     MixedPools,
+    MmrMain,
     Mq,
     Multiworld,
     MysteryD,
@@ -90,6 +91,7 @@ impl Series {
             Self::Crosskeys => "xkeys",
             Self::League => "league",
             Self::MixedPools => "mp",
+            Self::MmrMain => "mmrmain",
             Self::Mq => "mq",
             Self::Multiworld => "mw",
             Self::MysteryD => "mysteryd",
@@ -124,6 +126,7 @@ impl Series {
             Self::Crosskeys => "Crosskeys Tournaments",
             Self::League => "League",
             Self::MixedPools => "Mixed Pools Tournaments",
+            Self::MmrMain => "MMR Main Tournaments",
             Self::Mq => "12 MQ Tournaments",
             Self::Multiworld => "Multiworld Tournaments",
             Self::MysteryD => "Deutsche Mystery Turniere",
@@ -157,6 +160,7 @@ impl Series {
             | Self::TwwrMain => TimeDelta::hours(2) + TimeDelta::minutes(30),
             Self::CoOp
             | Self::MixedPools
+            | Self::MmrMain
             | Self::Scrubs
             | Self::SpeedGaming
             | Self::WeTryToBeBetter => TimeDelta::hours(3),

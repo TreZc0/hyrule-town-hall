@@ -12,6 +12,7 @@ mod provisional_tests;
 
 pub(crate) fn physical_seed_identity(data: &serde_json::Value) -> Option<String> {
     match seed::Files::from_seed_data(data)? {
+        seed::Files::MmrWeb { id, .. } => Some(format!("mmr:{id}")),
         seed::Files::AlttprDoorRando { uuid, is_owr } => Some(format!(
             "{}:{uuid}",
             if is_owr { "alttpr_owr" } else { "alttpr_dr" }

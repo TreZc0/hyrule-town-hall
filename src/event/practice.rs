@@ -204,6 +204,7 @@ pub(super) fn validate_form(
         }
         SeedGenType::Owr { .. }
         | SeedGenType::OoTR
+        | SeedGenType::Mmr { .. }
         | SeedGenType::TWWR { .. }
         | SeedGenType::AlttprDoorRando {
             source: AlttprDrSource::MutualChoices { .. },

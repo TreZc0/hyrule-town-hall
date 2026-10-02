@@ -217,7 +217,7 @@ pub(super) fn label(field: &str, title: &str) -> RawHtml<String> {
         "seed_gen_type" => &[
             "Chooses how the site generates event seeds. None means manual/external delivery. ALTTPR Door Rando selects one of the sources in Seed Config JSON; Avianart uses a preset; TWWR uses a settings permalink.",
             "OWR (regular build), stored as owr, uses /opt/owr. OWR (tournament build), stored as owr_tourney, uses /opt/owr_tourney. Both use the same baseline/choice JSON structure and support live, async and practice rolling. The installed build must support your supplied settings; a branch name in JSON does not switch installations.",
-            "Pooled qualifier modes have their own generator and baseline configuration on the Qualifiers page. Existing pooled OWR modes also use the tournament installation. Changing the event generator does not replace already generated seeds. MMR generation is not implemented for official or async events.",
+            "Pooled qualifier modes have their own generator and baseline configuration on the Qualifiers page. Existing pooled OWR modes also use the tournament installation. Changing the event generator does not replace already generated seeds. MMR uses branch, version and a flat settings map in Seed Config. Competition seeds are encrypted; practice seeds are not. Both have locked spoilers.",
         ],
         "seed_config" => &[
             "The JSON object consumed by the selected generator. Choose a matching example below, then replace the sample settings with your event's intended configuration. JSON requires double quotes and does not support comments or trailing commas.",

@@ -120,7 +120,7 @@ pub(crate) enum SeedGenType {
     },
     OotrTriforceBlitz,
     OotrRsl,
-    Mmr,
+    Mmr { config: crate::mmr_web::Settings },
 }
 
 /// Source/method used to produce ALTTPR Door Rando settings.
@@ -229,7 +229,7 @@ impl SeedGenType {
             }
             "ootr_tfb" => Some(Self::OotrTriforceBlitz),
             "ootr_rsl" => Some(Self::OotrRsl),
-            "mmr" => Some(Self::Mmr),
+            "mmr" => Some(Self::Mmr { config: crate::mmr_web::Settings::parse(seed_config?).ok()? }),
             other => {
                 eprintln!("unknown seed_gen_type: {other}");
                 None
@@ -384,7 +384,7 @@ impl std::fmt::Display for UnknownSeedGenType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "unknown seed_gen_type slug; valid values: owr, ootr_rsl, ootr_tfb, alttpr_avianart, ootr, mmr"
+            "unknown seed_gen_type slug or missing configuration; MMR requires an event seed_config"
         )
     }
 }
@@ -403,7 +403,7 @@ impl std::str::FromStr for SeedGenType {
                 practice_presets: vec![],
             }),
             "ootr" => Ok(Self::OoTR),
-            "mmr" => Ok(Self::Mmr),
+            "mmr" => Err(UnknownSeedGenType), // MMR requires an event configuration.
             _ => Err(UnknownSeedGenType),
         }
     }

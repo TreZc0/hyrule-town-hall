@@ -37,6 +37,10 @@ pub(crate) struct Data {
 
 #[derive(Debug, Clone)]
 pub(crate) enum Files {
+    MmrWeb {
+        id: String,
+        hash: Vec<String>,
+    },
     AlttprDoorRando {
         uuid: Uuid,
         is_owr: bool,
@@ -75,6 +79,7 @@ impl Files {
     /// merged in via `Data::to_seed_data()` — this method omits them.
     pub(crate) fn to_seed_data_base(&self) -> serde_json::Value {
         match self {
+            Self::MmrWeb { id, hash } => json!({"type":"mmr", "id":id, "hash":hash}),
             Self::AlttprDoorRando { uuid, is_owr } => serde_json::json!({
                 "type": if *is_owr { "alttpr_owr" } else { "alttpr_dr" },
                 "uuid": uuid.to_string(),
@@ -140,6 +145,12 @@ impl Files {
     /// Returns `None` if `value` has an unrecognised `type` field or is missing required fields.
     pub(crate) fn from_seed_data(value: &serde_json::Value) -> Option<Self> {
         match value.get("type").and_then(|v| v.as_str())? {
+            "mmr" => {
+                let id = value.get("id")?.as_str()?.to_owned();
+                let hash: Vec<String> = serde_json::from_value(value.get("hash")?.clone()).ok()?;
+                if id.is_empty() || id.len() > 128 || !id.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_')) || hash.is_empty() || hash.iter().any(|s| s.trim().is_empty()) { return None; }
+                Some(Self::MmrWeb { id, hash })
+            },
             "alttpr_dr" => {
                 let uuid = value
                     .get("uuid")
@@ -394,7 +405,7 @@ impl Data {
 
         if_chain! {
             if self.file_hash.is_none() || self.password.is_none() || match self.files() {
-                Some(Files::AlttprDoorRando { .. }) => false,
+                Some(Files::MmrWeb { .. } | Files::AlttprDoorRando { .. }) => false,
                 Some(Files::MidosHouse { .. }) => true,
                 Some(Files::OotrWeb { gen_time, .. }) => gen_time <= now - WEB_TIMEOUT,
                 Some(Files::TriforceBlitz { .. }) => false,
@@ -535,7 +546,14 @@ pub(crate) async fn table_cell(
 ) -> Result<RawHtml<String>, ExtraDataError> {
     //TODO show seed password when appropriate
     let extra = seed.extra(now).await?;
+    let file_hash = match seed.files() {
+        Some(Files::MmrWeb { hash, .. }) => Some(hash),
+        _ => extra.file_hash.map(Vec::from),
+    };
     let mut seed_links = match seed.files() {
+        Some(Files::MmrWeb { id, .. }) => Some(html! {
+            a(href = format!("https://mmrandomizer.com/seed/get?id={id}"), target = "_blank") : "View Seed";
+        }),
         Some(Files::AlttprDoorRando { uuid, is_owr }) => {
             let prefix = if is_owr { "OR_" } else { "DR_" };
             let mut patcher_url = Url::parse("https://alttprpatch.synack.live/patcher.html")
@@ -607,7 +625,7 @@ pub(crate) async fn table_cell(
         }),
         None => None,
     };
-    if extra.file_hash.is_none() {
+    if file_hash.is_none() {
         if let Some(add_hash_url) = add_hash_url {
             seed_links = Some(html! {
                 @if let Some(seed_links) = seed_links {
@@ -618,7 +636,7 @@ pub(crate) async fn table_cell(
             });
         }
     }
-    Ok(match (extra.file_hash, seed_links, draft_mode) {
+    Ok(match (file_hash, seed_links, draft_mode) {
         (None, None, None) => html! {},
         (None, None, Some(mode)) => html! {
             div(class = "draft-mode") {

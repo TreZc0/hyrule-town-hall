@@ -6265,9 +6265,10 @@ pub(crate) async fn handle_race(
         return Ok(());
     }
 
-    let is_second_part = cal_event.race.seed.files().is_some();
+    let seed_prepared = cal_event.race.seed.files().is_some();
 
-    if !is_second_part {
+    if !seed_prepared {
+        transaction.commit().await?;
         let discord_data = discord_ctx.data.read().await;
         let global_state = discord_data
             .get::<GlobalState>()
@@ -6296,6 +6297,8 @@ pub(crate) async fn handle_race(
             }
         };
 
+        transaction = global_state.db_pool.begin().await?;
+
         // Write seed to unified seed_data JSONB column
         if let Some(mut seed_data_json) = seed.to_seed_data() {
             if let Some(ref resolved_randoms) = resolved_randoms {
@@ -6322,8 +6325,8 @@ pub(crate) async fn handle_race(
             .mention_team(&mut transaction, event.discord_guild, team)
             .await?;
 
-        if is_second_part {
-            content.push(". **This is the second part of the async.** The runner will receive the previously generated seed as soon as they hit the READY button. Please work with them in their async channel in case of issues.");
+        if seed_prepared {
+            content.push(". A seed is already prepared. The runner will receive it as soon as they hit the READY button. Please work with them in their async channel in case of issues.");
         } else {
             content.push(". A Seed has been generated and will be distributed to the runner as soon as they hit the READY button. Please work with them in their async channel in case of issues.");
         }
