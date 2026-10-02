@@ -616,16 +616,6 @@ async fn setup_form(
                             p(class = "help") : "For pooled qualifiers, configure each mode's generator and baseline settings on the Qualifiers page after creating the event. Existing pooled OWR modes also use the tournament build. A branch name in Seed Config JSON does not switch installations.";
                         });
 
-                        : form_field("choice_resolution", &mut errors, html! {
-                            label(for = "choice_resolution") : "Resolve random player choices";
-                            select(id = "choice_resolution", name = "choice_resolution") {
-                                @for (value, label) in [("race_creation", "On race creation / import"), ("room_opening", "On room opening"), ("seed_rolling", "On seed reveal")] {
-                                    option(value = value, selected? = ctx.field_value("choice_resolution").unwrap_or(seed_config_json.as_ref().and_then(|config| config.get("choice_resolution")).and_then(|value| value.as_str()).unwrap_or("seed_rolling")) == value) : label;
-                                }
-                            }
-                            p(class = "help") : "For OWR and Door Rando mutual choices. Each game's result is saved and reused for all rooms and seed rerolls. Scheduling threads always show agreed settings and rules; only creation/import also reveals random results there. Room opening posts in each race room or private async thread; without a room it falls back to seed reveal. Seed reveal posts settings beside the seed, separately for each async participant. This selector sets choice_resolution in Seed Config JSON; changing it affects only unresolved races.";
-                        });
-
                         : guides::seed_config();
                         : form_field("seed_config", &mut errors, html! {
                             : help::label("seed_config", "Seed Config JSON");
@@ -634,6 +624,19 @@ async fn setup_form(
                             }
                             label(class = "help") : " (JSON config for the seed gen type. Leave empty if not applicable.)";
                         });
+
+                        @let show_choice_resolution = matches!(ctx.field_value("seed_gen_type").or(seed_gen_type_str.as_deref()), Some("owr" | "owr_tourney" | "alttpr_dr"));
+                        div(id = "choice-resolution-field", hidden? = !show_choice_resolution) {
+                            : form_field("choice_resolution", &mut errors, html! {
+                                label(for = "choice_resolution") : "Resolve random player choices";
+                                select(id = "choice_resolution", name = "choice_resolution", disabled? = !show_choice_resolution) {
+                                    @for (value, label) in [("race_creation", "On race creation / import"), ("room_opening", "On room opening"), ("seed_rolling", "On seed reveal")] {
+                                        option(value = value, selected? = ctx.field_value("choice_resolution").unwrap_or(seed_config_json.as_ref().and_then(|config| config.get("choice_resolution")).and_then(|value| value.as_str()).unwrap_or("seed_rolling")) == value) : label;
+                                    }
+                                }
+                                p(class = "help") : "For OWR and Door Rando mutual choices. Each game's result is saved and reused for all rooms and seed rerolls. Scheduling threads always show agreed settings and rules; only creation/import also reveals random results there. Room opening posts in each race room or private async thread; without a room it falls back to seed reveal. Seed reveal posts settings beside the seed, separately for each async participant. This selector sets choice_resolution in Seed Config JSON; changing it affects only unresolved races.";
+                            });
+                        }
                     }, errors.clone(), "Save Basic Info");
 
                     h3 : "Enter Flow Configuration";
@@ -732,6 +735,7 @@ async fn setup_form(
             : header;
             : content;
             script(src = static_url!("user-search.js")) {}
+            script(src = static_url!("event-seed-config.js")) {}
             script(src = static_url!("setting-help.js")) {}
         },
     )
@@ -1187,11 +1191,11 @@ pub(crate) async fn post(
                 None
             };
 
-            if let Some(timing) = value.choice_resolution.as_deref() {
-                if let Some(config) = seed_config_json.as_mut().and_then(serde_json::Value::as_object_mut) {
-                    config.insert("choice_resolution".into(), json!(timing));
-                }
-            }
+            super::configuration::apply_choice_resolution(
+                seed_gen_type.as_deref(),
+                seed_config_json.as_mut(),
+                value.choice_resolution.as_deref(),
+            );
 
             let start_delay_open: Option<i32> = if let Some(ref sdo_str) = value.start_delay_open {
                 if sdo_str.trim().is_empty() {
@@ -2315,16 +2319,6 @@ fn create_form_content(
                             p(class = "help") : "For pooled qualifiers, configure each mode's generator and baseline settings on the Qualifiers page after creating the event. Existing pooled OWR modes also use the tournament build. A branch name in Seed Config JSON does not switch installations.";
                         });
 
-                        : form_field("choice_resolution", &mut errors, html! {
-                            label(for = "choice_resolution") : "Resolve random player choices";
-                            select(id = "choice_resolution", name = "choice_resolution") {
-                                @for (value, label) in [("race_creation", "On race creation / import"), ("room_opening", "On room opening"), ("seed_rolling", "On seed reveal")] {
-                                    option(value = value, selected? = field_value("choice_resolution").unwrap_or("seed_rolling") == value) : label;
-                                }
-                            }
-                            p(class = "help") : "For OWR and Door Rando mutual choices. Each game's result is saved and reused for all rooms and seed rerolls. Scheduling threads always show agreed settings and rules; only creation/import also reveals random results there. Room opening posts in each race room or private async thread; without a room it falls back to seed reveal. Seed reveal posts settings beside the seed, separately for each async participant. This selector sets choice_resolution in Seed Config JSON; changing it affects only unresolved races.";
-                        });
-
                         : guides::seed_config();
                         : form_field("seed_config", &mut errors, html! {
                             : help::label("seed_config", "Seed Config JSON");
@@ -2333,8 +2327,22 @@ fn create_form_content(
                             }
                             label(class = "help") : " (JSON config for the seed gen type. Leave empty if not applicable.)";
                         });
+
+                        @let show_choice_resolution = matches!(field_value("seed_gen_type"), Some("owr" | "owr_tourney" | "alttpr_dr"));
+                        div(id = "choice-resolution-field", hidden? = !show_choice_resolution) {
+                            : form_field("choice_resolution", &mut errors, html! {
+                                label(for = "choice_resolution") : "Resolve random player choices";
+                                select(id = "choice_resolution", name = "choice_resolution", disabled? = !show_choice_resolution) {
+                                    @for (value, label) in [("race_creation", "On race creation / import"), ("room_opening", "On room opening"), ("seed_rolling", "On seed reveal")] {
+                                        option(value = value, selected? = field_value("choice_resolution").unwrap_or("seed_rolling") == value) : label;
+                                    }
+                                }
+                                p(class = "help") : "For OWR and Door Rando mutual choices. Each game's result is saved and reused for all rooms and seed rerolls. Scheduling threads always show agreed settings and rules; only creation/import also reveals random results there. Room opening posts in each race room or private async thread; without a room it falls back to seed reveal. Seed reveal posts settings beside the seed, separately for each async participant. This selector sets choice_resolution in Seed Config JSON; changing it affects only unresolved races.";
+                            });
+                        }
                     }, errors.clone(), "Create Event");
                     script(src = static_url!("event-copy.js")) {}
+                    script(src = static_url!("event-seed-config.js")) {}
                     script(src = static_url!("qualifier-score-config.js")) {}
                     script(src = static_url!("setting-help.js")) {}
                 }
@@ -2698,11 +2706,11 @@ pub(crate) async fn create_post(
                 None
             };
 
-        if let Some(timing) = value.choice_resolution.as_deref() {
-            if let Some(config) = seed_config_json.as_mut().and_then(serde_json::Value::as_object_mut) {
-                config.insert("choice_resolution".into(), json!(timing));
-            }
-        }
+        super::configuration::apply_choice_resolution(
+            seed_gen_type.as_deref(),
+            seed_config_json.as_mut(),
+            value.choice_resolution.as_deref(),
+        );
 
         // Parse start_delay_open
         let start_delay_open: Option<i32> = if let Some(ref sdo_str) = value.start_delay_open {

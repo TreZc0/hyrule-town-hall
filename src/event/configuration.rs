@@ -6,6 +6,25 @@ use crate::{
 };
 use serde_json::Value;
 
+pub(crate) fn apply_choice_resolution(
+    kind: Option<&str>,
+    config: Option<&mut Value>,
+    timing: Option<&str>,
+) {
+    let Some(config) = config.and_then(Value::as_object_mut) else {
+        return;
+    };
+    let supports_choices = matches!(kind, Some("owr" | "owr_tourney"))
+        || (kind == Some("alttpr_dr")
+            && config.get("source").and_then(Value::as_str) == Some("mutual_choices"));
+    // Both setup forms submit the selector even for generators without player choices.
+    if supports_choices
+        && let Some(timing) = timing
+    {
+        config.insert("choice_resolution".into(), Value::String(timing.into()));
+    }
+}
+
 pub(crate) fn validate_seed(kind: Option<&str>, config: Option<&Value>) -> Result<(), String> {
     let empty = serde_json::json!({});
     let config = config.unwrap_or(&empty);
@@ -259,6 +278,71 @@ pub(crate) async fn test_pool() -> sqlx::PgPool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn mmr_setup_accepts_export_with_choice_selector_submitted() {
+        let original = serde_json::json!({
+            "branch": "master",
+            "version": "2.0.0-0",
+            "settings": {
+                "GameplaySettings.DrawHash": true,
+                "GameplaySettings.TrapWeights": {},
+                "GameplaySettings.EnabledTricks": ["Lensless Chests"],
+                "GameplaySettings.OverrideHintPriorities": [["FairySpinAttack"]]
+            }
+        });
+        for timing in ["seed_rolling", "room_opening", "race_creation"] {
+            let mut config = original.clone();
+            apply_choice_resolution(Some("mmr"), Some(&mut config), Some(timing));
+            assert_eq!(config, original);
+            validate_seed(Some("mmr"), Some(&config)).unwrap();
+            assert!(
+                crate::racetime_bot::seed_gen_type::SeedGenType::from_db(Some("mmr"), Some(&config))
+                    .is_some()
+            );
+        }
+    }
+
+    #[test]
+    fn choice_selector_overrides_only_supported_generators() {
+        for kind in ["owr", "owr_tourney", "alttpr_dr"] {
+            let original = serde_json::json!({
+                "source": "mutual_choices",
+                "base_settings": {},
+                "choice_resolution": "room_opening"
+            });
+            let mut config = original.clone();
+            apply_choice_resolution(Some(kind), Some(&mut config), None);
+            assert_eq!(config, original);
+            for timing in ["race_creation", "room_opening", "seed_rolling"] {
+                apply_choice_resolution(Some(kind), Some(&mut config), Some(timing));
+                assert_eq!(config["choice_resolution"], timing);
+                validate_seed(Some(kind), Some(&config)).unwrap();
+            }
+        }
+        for (kind, original) in [
+            (None, serde_json::json!({})),
+            (Some("ootr"), serde_json::json!({})),
+            (Some("twwr"), serde_json::json!({"permalink": "example"})),
+            (
+                Some("alttpr_avianart"),
+                serde_json::json!({"preset": "example"}),
+            ),
+            (Some("alttpr_dr"), serde_json::json!({})),
+            (
+                Some("alttpr_dr"),
+                serde_json::json!({"source": "boothisman"}),
+            ),
+            (
+                Some("alttpr_dr"),
+                serde_json::json!({"source": "mystery_pool"}),
+            ),
+        ] {
+            let mut config = original.clone();
+            apply_choice_resolution(kind, Some(&mut config), Some("race_creation"));
+            assert_eq!(config, original);
+        }
+    }
+
     #[test]
     fn both_owr_builds_require_valid_settings_and_supported_preroll() {
         for kind in ["owr", "owr_tourney"] {

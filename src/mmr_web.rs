@@ -53,7 +53,8 @@ impl Settings {
             {
                 return Err("MMR multiworld is not supported.".into());
             }
-            if !key.contains('.') || value.is_object() {
+            // The setting paths are flat; dictionary values such as TrapWeights are objects.
+            if !key.contains('.') {
                 return Err(format!(
                     "MMR setting {key} must use the flat API settings format."
                 ));
@@ -526,6 +527,46 @@ mod tests {
                 .unwrap()
                 .iter()
                 .all(|request| request.starts_with("POST /api/v2/seed/unlock?"))
+        );
+    }
+
+    #[test]
+    fn mmr_config_preserves_dictionary_settings_in_api_body() {
+        for weights in [json!({}), json!({"Ice": 5, "Bomb": 2})] {
+            let config = json!({
+                "version": "2.0.0-0",
+                "settings": {
+                    "GameplaySettings.TrapWeights": weights,
+                    "GameplaySettings.EnabledTricks": ["Lensless Chests"],
+                    "GameplaySettings.OverrideHintPriorities": [["FairySpinAttack"]],
+                    "OutputSettings.GenerateSpoilerLog": false
+                }
+            });
+            let settings = Settings::parse(&config).unwrap();
+            assert_eq!(settings.settings, config["settings"]);
+            let mut expected_body = config["settings"].clone();
+            expected_body["OutputSettings.GenerateSpoilerLog"] = json!(true);
+            assert_eq!(settings.body(), expected_body);
+        }
+    }
+
+    #[test]
+    fn mmr_config_still_rejects_nested_paths_and_unknown_metadata() {
+        let config = json!({
+            "version": "2.0.0-0",
+            "settings": {"GameplaySettings": {"DrawHash": true}}
+        });
+        assert!(
+            Settings::parse(&config)
+                .unwrap_err()
+                .contains("flat API settings format")
+        );
+        let mut config = json!(settings());
+        config["choice_resolution"] = json!("seed_rolling");
+        assert!(
+            Settings::parse(&config)
+                .unwrap_err()
+                .contains("unknown field")
         );
     }
 
