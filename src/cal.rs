@@ -43,7 +43,7 @@ fn room_open_lead_time(
     TimeDelta::minutes(i64::from(minutes))
 }
 
-fn room_opening_due(start: DateTime<Utc>, now: DateTime<Utc>, lead_time: TimeDelta) -> bool {
+pub(crate) fn room_opening_due(start: DateTime<Utc>, now: DateTime<Utc>, lead_time: TimeDelta) -> bool {
     let until_start = start - now;
     until_start > TimeDelta::zero() && until_start <= lead_time
 }
