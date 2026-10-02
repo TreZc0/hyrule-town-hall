@@ -634,6 +634,15 @@ pub(crate) async fn manage_roles(
         .collect();
     let base_url = format!("/games/{}/roles", game_name);
 
+    let ping_role_choices = role_bindings
+        .iter()
+        .map(|binding| volunteer_pings::RoleChoice {
+            id: binding.id,
+            name: binding.role_type_name.clone(),
+            language: binding.language,
+        })
+        .collect::<Vec<_>>();
+    let mut ping_role_selections = HashMap::new();
     let game_ping_workflows = sqlx::query!(
         r#"SELECT
             w.id,
@@ -657,6 +666,12 @@ pub(crate) async fn manage_roles(
 
     let mut game_ping_lead_times: HashMap<i32, Vec<i32>> = HashMap::new();
     for wf in &game_ping_workflows {
+        ping_role_selections.insert(
+            wf.id,
+            volunteer_pings::RoleSelection::load(&mut transaction, wf.id)
+                .await
+                .map_err(Error::from)?,
+        );
         if matches!(
             wf.workflow_type,
             volunteer_pings::PingWorkflowTypeDb::PerRace
@@ -925,6 +940,7 @@ pub(crate) async fn manage_roles(
                             th : "Language";
                             th : "Type";
                             th : "Details";
+                            th : "Roles";
                             th : "Ping Channel";
                             th : "Delete After Race";
                             th : "Actions";
@@ -999,6 +1015,13 @@ pub(crate) async fn manage_roles(
                                         }
                                     }
                                 }
+                                td(class = "wf-roles") {
+                                    @let selection = &ping_role_selections[&wf.id];
+                                    span(class = "wf-role-summary") : selection.label(&ping_role_choices, wf.language);
+                                    div(class = "wf-role-editor", style = "display:none") {
+                                        : selection.fields(&ping_role_choices, Some(wf.language), "");
+                                    }
+                                }
                                 td(class = "wf-channel", data_value = wf_channel_val) {
                                     @if let Some(chan) = wf.discord_ping_channel {
                                         : chan.to_string();
@@ -1053,6 +1076,7 @@ pub(crate) async fn manage_roles(
                     }
                 });
                 : volunteer_pings::scheduled_fields("gpw");
+                : volunteer_pings::RoleSelection::default().fields(&ping_role_choices, None, "gpw_language");
                 : form_field("discord_ping_channel", &mut ping_errors, html! {
                     label(for = "gpw_channel") : "Discord ping channel ID (optional):";
                     input(type = "text", name = "discord_ping_channel", id = "gpw_channel", placeholder = "e.g. 123456789012345678");

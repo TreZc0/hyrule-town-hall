@@ -455,7 +455,8 @@ async fn apply_live_schedule(
         kind: cal::EventKind::Normal,
         race,
     };
-    if start - Utc::now() < TimeDelta::minutes(30) {
+    let room_open_lead_time = cal_event.room_open_lead_time(&mut transaction, &event).await?;
+    if start - Utc::now() <= room_open_lead_time {
         // Commit transaction BEFORE creating room so race handler can find it in database
         transaction.commit().await?;
 
@@ -650,7 +651,7 @@ async fn apply_live_schedule(
             transaction.commit().await?;
         }
     } else {
-        // Create Discord scheduled event for races scheduled > 30 minutes in advance
+        // Create Discord scheduled event for races scheduled before their room-opening window
         let http_client = {
             let data = ctx.data.read().await;
             data.get::<HttpClient>()
@@ -680,7 +681,7 @@ async fn apply_live_schedule(
             .should_create_room(&mut transaction, &event)
             .await?
         {
-            sqlx::query_as!(Range::<DateTime<Utc>>, r#"SELECT start, end_time AS "end" FROM racetime_maintenance WHERE start < $1 AND end_time > $2"#, start + event.series.default_race_duration(), start - TimeDelta::minutes(30)).fetch_all(&mut *transaction).await?
+            sqlx::query_as!(Range::<DateTime<Utc>>, r#"SELECT start, end_time AS "end" FROM racetime_maintenance WHERE start < $1 AND end_time > $2"#, start + event.series.default_race_duration(), start - room_open_lead_time).fetch_all(&mut *transaction).await?
         } else {
             Vec::default()
         };
@@ -3418,7 +3419,8 @@ pub(crate) fn configure_builder(
                                                 _ => panic!("tried to schedule race with not 2 or 3 MH teams as async"),
                                             };
                                             let cal_event = cal::Event { race, kind };
-                                            if start - Utc::now() < TimeDelta::minutes(30) {
+                                            let room_open_lead_time = cal_event.room_open_lead_time(&mut transaction, &event).await?;
+                                            if start - Utc::now() <= room_open_lead_time {
                                                 let (http_client, new_room_lock, racetime_host, racetime_config, clean_shutdown, extra_room_senders) = {
                                                     let data = ctx.data.read().await;
                                                     (
@@ -3586,7 +3588,7 @@ pub(crate) fn configure_builder(
                                             } else {
                                                 cal_event.race.save(&mut transaction).await?;
                                                 let overlapping_maintenance_windows = if let RaceHandleMode::RaceTime = cal_event.should_create_room(&mut transaction, &event).await? {
-                                                    sqlx::query_as!(Range::<DateTime<Utc>>, r#"SELECT start, end_time AS "end" FROM racetime_maintenance WHERE start < $1 AND end_time > $2"#, start + event.series.default_race_duration(), start - TimeDelta::minutes(30)).fetch_all(&mut *transaction).await?
+                                                    sqlx::query_as!(Range::<DateTime<Utc>>, r#"SELECT start, end_time AS "end" FROM racetime_maintenance WHERE start < $1 AND end_time > $2"#, start + event.series.default_race_duration(), start - room_open_lead_time).fetch_all(&mut *transaction).await?
                                                 } else {
                                                     Vec::default()
                                                 };

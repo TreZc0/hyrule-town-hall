@@ -14,6 +14,9 @@ use {
     serenity::model::id::{ChannelId, RoleId},
 };
 
+#[cfg(test)]
+mod room_opening_tests;
+
 async fn configure_form(
     mut transaction: Transaction<'_, Postgres>,
     http_client: &reqwest::Client,
@@ -195,7 +198,17 @@ async fn configure_form(
                             label(for = "min_schedule_notice") : "Minimum scheduling notice:";
                             input(type = "text", name = "min_schedule_notice", value = ctx.field_value("min_schedule_notice").map(Cow::Borrowed).unwrap_or_else(|| Cow::Owned(unparse_duration(event.min_schedule_notice)))); //TODO h:m:s fields?
                             br;
-                            label(class = "help") : "(Races must be scheduled at least this far in advance. Can be configured to be as low as 0 seconds, but note that if a race is scheduled less than 30 minutes in advance, the room is opened immediately, and if a race is scheduled less than 15 minutes in advance, the seed is posted immediately.)";
+                            label(class = "help") : "(Races must be scheduled at least this far in advance. Can be as low as 0 seconds. Scheduling within the applicable room-opening window opens the room immediately; seed release follows the event's seed workflow.)";
+                        });
+                        : form_field("live_room_open_minutes_before", &mut errors, html! {
+                            label(for = "live_room_open_minutes_before") : "Open live rooms (minutes before start):";
+                            input(type = "number", id = "live_room_open_minutes_before", name = "live_room_open_minutes_before", min = "15", max = "60", required, value = ctx.field_value("live_room_open_minutes_before").unwrap_or(&event.live_room_open_minutes_before.to_string()));
+                            label(class = "help") : "(15–60 minutes; default 30. Weekly schedules use their own room-opening setting.)";
+                        });
+                        : form_field("async_room_open_minutes_before", &mut errors, html! {
+                            label(for = "async_room_open_minutes_before") : "Open async rooms (minutes before start):";
+                            input(type = "number", id = "async_room_open_minutes_before", name = "async_room_open_minutes_before", min = "15", max = "60", required, value = ctx.field_value("async_room_open_minutes_before").unwrap_or(&event.async_room_open_minutes_before.to_string()));
+                            label(class = "help") : "(15–60 minutes; default 30. Applies to each scheduled async part, independently of live rooms.)";
                         });
                         @if matches!(event.match_source(), MatchSource::StartGG(_)) || event.discord_race_results_channel.is_some() {
                             : form_field("retime_window", &mut errors, html! {
@@ -363,6 +376,10 @@ pub(crate) struct ConfigureForm {
     auto_import: bool,
     #[field(default = String::new())]
     min_schedule_notice: String,
+    #[field(default = 30, validate = range(15..=60))]
+    live_room_open_minutes_before: i16,
+    #[field(default = 30, validate = range(15..=60))]
+    async_room_open_minutes_before: i16,
     retime_window: Option<String>,
     manual_reporting_with_breaks: bool,
     sync_startgg_ids: Option<String>,
@@ -603,6 +620,15 @@ pub(crate) async fn post(
             if value.discord_events_enabled != data.discord_events_enabled {
                 sqlx::query!("UPDATE events SET discord_events_enabled = $1 WHERE series = $2 AND event = $3", value.discord_events_enabled, data.series as _, &data.event).execute(&mut *transaction).await?;
             }
+            sqlx::query!(
+                "UPDATE events SET live_room_open_minutes_before = $1, async_room_open_minutes_before = $2 WHERE series = $3 AND event = $4",
+                value.live_room_open_minutes_before,
+                value.async_room_open_minutes_before,
+                data.series as _,
+                &data.event,
+            )
+            .execute(&mut *transaction)
+            .await?;
             if value.discord_events_require_restream != data.discord_events_require_restream {
                 sqlx::query!("UPDATE events SET discord_events_require_restream = $1 WHERE series = $2 AND event = $3", value.discord_events_require_restream, data.series as _, &data.event).execute(&mut *transaction).await?;
             }
