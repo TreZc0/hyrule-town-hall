@@ -58,9 +58,7 @@ pub(crate) fn validate_seed(kind: Option<&str>, config: Option<&Value>) -> Resul
             Ok(()) // A draft may supply the preset instead of an event default.
         }
         "ootr" | "ootr_web" | "ootr_tfb" | "ootr_rsl" => Ok(()),
-        "mmr" => {
-            Err("MMR seed generation is not implemented for official and async events.".into())
-        }
+        "mmr" => crate::mmr_web::Settings::parse(config).map(|_| ()),
         _ => Err(format!("Unknown seed generator: {kind}")),
     }
 }
@@ -140,6 +138,9 @@ pub(crate) fn validate_draft(
     } else {
         None
     };
+    if seed_kind == Some("mmr") && kind.is_some() {
+        return Err("MMR currently requires fixed settings without a draft.".into());
+    }
     let Some(kind) = kind else {
         if named.as_ref().is_some_and(|c| c.default_baseline.is_none()) {
             return Err("Named baselines need a preset draft or a default_baseline.".into());
@@ -218,6 +219,9 @@ pub(crate) fn validate_seed_policies(
     }
     if !matches!(spoiler, "never" | "after" | "immediately") {
         return Err("Unknown spoiler release policy.".into());
+    }
+    if generator == Some("mmr") && spoiler == "immediately" {
+        return Err("MMR seeds must remain locked until the race is complete. Choose Never or After.".into());
     }
     if matches!(preroll, "short" | "long")
         && generator.is_some_and(|g| matches!(g, "alttpr_dr" | "alttpr_avianart" | "owr" | "owr_tourney" | "twwr"))

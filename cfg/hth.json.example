@@ -27,6 +27,7 @@
   },
   "secretKey": "your-secret-key",
   "avianartApiKey": null,
+  "mmrApiKey": null,
   "speedgaming": {
     "username": "your-speedgaming-username",
     "password": "your-speedgaming-password"

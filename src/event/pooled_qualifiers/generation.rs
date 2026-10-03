@@ -6,6 +6,7 @@ use racetime_bot::{
 
 pub(crate) fn supported(kind: &SeedGenType) -> bool {
     match kind {
+        SeedGenType::Mmr { .. } => true,
         SeedGenType::Owr { config, .. }
         | SeedGenType::AlttprDoorRando {
             source: AlttprDrSource::MutualChoices { config },
@@ -33,6 +34,7 @@ pub(crate) fn roll(
         return Err(Error::ModeUnavailable);
     }
     Ok(match kind {
+        SeedGenType::Mmr { config } => state.roll_mmr_seed(config.clone(), crate::mmr_web::Purpose::Competition, None, None, UnlockSpoilerLog::Never),
         SeedGenType::Owr { config, build } => state.roll_pooled_owr_seed(config.clone(), *build),
         SeedGenType::AlttprDoorRando {
             source: AlttprDrSource::MutualChoices { config },
@@ -59,6 +61,9 @@ pub(crate) async fn validate_payload(
 ) -> Result<(), Error> {
     let files = seed::Files::from_seed_data(data).ok_or(Error::NoSeed)?;
     match (kind, files) {
+        (SeedGenType::Mmr { .. }, seed::Files::MmrWeb { .. })
+            if data.get("encrypted").and_then(|v| v.as_bool()) == Some(true)
+                && data.get("locked").and_then(|v| v.as_bool()) == Some(true) => Ok(()),
         (SeedGenType::Owr { .. }, seed::Files::AlttprDoorRando { uuid, is_owr: true }) => {
             validate_patch(data, uuid, "OR_").await
         }
@@ -259,6 +264,20 @@ pub(super) async fn complete(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn mmr_pool_rejects_practice_and_unlocked_seeds() {
+        let kind = SeedGenType::from_db(Some("mmr"), Some(&json!({"version":"2.0.0-0", "settings":{"GameplaySettings.DrawHash":true}}))).unwrap();
+        assert!(supported(&kind));
+        let mut data = json!({"type":"mmr", "id":"123", "hash":["ITEM_BOW", "0x61"], "encrypted":true, "locked":true});
+        assert!(validate_payload(&kind, &data).await.is_ok());
+        assert_eq!(physical_seed_identity(&data).as_deref(), Some("mmr:123"));
+        data["encrypted"] = json!(false);
+        assert!(validate_payload(&kind, &data).await.is_err());
+        data["encrypted"] = json!(true);
+        data["locked"] = json!(false);
+        assert!(validate_payload(&kind, &data).await.is_err());
+    }
 
     #[tokio::test]
     async fn generator_result_requires_matching_delivery_data() {

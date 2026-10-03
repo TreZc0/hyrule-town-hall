@@ -18,8 +18,7 @@ If you're interested in contributing to the Hyrule Town Hall project, feel free 
 
 The Hyrule Town Hall codebase is currently a side project, but it doesn't have to remain that way! If you're interested in contributing to the codebase but don't know where to start, let me know so we can discuss how you can help.
 
-
-# Dev notes
+## Discord
 
 Discord invite link with appropriate permissions (only useable by members of the Hyrule Town Hall Discord developer team):
 

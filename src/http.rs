@@ -1047,6 +1047,7 @@ pub(crate) async fn rocket(
             event::asyncs::get,
             event::asyncs::post,
             event::asyncs::delete,
+            event::asyncs::generate_mmr,
             event::qualifiers::get,
             event::qualifiers::post_race,
             event::qualifiers::post_settings,

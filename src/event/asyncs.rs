@@ -8,6 +8,7 @@ use crate::{
 
 #[derive(Clone, Copy)]
 enum AsyncSeedFormKind {
+    Mmr,
     Twwr,
     TriforceBlitz,
     AlttprDoorRando,
@@ -17,6 +18,7 @@ enum AsyncSeedFormKind {
 
 fn async_seed_form_kind(event: &Data<'_>) -> AsyncSeedFormKind {
     match event.seed_gen_type.as_ref() {
+        Some(SeedGenType::Mmr { .. }) => AsyncSeedFormKind::Mmr,
         Some(SeedGenType::TWWR { .. }) => AsyncSeedFormKind::Twwr,
         Some(SeedGenType::OotrTriforceBlitz) => AsyncSeedFormKind::TriforceBlitz,
         Some(SeedGenType::Owr { .. } | SeedGenType::AlttprDoorRando { .. }) => {
@@ -204,6 +206,7 @@ async fn asyncs_form(
                                 tr {
                                     th : "Kind";
                                     @match seed_form_kind {
+                                        AsyncSeedFormKind::Mmr => { th : "MMR seed"; }
                                         AsyncSeedFormKind::Twwr => {
                                             th(colspan = "2") : "Seed";
                                         }
@@ -231,6 +234,14 @@ async fn asyncs_form(
                                     tr {
                                         td : format!("{:?}", row.kind);
                                         @match seed_form_kind {
+                                            AsyncSeedFormKind::Mmr => {
+                                                td {
+                                                    @if let Some(seed::Files::MmrWeb { id, hash }) = row.seed_data.as_ref().and_then(seed::Files::from_seed_data) {
+                                                        a(href = format!("https://mmrandomizer.com/seed/get?id={id}"), target = "_blank") : "View seed";
+                                                        p : hash.join(", ");
+                                                    } else { : "Not generated"; }
+                                                }
+                                            }
                                             AsyncSeedFormKind::Twwr => {
                                                 td(colspan = "2") {
                                                     @let permalink = row.seed_data.as_ref().and_then(|d| d.get("permalink")).and_then(|v| v.as_str()).unwrap_or("");
@@ -306,6 +317,12 @@ async fn asyncs_form(
                                         td {
                                             @let kind_name = format!("{:?}", row.kind);
                                             a(class = "button", href = uri!(get(event.series, &*event.event, Some(kind_name.clone())))) : "Edit";
+                                            @if matches!(seed_form_kind, AsyncSeedFormKind::Mmr) {
+                                                form(action = uri!(generate_mmr(event.series, &*event.event, kind_name.clone())).to_string(), method = "post", style = "display: inline;") {
+                                                    input(type = "hidden", name = "csrf", value? = csrf.map(|token| token.authenticity_token()));
+                                                    button(type = "submit") : if row.seed_data.is_some() { "Regenerate seed" } else { "Generate seed" };
+                                                }
+                                            }
                                             : " | ";
                                             form(action = uri!(delete(event.series, &*event.event, kind_name)).to_string(), method = "post", style = "display: inline;") {
                                                 input(type = "hidden", name = "csrf", value? = csrf.map(|token| token.authenticity_token()));
@@ -328,6 +345,7 @@ async fn asyncs_form(
                     }
                     h3 : if edit_kind.is_some() { "Edit Async" } else { "Add/Update Async" };
                     @let hidden_fields = match seed_form_kind {
+                        AsyncSeedFormKind::Mmr => ["file_stem", "web_id", "tfb_uuid", "xkeys_uuid", "avianart_hash", "avianart_seed_hash", "hash1", "hash2", "hash3", "hash4", "hash5", "permalink", "seed_hash"].as_slice(),
                         AsyncSeedFormKind::Twwr => ["file_stem", "web_id", "tfb_uuid", "xkeys_uuid", "avianart_hash", "avianart_seed_hash", "hash1", "hash2", "hash3", "hash4", "hash5"].as_slice(),
                         AsyncSeedFormKind::TriforceBlitz => ["file_stem", "web_id", "permalink", "seed_hash", "xkeys_uuid", "avianart_hash", "avianart_seed_hash", "hash1", "hash2", "hash3", "hash4", "hash5"].as_slice(),
                         AsyncSeedFormKind::AlttprDoorRando => ["file_stem", "web_id", "permalink", "seed_hash", "tfb_uuid", "avianart_hash", "avianart_seed_hash"].as_slice(),
@@ -351,6 +369,7 @@ async fn asyncs_form(
                             }
                         });
                         @match seed_form_kind {
+                            AsyncSeedFormKind::Mmr => { p : "Save the async, then use Generate seed. MMR seeds use the event settings and cannot be replaced after an entrant requests this async."; }
                             AsyncSeedFormKind::Twwr => {
                                 : form_field("permalink", &mut errors, html! {
                                     label(for = "permalink") : "Permalink";
@@ -529,6 +548,7 @@ pub(crate) async fn post(
     Ok(if let Some(ref value) = form.value {
         let seed_form_kind = async_seed_form_kind(&event_data);
         let hidden_fields = match seed_form_kind {
+            AsyncSeedFormKind::Mmr => ["file_stem", "web_id", "tfb_uuid", "xkeys_uuid", "avianart_hash", "avianart_seed_hash", "hash1", "hash2", "hash3", "hash4", "hash5", "permalink", "seed_hash"].as_slice(),
             AsyncSeedFormKind::Twwr => [
                 "file_stem",
                 "web_id",
@@ -714,6 +734,7 @@ pub(crate) async fn post(
 
             // Build seed_data JSON.
             let (seed_data, xkeys_uuid) = match seed_form_kind {
+                AsyncSeedFormKind::Mmr => (None, None), // Preserved atomically when saving below.
                 AsyncSeedFormKind::Twwr => {
                     let permalink = value.permalink.as_deref().unwrap_or("").trim();
                     let seed_hash = value.seed_hash.as_deref().unwrap_or("").trim();
@@ -861,6 +882,15 @@ pub(crate) async fn post(
                 None
             };
 
+            if matches!(seed_form_kind, AsyncSeedFormKind::Mmr) {
+                // Editing dates must not overwrite a seed generated concurrently.
+                sqlx::query("INSERT INTO asyncs (series, event, kind, start, end_time) VALUES ($1,$2,$3,$4,$5) ON CONFLICT (series,event,kind) DO UPDATE SET start=EXCLUDED.start, end_time=EXCLUDED.end_time")
+                    .bind(series).bind(event).bind(value.kind).bind(start).bind(end_time)
+                    .execute(&mut *transaction).await?;
+                transaction.commit().await?;
+                return Ok(RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event, None::<String>)))));
+            }
+
             let (hash1, hash2, hash3, hash4, hash5): (
                 Option<String>,
                 Option<String>,
@@ -930,6 +960,79 @@ pub(crate) struct DeleteForm {
     csrf: String,
 }
 
+async fn save_mmr_seed(
+    transaction: &mut Transaction<'_, Postgres>,
+    series: Series,
+    event: &str,
+    kind: AsyncKind,
+    seed_data: serde_json::Value,
+    previous: Option<serde_json::Value>,
+) -> Result<bool, sqlx::Error> {
+    if previous.is_some() {
+        // Briefly block request writes while checking replacement eligibility.
+        // No lock is held during the API call, and request handlers need no MMR logic.
+        sqlx::query("LOCK TABLE async_teams IN SHARE MODE").execute(&mut **transaction).await?;
+    }
+    let changed = sqlx::query("UPDATE asyncs SET seed_data=$4 WHERE series=$1 AND event=$2 AND kind=$3 AND seed_data IS NOT DISTINCT FROM $5 AND (seed_data IS NULL OR NOT EXISTS (SELECT 1 FROM async_teams a JOIN teams t ON t.id=a.team WHERE t.series=$1 AND t.event=$2 AND a.kind=$3 AND a.requested IS NOT NULL))")
+        .bind(series).bind(event).bind(kind).bind(seed_data).bind(previous).execute(&mut **transaction).await?;
+    Ok(changed.rows_affected() == 1)
+}
+
+#[rocket::post("/event/<series>/<event>/asyncs/<kind>/generate-mmr", data = "<form>")]
+pub(crate) async fn generate_mmr(
+    pool: &State<PgPool>,
+    state: &State<Arc<racetime_bot::GlobalState>>,
+    me: User,
+    uri: Origin<'_>,
+    csrf: Option<CsrfToken>,
+    series: Series,
+    event: &str,
+    kind: String,
+    form: Form<Contextual<'_, DeleteForm>>,
+) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
+    let mut form = form.into_inner();
+    form.verify(&csrf);
+    if form.value.is_none() { return Err(StatusOrError::Status(Status::BadRequest)); }
+    let kind = parse_async_kind(&kind).ok_or(StatusOrError::Status(Status::BadRequest))?;
+    let mut transaction = pool.begin().await?;
+    let data = Data::new(&mut transaction, series, event).await?
+        .ok_or(StatusOrError::Status(Status::NotFound))?;
+    if !data.asyncs_active { return Err(StatusOrError::Status(Status::NotFound)); }
+    if !me.is_global_admin() && !data.organizers(&mut transaction).await?.contains(&me) {
+        return Err(StatusOrError::Status(Status::Forbidden));
+    }
+    let Some(SeedGenType::Mmr { config }) = data.seed_gen_type.clone() else {
+        return Err(StatusOrError::Status(Status::BadRequest));
+    };
+    // Serializes generation with scheduled MMR async matches, without a DB job.
+    let _guard = state.mmr_async_lock.lock().await;
+    let previous: Option<serde_json::Value> = sqlx::query_scalar("SELECT seed_data FROM asyncs WHERE series=$1 AND event=$2 AND kind=$3")
+        .bind(series).bind(event).bind(kind).fetch_optional(&mut *transaction).await?
+        .ok_or(StatusOrError::Status(Status::NotFound))?;
+    if previous.is_some() {
+        let requested: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM async_teams a JOIN teams t ON t.id=a.team WHERE t.series=$1 AND t.event=$2 AND a.kind=$3 AND a.requested IS NOT NULL)")
+            .bind(series).bind(event).bind(kind).fetch_one(&mut *transaction).await?;
+        if requested { return Err(StatusOrError::Status(Status::Conflict)); }
+    }
+    transaction.commit().await?;
+    let (updates, _receiver) = mpsc::channel(16);
+    let result = state.mmr_api_client.roll(config, crate::mmr_web::Purpose::Competition, &updates).await;
+    let mut transaction = pool.begin().await?;
+    match result {
+        Ok(seed) => {
+            if !save_mmr_seed(&mut transaction, series, event, kind, seed.to_seed_data().expect("MMR seed has metadata"), previous).await? {
+                return Err(StatusOrError::Status(Status::Conflict));
+            }
+            transaction.commit().await?;
+            Ok(RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event, None::<String>)))))
+        }
+        Err(error) => {
+            form.context.push_error(form::Error::validation(error.to_string()));
+            Ok(RedirectOrContent::Content(asyncs_form(transaction, me, uri, csrf.as_ref(), data, Some(kind), form.context).await?))
+        }
+    }
+}
+
 #[rocket::post("/event/<series>/<event>/asyncs/<kind>/delete", data = "<form>")]
 pub(crate) async fn delete(
     pool: &State<PgPool>,
@@ -956,6 +1059,12 @@ pub(crate) async fn delete(
     }
 
     if form.value.is_some() {
+        if matches!(event_data.seed_gen_type, Some(SeedGenType::Mmr { .. })) {
+            sqlx::query("LOCK TABLE async_teams IN SHARE MODE").execute(&mut *transaction).await?;
+            let requested: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM async_teams a JOIN teams t ON t.id=a.team WHERE t.series=$1 AND t.event=$2 AND a.kind=$3 AND a.requested IS NOT NULL)")
+                .bind(series).bind(event).bind(kind).fetch_one(&mut *transaction).await?;
+            if requested { return Err(StatusOrError::Status(Status::Conflict)); }
+        }
         sqlx::query!(
             "DELETE FROM asyncs WHERE series = $1 AND event = $2 AND kind = $3",
             series as _,
@@ -968,4 +1077,47 @@ pub(crate) async fn delete(
     }
 
     Ok(Redirect::to(uri!(get(series, event, None::<String>))))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    #[ignore = "requires HTH_MMR_TEST_DATABASE_URL; uses connection-local temporary tables"]
+    async fn mmr_shared_async_allows_initial_generation_after_requests_but_not_replacement() {
+        let pool = sqlx::postgres::PgPoolOptions::new().max_connections(1)
+            .connect(&std::env::var("HTH_MMR_TEST_DATABASE_URL").unwrap()).await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        sqlx::raw_sql(r#"
+            CREATE TEMP TABLE teams (id BIGINT, series TEXT, event TEXT);
+            CREATE TYPE pg_temp.async_kind AS ENUM ('qualifier', 'qualifier2');
+            CREATE TEMP TABLE asyncs (series TEXT, event TEXT, kind pg_temp.async_kind, seed_data JSONB);
+            CREATE TEMP TABLE async_teams (team BIGINT, kind pg_temp.async_kind, requested TIMESTAMPTZ);
+            INSERT INTO teams VALUES (1,'mmrmain','event'), (2,'mmrmain','other-event');
+            INSERT INTO asyncs VALUES ('mmrmain','event','qualifier',NULL), ('mmrmain','event','qualifier2',NULL);
+            INSERT INTO async_teams VALUES (1,'qualifier',NOW()), (2,'qualifier2',NOW());
+        "#).execute(&mut *tx).await.unwrap();
+        let first = json!({"type":"mmr", "id":"first", "hash":["ITEM_BOW"], "encrypted":true, "locked":true});
+        let second = json!({"type":"mmr", "id":"second", "hash":["ITEM_BOMB"], "encrypted":true, "locked":true});
+
+        // Signup already requested this qualifier before its first seed was generated.
+        assert!(save_mmr_seed(&mut tx, Series::MmrMain, "event", AsyncKind::Qualifier1, first.clone(), None).await.unwrap());
+        assert!(!save_mmr_seed(&mut tx, Series::MmrMain, "event", AsyncKind::Qualifier1, second.clone(), Some(first.clone())).await.unwrap());
+
+        // Requests for other qualifiers/events do not prevent an unused seed's replacement.
+        assert!(save_mmr_seed(&mut tx, Series::MmrMain, "event", AsyncKind::Qualifier2, first.clone(), None).await.unwrap());
+        assert!(save_mmr_seed(&mut tx, Series::MmrMain, "event", AsyncKind::Qualifier2, second.clone(), Some(first.clone())).await.unwrap());
+        // A generation response based on older data cannot overwrite the current seed.
+        assert!(!save_mmr_seed(&mut tx, Series::MmrMain, "event", AsyncKind::Qualifier2, first.clone(), None).await.unwrap());
+
+        // A request arriving during the API call prevents publishing a replacement.
+        sqlx::query("INSERT INTO async_teams VALUES (1,'qualifier2',NOW())").execute(&mut *tx).await.unwrap();
+        assert!(!save_mmr_seed(&mut tx, Series::MmrMain, "event", AsyncKind::Qualifier2, first.clone(), Some(second.clone())).await.unwrap());
+        let saved: Vec<serde_json::Value> = sqlx::query_scalar("SELECT seed_data FROM asyncs ORDER BY kind")
+            .fetch_all(&mut *tx).await.unwrap();
+        assert_eq!(saved, [first, second]);
+        tx.rollback().await.unwrap();
+        pool.close().await;
+    }
 }

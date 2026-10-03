@@ -85,6 +85,9 @@ fn seed_config_help() -> RawHtml<String> {
                 ("TWWR — settings permalink", "Select twwr and paste the settings permalink exported by your randomizer. Replace the placeholder before saving.", json!({
                     "permalink": "PASTE_YOUR_SETTINGS_PERMALINK_HERE"
                 })),
+                ("MMR — pinned version and settings", "Select mmr. Paste the full flat settings map exported by MMR and a version available on the selected branch. All competition seeds are encrypted; practice seeds are not. The application always generates a locked spoiler log.", json!({
+                    "branch": "master", "version": "2.0.0-0", "settings": {"GameplaySettings.DrawHash": true, "OutputSettings.GenerateSpoilerLog": true}
+                })),
                 ("Manual / external seeds", "Select None. Leave Seed Config JSON empty or use an empty object.", json!({})),
             ] {
                 details {
@@ -93,7 +96,7 @@ fn seed_config_help() -> RawHtml<String> {
                     pre { : serde_json::to_string_pretty(&config).expect("example JSON serializes"); }
                 }
             }
-            p : "MMR generation is not implemented for official or async events.";
+            p : "MMR uses a pinned version and a flat settings export. All seeds have locked spoilers; competition seeds are encrypted. Multiworld and settings drafts are not supported.";
         }
     }
 }

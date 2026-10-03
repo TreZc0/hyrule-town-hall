@@ -37,7 +37,7 @@ pub(crate) enum PracticeSeedResult {
     SeedLink {
         url: String,
         label: String,
-        seed_hash: Option<[String; 5]>,
+        seed_hash: Option<Vec<String>>,
     },
 }
 
@@ -1081,7 +1081,7 @@ impl<'a> Data<'a> {
                 @let is_ootr = self.game(&mut *transaction).await?.map(|g| g.name == "ootr").unwrap_or(false);
                 @let practice_seed_url = {
                     let has_practice = match &self.seed_gen_type {
-                        Some(SeedGenType::Owr { .. }) => true,
+                        Some(SeedGenType::Mmr { .. } | SeedGenType::Owr { .. }) => true,
                         Some(SeedGenType::AlttprDoorRando { source: AlttprDrSource::Boothisman, practice_modes, .. }) => !practice_modes.is_empty(),
                         Some(SeedGenType::AlttprDoorRando { source: AlttprDrSource::MutualChoices { .. }, .. }) => true,
                         Some(generator @ SeedGenType::AlttprAvianart { .. }) => !practice::avianart_presets(generator).is_empty(),
@@ -1390,7 +1390,7 @@ pub(crate) async fn info(
         Series::AlttprMain | Series::AlttprEnemizer | Series::AlttprSpecials => None,
         Series::BattleRoyale => ohko::info(&mut transaction, &data).await?,
         Series::Cabookey => cabookey::info(&mut transaction, &data).await?,
-        Series::Casboots => None,
+        Series::Casboots | Series::MmrMain => None,
         Series::CoOp => coop::info(&mut transaction, &data).await?,
         Series::CopaDoBrasil => br::info(&mut transaction, &data).await?,
         Series::Crosskeys => xkeys::info(&mut transaction, &data).await?,
@@ -1592,7 +1592,9 @@ pub(crate) async fn races(
                 AsyncKind::Tiebreaker1 => "Tiebreaker Async 1".to_owned(),
                 AsyncKind::Tiebreaker2 => "Tiebreaker Async 2".to_owned(),
             });
-            let seed_files = if let Some(hash) = row
+            let seed_files = if row.seed_data.as_ref().and_then(seed::Files::from_seed_data).is_some() {
+                row.seed_data.clone()
+            } else if let Some(hash) = row
                 .seed_data
                 .as_ref()
                 .and_then(|d| d.get("avianart_hash").or_else(|| d.get("hash")))
@@ -2364,6 +2366,7 @@ async fn status_page(
                             | Series::CopaDoBrasil
                             | Series::Crosskeys
                             | Series::MixedPools
+                            | Series::MmrMain
                             | Series::Mq
                             | Series::MysteryD
                             | Series::Rsl
@@ -5146,6 +5149,9 @@ pub(crate) async fn practice_seed(
     let chests = data.chests().await?;
 
     let form_content = match &data.seed_gen_type {
+        Some(SeedGenType::Mmr { .. }) => full_form(form_uri, csrf.as_ref(), html! {
+            p : "Generate a practice seed with this event's settings. Spoilers remain locked.";
+        }, vec![], "Generate Practice Seed"),
         _ if is_ootr && data.single_settings.is_some() => full_form(
             form_uri,
             csrf.as_ref(),
@@ -5394,6 +5400,11 @@ pub(crate) async fn practice_seed_post(
     }
 
     match seed_gen_type.ok_or(StatusOrError::Status(Status::NotFound))? {
+        SeedGenType::Mmr { config } => {
+            transaction.commit().await?;
+            let rx = Arc::clone(global_state.inner()).roll_mmr_seed(config, crate::mmr_web::Purpose::Practice, None, None, UnlockSpoilerLog::Never);
+            racetime_bot::start_practice_seed_roll(Arc::clone(&seeds), job_id, rx, vec![]);
+        }
         SeedGenType::TWWR { .. } => {
             let settings_string = data
                 .twwr_permalink()

@@ -2110,6 +2110,9 @@ fn seed_message(seed_data: &serde_json::Value) -> Result<MessageBuilder, Error> 
 
 fn append_seed_details(message: &mut MessageBuilder, seed_data: &serde_json::Value) -> Result<(), Error> {
     match seed::Files::from_seed_data(seed_data).ok_or(Error::NoSeedAvailable)? {
+        seed::Files::MmrWeb { id, hash } => {
+            message.push(format!("Seed URL: https://mmrandomizer.com/seed/get?id={id}\nSeed Hash: {}\n", hash.join(", ")));
+        }
         seed::Files::AlttprDoorRando { uuid, is_owr } => {
             let prefix = if is_owr { "OR_" } else { "DR_" };
             let mut patcher = Url::parse("https://alttprpatch.synack.live/patcher.html")?;

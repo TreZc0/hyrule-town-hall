@@ -52,6 +52,7 @@ mod lang;
 mod legal;
 #[macro_use]
 mod macros;
+mod mmr_web;
 mod mw;
 mod notification;
 mod ootr_web;
@@ -583,6 +584,12 @@ async fn async_race_manager(
                 let discord_ctx = discord_ctx.read().await;
                 if let Err(error) = async_race::AsyncRaceManager::create_async_threads(&db_pool, &discord_ctx, &http_client).await {
                     log::error!("async thread setup failed: {error}");
+                }
+                let state = discord_ctx.data.read().await.get::<racetime_bot::GlobalState>().cloned();
+                if let Some(state) = state {
+                    if let Err(error) = state.mmr_api_client.unlock_finished(&db_pool).await {
+                        log::error!("MMR spoiler release failed: {error}");
+                    }
                 }
             }
             _ = shutdown.clone() => break,

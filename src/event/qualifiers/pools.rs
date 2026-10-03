@@ -134,6 +134,7 @@ fn seed_metadata(seed: &SeedRow) -> RawHtml<String> {
     let data = seed::Data::from_seed_data_only(Some(payload.clone()), None, false);
     let hash = data.file_hash.as_ref().map(|hash| hash.join(" · ")).or_else(|| {
         match data.files() {
+            Some(seed::Files::MmrWeb { hash, .. }) => Some(hash.join(" · ")),
             Some(seed::Files::AvianartSeed { seed_hash: Some(hash), .. }) => Some(hash.join(" · ")),
             Some(seed::Files::TwwrPermalink { seed_hash, .. }) => Some(seed_hash),
             _ => None,
