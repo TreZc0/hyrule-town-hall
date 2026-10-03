@@ -1325,6 +1325,37 @@ mod completion_tests {
     }
 
     #[tokio::test]
+    async fn game_two_played_first_does_not_report_a_bo3_winner() {
+        for enabled in [false, true] {
+            startgg::MOCK_QUERIES.scope(
+                std::cell::RefCell::new(startgg::MockQueries {
+                    responses: std::collections::VecDeque::from([
+                        ("SetQuery".into(), set_response("SINGLE_ELIMINATION", 3, &[])),
+                        ("ReportBracketSetMutation".into(), json!({"data": {"reportBracketSet": [{"id": "1"}]}})),
+                    ]),
+                    requests: Vec::new(),
+                }),
+                async {
+                    assert!(!report_startgg_games(
+                        &reqwest::Client::new(), "unused", &startgg::ID("1".into()),
+                        2, &startgg::ID("10".into()), enabled, 3,
+                    ).await.unwrap());
+                    startgg::MOCK_QUERIES.with(|mock| {
+                        let mock = mock.borrow();
+                        assert!(mock.responses.is_empty());
+                        let vars = &mock.requests.last().unwrap()["variables"];
+                        assert!(vars["winnerID"].is_null());
+                        let games = vars["gameData"].as_array().unwrap();
+                        assert_eq!(games.len(), 1);
+                        assert_eq!(games[0]["gameNum"], 2);
+                        assert_eq!(games[0]["winnerId"], "10");
+                    });
+                },
+            ).await;
+        }
+    }
+
+    #[tokio::test]
     async fn mixed_stage_reporting_uses_real_set_format_and_keeps_rr_behavior() {
         exercise_report(
             "ROUND_ROBIN",

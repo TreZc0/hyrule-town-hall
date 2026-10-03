@@ -1,5 +1,8 @@
--- Source: ZeldaSpeedRuns/rtgg-randobot-mmr randobot/zsr.py hash_map.
--- Includes the legacy 0x61 alias for ITEM_BOMBERS_NOTEBOOK.
+-- Register MMR; seeds use the existing seed_config and seed_data columns.
+INSERT INTO games (name, display_name, description)
+VALUES ('mmr', 'Majora''s Mask Randomizer', 'Majora''s Mask Randomizer tournaments and events')
+ON CONFLICT (name) DO NOTHING;
+
 INSERT INTO hash_icons (game_id, name, file_name, racetime_emoji)
 SELECT games.id, icons.name, icons.file_name, icons.racetime_emoji
 FROM games CROSS JOIN (VALUES

@@ -399,6 +399,14 @@ async fn apply_live_schedule(
     start: DateTime<Utc>,
     nl_note: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    if let Some(error) = race.live_schedule_order_error(&mut transaction, start).await? {
+        interaction.edit_response(ctx, EditInteractionResponse::new()
+            .content(error)
+            .components(vec![])
+        ).await?;
+        transaction.rollback().await?;
+        return Ok(());
+    }
     race.schedule.set_live_start(start);
     race.schedule_updated_at = Some(Utc::now());
     race.save(&mut transaction).await?;

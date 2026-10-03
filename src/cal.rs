@@ -29,6 +29,7 @@ use {
 
 #[cfg(test)]
 mod room_opening_tests;
+mod scheduling_order;
 
 fn room_open_lead_time(
     kind: EventKind,
@@ -8054,6 +8055,14 @@ pub(crate) async fn edit_race_post(
                     }
                 }
             }
+        }
+        if (is_organizer || is_admin)
+            && !matches!(race.schedule, RaceSchedule::Async { .. })
+            && let Some(start) = new_start_date
+            && !matches!(race.schedule, RaceSchedule::Live { start: old_start, .. } if old_start == start)
+            && let Some(error) = race.live_schedule_order_error(&mut transaction, start).await?
+        {
+            form.context.push_error(form::Error::validation(error).with_name("start_date"));
         }
         if form.context.errors().next().is_some() {
             RedirectOrContent::Content(
