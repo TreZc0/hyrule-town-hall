@@ -27,6 +27,27 @@ use {
     sqlx::types::Json,
 };
 
+#[cfg(test)]
+mod room_opening_tests;
+
+fn room_open_lead_time(
+    kind: EventKind,
+    live_minutes: i16,
+    async_minutes: i16,
+    weekly_minutes: Option<i16>,
+) -> TimeDelta {
+    let minutes = match kind {
+        EventKind::Normal => weekly_minutes.unwrap_or(live_minutes),
+        EventKind::Async1 | EventKind::Async2 | EventKind::Async3 => async_minutes,
+    };
+    TimeDelta::minutes(i64::from(minutes))
+}
+
+pub(crate) fn room_opening_due(start: DateTime<Utc>, now: DateTime<Utc>, lead_time: TimeDelta) -> bool {
+    let until_start = start - now;
+    until_start > TimeDelta::zero() && until_start <= lead_time
+}
+
 fn volunteer_signup_languages(
     signups: &[&Signup],
     role_bindings: &[EffectiveRoleBinding],
@@ -2465,57 +2486,72 @@ impl Event {
         transaction: &mut Transaction<'_, Postgres>,
         http_client: &reqwest::Client,
     ) -> Result<Vec<Self>, Error> {
-        let mut events = Vec::default();
-        // Query with a generous window (60 minutes) to accommodate custom room_open_minutes_before
+        let mut candidates = Vec::new();
+        // Both event lead times and weekly overrides are at most 60 minutes.
         for id in sqlx::query_scalar!(r#"SELECT id AS "id: Id<Races>" FROM races WHERE NOT ignored AND room IS NULL AND start IS NOT NULL AND start > NOW() AND (custom_title IS NULL OR custom_create_room) AND NOT EXISTS (SELECT 1 FROM races r2 WHERE r2.companion_race_id = races.id) AND (start <= NOW() + TIME '01:00:00' OR (team1 IS NULL AND p1_discord IS NULL AND p1 IS NULL AND (series != 's' OR event != 'w') AND start <= NOW() + TIME '01:00:00'))"#).fetch_all(&mut **transaction).await? {
-            let race = Race::from_id(&mut *transaction, http_client, id).await?;
-
-            // Check if this is a weekly race with custom room opening timing
-            let room_open_minutes = if race.phase.is_none() {
-                if let Some(round) = race.round.as_deref().and_then(|r| r.strip_suffix(" Weekly")) {
-                    if let Ok(Some(schedule)) = WeeklySchedule::for_round(&mut *transaction, race.series, &race.event, round).await {
-                        schedule.room_open_minutes_before as i64
-                    } else {
-                        30 // Default if weekly schedule not found
-                    }
-                } else {
-                    30 // Default for non-weekly races
-                }
-            } else {
-                30 // Default for races with phases (not weeklies)
-            };
-
-            // Only include the race if it's within the configured time window
-            if let RaceSchedule::Live { start, .. } = race.schedule {
-                let now = Utc::now();
-                let minutes_until_start = (start - now).num_minutes();
-                if minutes_until_start <= room_open_minutes && minutes_until_start > 0 {
-                    events.push(Self {
-                        race,
-                        kind: EventKind::Normal,
-                    });
-                }
-            }
+            candidates.push(Self {
+                race: Race::from_id(&mut *transaction, http_client, id).await?,
+                kind: EventKind::Normal,
+            });
         }
-        for id in sqlx::query_scalar!(r#"SELECT id AS "id: Id<Races>" FROM races WHERE NOT ignored AND async_room1 IS NULL AND async_notified_1 IS NOT TRUE AND async_start1 IS NOT NULL AND async_start1 > NOW() AND async_start1 <= NOW() + TIME '00:30:00'"#).fetch_all(&mut **transaction).await? {
-            events.push(Self {
+        for id in sqlx::query_scalar!(r#"SELECT id AS "id: Id<Races>" FROM races WHERE NOT ignored AND async_room1 IS NULL AND async_notified_1 IS NOT TRUE AND async_start1 IS NOT NULL AND async_start1 > NOW() AND async_start1 <= NOW() + TIME '01:00:00'"#).fetch_all(&mut **transaction).await? {
+            candidates.push(Self {
                 race: Race::from_id(&mut *transaction, http_client, id).await?,
                 kind: EventKind::Async1,
             });
         }
-        for id in sqlx::query_scalar!(r#"SELECT id AS "id: Id<Races>" FROM races WHERE NOT ignored AND async_room2 IS NULL AND async_notified_2 IS NOT TRUE AND async_start2 IS NOT NULL AND async_start2 > NOW() AND async_start2 <= NOW() + TIME '00:30:00'"#).fetch_all(&mut **transaction).await? {
-            events.push(Self {
+        for id in sqlx::query_scalar!(r#"SELECT id AS "id: Id<Races>" FROM races WHERE NOT ignored AND async_room2 IS NULL AND async_notified_2 IS NOT TRUE AND async_start2 IS NOT NULL AND async_start2 > NOW() AND async_start2 <= NOW() + TIME '01:00:00'"#).fetch_all(&mut **transaction).await? {
+            candidates.push(Self {
                 race: Race::from_id(&mut *transaction, http_client, id).await?,
                 kind: EventKind::Async2,
             });
         }
-        for id in sqlx::query_scalar!(r#"SELECT id AS "id: Id<Races>" FROM races WHERE NOT ignored AND async_room3 IS NULL AND async_notified_3 IS NOT TRUE AND async_start3 IS NOT NULL AND async_start3 > NOW() AND async_start3 <= NOW() + TIME '00:30:00'"#).fetch_all(&mut **transaction).await? {
-            events.push(Self {
+        for id in sqlx::query_scalar!(r#"SELECT id AS "id: Id<Races>" FROM races WHERE NOT ignored AND async_room3 IS NULL AND async_notified_3 IS NOT TRUE AND async_start3 IS NOT NULL AND async_start3 > NOW() AND async_start3 <= NOW() + TIME '01:00:00'"#).fetch_all(&mut **transaction).await? {
+            candidates.push(Self {
                 race: Race::from_id(&mut *transaction, http_client, id).await?,
                 kind: EventKind::Async3,
             });
         }
+        let mut events = Vec::new();
+        for candidate in candidates {
+            let event = candidate.race.event(&mut *transaction).await?;
+            let lead_time = candidate
+                .room_open_lead_time(&mut *transaction, &event)
+                .await?;
+            if candidate
+                .start()
+                .is_some_and(|start| room_opening_due(start, Utc::now(), lead_time))
+            {
+                events.push(candidate);
+            }
+        }
         Ok(events)
+    }
+
+    /// The same lead time applies to automatic opening, short-notice scheduling,
+    /// and checks for overlapping racetime maintenance.
+    pub(crate) async fn room_open_lead_time(
+        &self,
+        transaction: &mut Transaction<'_, Postgres>,
+        event: &event::Data<'_>,
+    ) -> Result<TimeDelta, sqlx::Error> {
+        let weekly_minutes = if self.kind == EventKind::Normal && self.race.phase.is_none() {
+            if let Some(round) = self.race.round.as_deref().and_then(|r| r.strip_suffix(" Weekly")) {
+                WeeklySchedule::for_round(transaction, self.race.series, &self.race.event, round)
+                    .await?
+                    .map(|schedule| schedule.room_open_minutes_before)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        Ok(room_open_lead_time(
+            self.kind,
+            event.live_room_open_minutes_before,
+            event.async_room_open_minutes_before,
+            weekly_minutes,
+        ))
     }
 
     pub(crate) fn active_teams(&self) -> impl Iterator<Item = &Team> + Send {

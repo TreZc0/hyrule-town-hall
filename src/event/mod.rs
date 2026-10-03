@@ -212,6 +212,8 @@ pub(crate) struct Data<'a> {
     pub(crate) show_qualifier_times: bool,
     pub(crate) default_game_count: i16,
     pub(crate) min_schedule_notice: Duration,
+    pub(crate) live_room_open_minutes_before: i16,
+    pub(crate) async_room_open_minutes_before: i16,
     pub(crate) open_stream_delay: Duration,
     pub(crate) invitational_stream_delay: Duration,
     pub(crate) retime_window: Duration,
@@ -314,6 +316,8 @@ impl<'a> Data<'a> {
             show_qualifier_times,
             default_game_count,
             min_schedule_notice,
+            live_room_open_minutes_before,
+            async_room_open_minutes_before,
             open_stream_delay,
             invitational_stream_delay,
             retime_window,
@@ -388,6 +392,8 @@ impl<'a> Data<'a> {
                 show_qualifier_times: row.show_qualifier_times,
                 default_game_count: row.default_game_count,
                 min_schedule_notice: decode_pginterval(row.min_schedule_notice)?,
+                live_room_open_minutes_before: row.live_room_open_minutes_before,
+                async_room_open_minutes_before: row.async_room_open_minutes_before,
                 open_stream_delay: decode_pginterval(row.open_stream_delay)?,
                 invitational_stream_delay: decode_pginterval(row.invitational_stream_delay)?,
                 retime_window: decode_pginterval(row.retime_window)?,
@@ -3384,18 +3390,22 @@ pub(crate) async fn resign_post(
                     }
                 }
             }
-            if let Some(organizer_channel) = data.discord_organizer_channel {
-                //TODO don't post this message for unconfirmed (or unqualified?) teams
-                organizer_channel
-                    .say(&*discord_ctx.read().await, msg)
-                    .await?;
-            }
             if !keep_record {
                 sqlx::query!("DELETE FROM teams WHERE id = $1", team.id as _)
                     .execute(&mut *transaction)
                     .await?;
             }
             transaction.commit().await?;
+            if let Some(organizer_channel) = data.discord_organizer_channel {
+                // Notification failures must not prevent a resignation from succeeding.
+                //TODO don't post this message for unconfirmed (or unqualified?) teams
+                if let Err(e) = organizer_channel.say(&*discord_ctx.read().await, msg).await {
+                    log::warn!(
+                        "Failed to post resignation notification for team {} in event {series}/{event} to Discord channel {organizer_channel}: {e:?}",
+                        team.id,
+                    );
+                }
+            }
             RedirectOrContent::Redirect(Redirect::to(uri!(teams::get(series, event))))
         })
     } else {

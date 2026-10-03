@@ -1,4 +1,25 @@
 document.addEventListener('DOMContentLoaded', function() {
+    document.querySelectorAll('.ping-role-selection').forEach(function(container) {
+        const language = document.getElementById(container.dataset.roleLanguage);
+        const mode = container.querySelector('[name="role_selection"]');
+        function update() {
+            const selected = mode.value === 'selected';
+            container.querySelector('.ping-role-choices').hidden = !selected;
+            container.querySelectorAll('input[name="role_binding_ids"]').forEach(function(input) {
+                const available = !language || input.parentElement.dataset.roleLanguage === language.value;
+                input.parentElement.hidden = !available;
+                input.disabled = !selected || !available;
+            });
+        }
+        mode.addEventListener('change', update);
+        if (language) language.addEventListener('change', update);
+        container.updateRoleChoices = update;
+        update();
+        const form = container.closest('form');
+        if (form) form.addEventListener('submit', function(event) {
+            if (!validatePingRoles(container)) event.preventDefault();
+        });
+    });
     document.querySelectorAll('[data-ping-timezone]').forEach(function(select) {
         try {
             const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -32,6 +53,15 @@ document.addEventListener('DOMContentLoaded', function() {
         update();
     });
 });
+
+function validatePingRoles(container) {
+    if (container.querySelector('[name="role_selection"]').value === 'selected'
+        && !container.querySelector('input[name="role_binding_ids"]:checked:not(:disabled)')) {
+        alert('Select at least one role in the workflow’s language.');
+        return false;
+    }
+    return true;
+}
 
 function renderScheduledEditor(row, cell) {
     cell.replaceChildren();
@@ -93,6 +123,9 @@ function startEditWorkflow(id) {
     const row = document.querySelector(`tr[data-workflow-id="${id}"]`);
     if (!row) return;
 
+    row.querySelector('.wf-role-summary').hidden = true;
+    row.querySelector('.wf-role-editor').style.display = '';
+
     const type = row.getAttribute('data-type');
     const channel = row.querySelector('.wf-channel').getAttribute('data-value');
     const deleteAfterRace = row.querySelector('.wf-delete-after').getAttribute('data-value');
@@ -125,6 +158,16 @@ function startEditWorkflow(id) {
 function cancelEditWorkflow(id) {
     const row = document.querySelector(`tr[data-workflow-id="${id}"]`);
     if (!row) return;
+
+    const roleCell = row.querySelector('.wf-roles');
+    const roleMode = roleCell.querySelector('[name="role_selection"]');
+    roleMode.value = Array.from(roleMode.options).find(option => option.defaultSelected).value;
+    roleCell.querySelectorAll('input[name="role_binding_ids"]').forEach(input => {
+        input.checked = input.defaultChecked;
+    });
+    roleCell.querySelector('.ping-role-selection').updateRoleChoices();
+    roleCell.querySelector('.wf-role-editor').style.display = 'none';
+    roleCell.querySelector('.wf-role-summary').hidden = false;
 
     const type = row.getAttribute('data-type');
     const channel = row.querySelector('.wf-channel').getAttribute('data-value');
@@ -162,6 +205,13 @@ function saveEditWorkflow(id) {
     const formData = new FormData();
     formData.append('csrf', csrf);
 
+    const roleCell = row.querySelector('.wf-roles');
+    if (!validatePingRoles(roleCell)) return;
+    formData.append('role_selection', roleCell.querySelector('[name="role_selection"]').value);
+    roleCell.querySelectorAll('input[name="role_binding_ids"]:checked:not(:disabled)').forEach(input => {
+        formData.append('role_binding_ids', input.value);
+    });
+
     const channelInput = row.querySelector('input[name="discord_ping_channel"]');
     formData.append('discord_ping_channel', channelInput ? channelInput.value : '');
 
@@ -183,6 +233,18 @@ function saveEditWorkflow(id) {
     fetch(editPath, { method: 'POST', body: formData })
         .then(response => {
             if (response.ok) {
+                const allRoles = formData.get('role_selection') === 'all';
+                roleCell.querySelectorAll('[name="role_selection"] option').forEach(option => {
+                    option.defaultSelected = option.value === formData.get('role_selection');
+                });
+                const selectedIds = formData.getAll('role_binding_ids');
+                const names = [];
+                roleCell.querySelectorAll('input[name="role_binding_ids"]').forEach(input => {
+                    input.defaultChecked = selectedIds.includes(input.value);
+                    if (input.defaultChecked) names.push(input.parentElement.textContent.trim());
+                });
+                roleCell.querySelector('.wf-role-summary').textContent = allRoles
+                    ? 'All roles in this language' : names.join(', ');
                 // Update data attributes with new values
                 const newChannel = formData.get('discord_ping_channel');
                 const newDeleteAfter = formData.get('delete_after_race') === 'true'

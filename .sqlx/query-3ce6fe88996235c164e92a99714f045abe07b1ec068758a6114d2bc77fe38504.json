@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE events SET live_room_open_minutes_before = $1, async_room_open_minutes_before = $2 WHERE series = $3 AND event = $4",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int2",
+        "Int2",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "3ce6fe88996235c164e92a99714f045abe07b1ec068758a6114d2bc77fe38504"
+}

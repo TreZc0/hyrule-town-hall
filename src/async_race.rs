@@ -60,10 +60,11 @@ impl AsyncRaceManager {
                 let mut choices_prepared = false;
                 for (async_part, start_time) in Self::get_async_parts(&race) {
                     if let Some(start_time) = start_time {
-                        let time_until_start = start_time - Utc::now();
-                        if time_until_start > chrono::Duration::zero()
-                            && time_until_start <= chrono::Duration::minutes(30)
-                        {
+                        if cal::room_opening_due(
+                            start_time,
+                            Utc::now(),
+                            chrono::Duration::minutes(i64::from(event.async_room_open_minutes_before)),
+                        ) {
                             if !choices_prepared {
                                 if let Some(config) = event.seed_gen_type.as_ref().and_then(racetime_bot::choice_resolution::config) {
                                     let mut choice_transaction = pool.begin().await?;
@@ -632,9 +633,9 @@ impl AsyncRaceManager {
             WHERE e.discord_async_channel IS NOT NULL
             AND (r.async_start1 IS NOT NULL OR r.async_start2 IS NOT NULL OR r.async_start3 IS NOT NULL)
             AND (
-                (NOT r.async_ready1 AND r.async_start1 <= NOW() + INTERVAL '30 minutes' AND r.async_start1 > NOW()) OR
-                (NOT r.async_ready2 AND r.async_start2 <= NOW() + INTERVAL '30 minutes' AND r.async_start2 > NOW()) OR
-                (NOT r.async_ready3 AND r.async_start3 <= NOW() + INTERVAL '30 minutes' AND r.async_start3 > NOW())
+                (NOT r.async_ready1 AND r.async_start1 <= NOW() + e.async_room_open_minutes_before * INTERVAL '1 minute' AND r.async_start1 > NOW()) OR
+                (NOT r.async_ready2 AND r.async_start2 <= NOW() + e.async_room_open_minutes_before * INTERVAL '1 minute' AND r.async_start2 > NOW()) OR
+                (NOT r.async_ready3 AND r.async_start3 <= NOW() + e.async_room_open_minutes_before * INTERVAL '1 minute' AND r.async_start3 > NOW())
             )
             "#).fetch_all(&mut **transaction).await?;
 

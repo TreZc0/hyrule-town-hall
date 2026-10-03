@@ -1,4 +1,7 @@
+mod roles;
 mod schedule;
+
+pub(crate) use roles::{RoleChoice, RoleSelection};
 
 pub(crate) use schedule::{ScheduledSettings, cutoff_label, scheduled_fields};
 
@@ -65,6 +68,7 @@ pub(crate) struct PingWorkflow {
     pub(crate) discord_ping_channel: Option<i64>,
     pub(crate) delete_after_race: bool,
     pub(crate) workflow_type: PingWorkflowType,
+    pub(crate) roles: RoleSelection,
 }
 
 /// Resolves which workflows apply to the given event. If any event-level workflows exist, those
@@ -134,6 +138,7 @@ async fn resolve_workflows_for_event(
                 discord_ping_channel: row.discord_ping_channel,
                 delete_after_race: row.delete_after_race,
                 workflow_type: wf_type,
+                roles: RoleSelection::load(&mut transaction, row.id).await?,
             });
         }
         out
@@ -201,6 +206,7 @@ async fn resolve_workflows_for_event(
                 discord_ping_channel: row.discord_ping_channel,
                 delete_after_race: row.delete_after_race,
                 workflow_type: wf_type,
+                roles: RoleSelection::load(&mut transaction, row.id).await?,
             });
         }
         out
@@ -528,7 +534,7 @@ async fn check_scheduled_workflow(
         let mut needs_ping = false;
         let mut needed_role_names: Vec<String> = Vec::new();
         for binding in &role_bindings {
-            if binding.is_disabled || binding.language != workflow.language {
+            if !workflow.roles.includes(binding, workflow.language) {
                 continue;
             }
             let confirmed = signups
@@ -730,7 +736,7 @@ async fn check_per_race_workflow(
         let mut role_ids_to_ping: HashSet<i64> = HashSet::new();
         let mut needed_role_names: Vec<String> = Vec::new();
         for binding in &role_bindings {
-            if binding.is_disabled || binding.language != workflow.language {
+            if !workflow.roles.includes(binding, workflow.language) {
                 continue;
             }
             let confirmed = signups
