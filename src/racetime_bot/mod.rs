@@ -4494,15 +4494,17 @@ impl Handler {
             {
                 return Ok(());
             }
-            let cutoff: Option<DateTime<Utc>> = sqlx::query_scalar(
-                r#"SELECT race.start - config.live_entry_close_lead
-                FROM races race JOIN pooled_qualifier_configs config
-                  ON config.series = race.series AND config.event = race.event
-                WHERE race.id = $1"#,
+            let cutoff = event::pooled_qualifiers::live_entry_cutoff(
+                &ctx.global_state.db_pool,
+                i64::from(official.cal_event.race.id),
             )
-            .bind(i64::from(official.cal_event.race.id))
-            .fetch_optional(&ctx.global_state.db_pool).await.to_racetime()?.flatten();
-            let Some(cutoff) = cutoff else { return Ok(()) };
+            .await
+            .to_racetime()?;
+            let Some(cutoff) = cutoff else {
+                // Keep watching in case an organizer enables the cutoff before GO.
+                sleep(Duration::from_secs(30)).await;
+                continue;
+            };
             if let Ok(delay) = (cutoff - Utc::now()).to_std() {
                 // Recheck the schedule so a postponed race doesn't close early.
                 sleep(delay.min(Duration::from_secs(30))).await;
@@ -4563,8 +4565,18 @@ impl Handler {
         let Some(official_data) = official_data.filter(|data| data.is_pooled_live()) else {
             return Ok(());
         };
-        Self::freeze_pooled_live(ctx, Some(official_data)).await?;
-        let present = Self::pooled_live_entrant_ids(data)
+        // At GO, use the actual start and roster from the same race snapshot.
+        // This freezes zero-cutoff races without making their room invite-only.
+        let entrants = Self::pooled_live_entrant_ids(data);
+        event::pooled_qualifiers::freeze_live_eligibility_at_start(
+            &ctx.global_state.db_pool,
+            i64::from(official_data.cal_event.race.id),
+            &entrants,
+            data.started_at.unwrap_or_else(Utc::now),
+        )
+        .await
+        .to_racetime()?;
+        let present = entrants
             .into_iter()
             .map(|entrant| entrant.racetime_id)
             .collect();
@@ -6498,10 +6510,13 @@ impl RaceHandler<GlobalState> for Handler {
                 if !cal_event.race.video_urls.is_empty() {
                     ctx.say("@entrants This race is being restreamed. Please ensure at least one participant has clean audio (no desktop alerts, no gameplay overlays) on stream.").await?;
                 }
+                // Pooled qualifiers use their own cutoff, including 0 to disable it.
+                let prevent_late_joins = event.prevent_late_joins
+                    && !is_pooled_live_qualifier(&cal_event, &event);
                 let stream_delay = cal_event.race.stream_delay(&event);
                 if !stream_delay.is_zero()
                     || event.emulator_settings_reminder
-                    || event.prevent_late_joins
+                    || prevent_late_joins
                 {
                     let delay_until = cal_event
                         .start()
@@ -6527,7 +6542,7 @@ impl RaceHandler<GlobalState> for Handler {
                                     stream_delay.as_secs(),
                                 )).await.expect("failed to send stream delay notice");
                             }
-                            if event.emulator_settings_reminder || event.prevent_late_joins {
+                            if event.emulator_settings_reminder || prevent_late_joins {
                                 sleep(stream_delay).await;
                                 let data = ctx.data().await;
                                 if !Self::should_handle_inner(
@@ -6539,7 +6554,7 @@ impl RaceHandler<GlobalState> for Handler {
                                 {
                                     return;
                                 }
-                                if event.prevent_late_joins
+                                if prevent_late_joins
                                     && data.status.value == RaceStatusValue::Open
                                 {
                                     ctx.set_invitational()

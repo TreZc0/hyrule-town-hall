@@ -315,8 +315,8 @@ async fn qualifiers_form(
                 }
 
                 h2(id = "pooled-live", class = "qualifier-section-title") : "Live race eligibility";
-                p(class = "qualifier-intro") : "At the entry cutoff, the bot makes the room invite-only and checks who can earn a score. A racer only uses an attempt if they are still in the race when it starts.";
-                p(class = "qualifier-intro") : "Racers with an existing result in this pool must declare a re-attempt on their event status page before the entry cutoff for their new score to count. Leaving before the start keeps that declaration pending. Expand a race to see its entrants and reasons for exclusion.";
+                p(class = "qualifier-intro") : "With a positive entry cutoff, the bot makes the room invite-only and checks who can earn a score. With a cutoff of 0, entry stays open and eligibility is checked at actual GO. A racer only uses an attempt if they are still in the race when it starts.";
+                p(class = "qualifier-intro") : "Racers with an existing result in this pool must declare a re-attempt on their event status page before the entry cutoff (or actual GO when disabled) for their new score to count. Leaving before the start keeps that declaration pending. Expand a race to see its entrants and reasons for exclusion.";
                 @if pooled_live_entries.is_empty() {
                     p : "Entrants will appear here once a live race has started.";
                 }

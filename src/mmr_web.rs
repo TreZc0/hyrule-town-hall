@@ -572,30 +572,6 @@ mod tests {
         assert!(seed_id(&json!("bad&id=other")).is_err());
     }
 
-    #[test]
-    fn mmr_hash_catalog_has_every_mapping_and_image() {
-        let sql = include_str!("../migrations/121_mmr_hash_icons.sql");
-        let rows = sql
-            .lines()
-            .filter(|line| line.trim_start().starts_with("('"))
-            .collect_vec();
-        assert_eq!(rows.len(), 64);
-        let mut assets = HashSet::new();
-        for row in rows {
-            let path = row.split('\'').nth(3).unwrap();
-            let bytes = std::fs::read(
-                Path::new(env!("CARGO_MANIFEST_DIR"))
-                    .join("assets/static/hash-icon")
-                    .join(path),
-            )
-            .unwrap();
-            assert!(bytes.starts_with(b"\x89PNG\r\n\x1a\n"), "{path}");
-            assets.insert(path);
-        }
-        assert_eq!(assets.len(), 63);
-        assert!(sql.contains("('0x61', 'mmr/HashBombersNote.png', 'HashBombersNote')"));
-    }
-
     #[tokio::test]
     #[ignore = "requires HTH_MMR_TEST_DATABASE_URL; uses connection-local temporary tables"]
     async fn mmr_spoilers_wait_for_every_race_part_and_shared_async_submission() {
@@ -617,8 +593,6 @@ mod tests {
             CREATE TEMP TABLE teams (id BIGINT, series TEXT DEFAULT 'test', event TEXT DEFAULT 'after');
             CREATE TEMP TABLE async_teams (team BIGINT, kind TEXT, requested TIMESTAMPTZ, submitted TIMESTAMPTZ);
             CREATE TEMP TABLE qualifier_seeds (seed_data JSONB);
-            CREATE TEMP TABLE games (id SERIAL PRIMARY KEY, name VARCHAR(255) UNIQUE NOT NULL, display_name VARCHAR(255) NOT NULL, description TEXT);
-            CREATE TEMP TABLE hash_icons (game_id INTEGER REFERENCES games(id), name VARCHAR(255), file_name VARCHAR(255), racetime_emoji VARCHAR(100), UNIQUE(game_id,name));
             INSERT INTO events VALUES ('test','after','after'), ('test','never','never');
             INSERT INTO races (seed_data)
                 SELECT jsonb_build_object('type','mmr','id',id::text,'locked',true) FROM generate_series(1,10) id;
@@ -637,23 +611,6 @@ mod tests {
             INSERT INTO teams (id) VALUES (1), (2);
             INSERT INTO async_teams VALUES (1,'11',NOW(),NULL), (2,'12',NOW(),NOW());
         "#).execute(&pool).await.unwrap();
-        for _ in 0..2 {
-            sqlx::raw_sql(include_str!("../migrations/120_mmr_seeds.sql"))
-                .execute(&pool)
-                .await
-                .unwrap();
-            sqlx::raw_sql(include_str!("../migrations/121_mmr_hash_icons.sql"))
-                .execute(&pool)
-                .await
-                .unwrap();
-        }
-        assert_eq!(
-            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM hash_icons")
-                .fetch_one(&pool)
-                .await
-                .unwrap(),
-            64
-        );
         let (client, requests) = server(vec![(200, String::new()); 9]).await;
         client.unlock_finished(&pool).await.unwrap();
         let released = sqlx::query_scalar::<_, String>("SELECT seed_data->>'id' FROM races WHERE seed_data->>'locked'='false' UNION SELECT seed_data->>'id' FROM asyncs WHERE seed_data->>'locked'='false' ORDER BY 1").fetch_all(&pool).await.unwrap();

@@ -53,12 +53,12 @@ pub(super) fn label(id: &str, field: &str, title: &str) -> RawHtml<String> {
         "live_entry_close_minutes" => &[
             "How many minutes before the scheduled live race start the racetime.gg room switches to invite-only and the eligible entrant list is frozen. For a 19:00 UTC race and a value of 10, the cutoff is 18:50 UTC. Seeds follow the normal game/event timing independently of this cutoff.",
             "An attempt is recorded only for an eligible entrant still participating at GO. Leaving between the cutoff and GO records no attempt; a declared re-attempt remains available for the next eligible race in that pool.",
-            "Zero places the cutoff at the scheduled start. This is distinct from the private async request deadline and is locked with the structural configuration.",
+            "Zero disables the cutoff: the bot does not make the room invite-only, and eligibility is checked at the actual GO, even if the race starts late. Existing attempt and retry rules still apply. This is distinct from the private async request deadline and is locked with the structural configuration.",
         ],
         "retry_limit" => &[
             "Choose 0 to disable replacement attempts or 1 to allow one retry per entrant across the entire event. It is not one retry for each mode, seed or source. Larger values are not supported.",
             "A retry replaces the counted attempt in the same mode; it is not a best-of-two result. An async retry uses a different physical seed. The original attempt remains in the ledger and an eligible earlier finish can still contribute to its seed’s par.",
-            "Entrants declare the result they want to replace on their status page. The declaration applies to their next eligible live race in that pool, or their next requested async in that pool. No future live race selection is required. A live declaration must predate that race's entry cutoff; leaving before GO preserves it.",
+            "Entrants declare the result they want to replace on their status page. The declaration applies to their next eligible live race in that pool, or their next requested async in that pool. No future live race selection is required. A live declaration must predate that race's entry cutoff, or actual GO when the cutoff is zero; leaving before GO preserves it.",
         ],
         "allocation_spread" => &[
             "Controls how far apart the most-used and least-used private pool seeds may be when assigning entrants. A smaller number favors more even cohort sizes. Enter an integer of at least 1; the initial configuration uses 2.",
@@ -161,7 +161,7 @@ pub(super) fn label(id: &str, field: &str, title: &str) -> RawHtml<String> {
             "A round label is only a display name. Select the scheduled start and qualifier mode separately so the race uses the correct ruleset and counts toward that mode’s required live races.",
         ],
         "race_start" => &[
-            "Scheduled race start, entered directly in UTC. The date picker does not convert your local time. The live entry cutoff is calculated by subtracting the configured cutoff lead from this scheduled start.",
+            "Scheduled race start, entered directly in UTC. The date picker does not convert your local time. For a positive cutoff lead, the live entry cutoff is calculated by subtracting it from this scheduled start. A zero lead disables the cutoff; eligibility is checked at actual GO.",
             "Pooled live races need a start within the qualifier window: at or after requests open and before the last GO boundary. Before the initial activation, linked starts must also be in the future. The seeding race is a separate event workflow.",
         ],
         "race_room" => &[

@@ -1208,12 +1208,47 @@ async fn live_seed_for_race(
     .ok_or(Error::NotLiveQualifier)
 }
 
+/// A zero lead disables the scheduled cutoff, leaving eligibility to actual GO.
+pub(crate) async fn live_entry_cutoff(
+    pool: &PgPool,
+    race_id: i64,
+) -> Result<Option<DateTime<Utc>>, sqlx::Error> {
+    sqlx::query_scalar(
+        r#"SELECT race.start - NULLIF(config.live_entry_close_lead, INTERVAL '0')
+        FROM races race JOIN pooled_qualifier_configs config
+          ON config.series = race.series AND config.event = race.event
+        WHERE race.id = $1"#,
+    )
+    .bind(race_id)
+    .fetch_optional(pool)
+    .await
+    .map(Option::flatten)
+}
+
 /// Freeze the scoring roster at the configured entry cutoff. This is
 /// idempotent so a bot restart can safely repeat the operation.
 pub(crate) async fn freeze_live_eligibility(
     pool: &PgPool,
     race_id: i64,
     entrants: &[LiveEntrant],
+) -> Result<LiveFreezeSummary, Error> {
+    freeze_live_eligibility_inner(pool, race_id, entrants, None).await
+}
+
+pub(crate) async fn freeze_live_eligibility_at_start(
+    pool: &PgPool,
+    race_id: i64,
+    entrants: &[LiveEntrant],
+    started_at: DateTime<Utc>,
+) -> Result<LiveFreezeSummary, Error> {
+    freeze_live_eligibility_inner(pool, race_id, entrants, Some(started_at)).await
+}
+
+async fn freeze_live_eligibility_inner(
+    pool: &PgPool,
+    race_id: i64,
+    entrants: &[LiveEntrant],
+    started_at: Option<DateTime<Utc>>,
 ) -> Result<LiveFreezeSummary, Error> {
     let mut transaction = pool.begin().await?;
     let (seed_id, series, event, mode_id, entry_closed_at) =
@@ -1318,13 +1353,15 @@ pub(crate) async fn freeze_live_eligibility(
                     WHERE attempt.racetime_id=$1 AND attempt.mode_id=$2 AND attempt.counts_for_entrant
                       AND attempt.state IN ('awaiting_verification', 'finalized')
                       AND attempt.retry_banned_at IS NULL AND config.retry_limit>0
-                      AND attempt.retry_declared_at < race.start-config.live_entry_close_lead
+                      AND attempt.retry_declared_at < CASE
+                        WHEN config.live_entry_close_lead = INTERVAL '0' THEN $4
+                        ELSE race.start-config.live_entry_close_lead END
                       AND NOT EXISTS(SELECT 1 FROM qualifier_attempts used
                         WHERE used.racetime_id=$1 AND used.series=attempt.series AND used.event=attempt.event AND used.retry_of IS NOT NULL AND used.state<>'void')
                       AND NOT EXISTS(SELECT 1 FROM qualifier_live_entries reserved
                         WHERE reserved.racetime_entrant_id=$1 AND reserved.series=attempt.series AND reserved.event=attempt.event AND reserved.retry_reserved_at IS NOT NULL
                           AND reserved.retry_committed_at IS NULL AND reserved.retry_released_at IS NULL)"#,
-                ).bind(&racetime_id).bind(mode_id).bind(race_id).fetch_optional(&mut *transaction).await?;
+                ).bind(&racetime_id).bind(mode_id).bind(race_id).bind(started_at).fetch_optional(&mut *transaction).await?;
                 if let Some((original_id, declared_at, declared_by)) = declared {
                     sqlx::query("UPDATE qualifier_live_entries SET retry_original_attempt_id=$2, retry_reserved_at=$3, retry_declared_by=$4, retry_released_at=NULL WHERE id=$1")
                         .bind(entry_id).bind(original_id).bind(declared_at).bind(declared_by)
@@ -2729,9 +2766,36 @@ pub(crate) mod tests {
             .bind(entrants[1].0).fetch_one(&pool).await.unwrap();
         assert_eq!(reservations, 0);
         sqlx::query("UPDATE races SET start=NOW()+INTERVAL '5 minutes' WHERE id=$1").bind(race_id).execute(&pool).await.unwrap();
+        assert!(live_entry_cutoff(&pool, race_id).await.unwrap().unwrap() < Utc::now());
         let late = freeze_live_eligibility(&pool, race_id, &[LiveEntrant { racetime_id: entrants[1].2.clone() }]).await.unwrap();
         assert_eq!(late.excluded, 1);
         assert_eq!(start_live(&pool, race_id, &HashSet::from([entrants[1].2.clone()])).await.unwrap(), 0);
+        // Zero disables the scheduled cutoff. A delayed race uses actual GO
+        // for retry declarations, even when the bot observes GO after a restart.
+        sqlx::query("UPDATE pooled_qualifier_configs SET live_entry_close_lead=INTERVAL '0' WHERE series=$1 AND event=$2")
+            .bind(series).bind(event).execute(&pool).await.unwrap();
+        sqlx::query("UPDATE races SET start=NOW()-INTERVAL '1 hour' WHERE id=$1")
+            .bind(race_id).execute(&pool).await.unwrap();
+        assert_eq!(live_entry_cutoff(&pool, race_id).await.unwrap(), None);
+        let declared_at: DateTime<Utc> = sqlx::query_scalar("SELECT retry_declared_at FROM qualifier_attempts WHERE id=$1")
+            .bind(live_original_id).fetch_one(&pool).await.unwrap();
+        for (go, eligible) in [
+            (declared_at - chrono::Duration::seconds(1), 0),
+            (declared_at, 0),
+            (declared_at + chrono::Duration::seconds(1), 1),
+        ] {
+            sqlx::query("DELETE FROM qualifier_live_entries WHERE seed_id=$1").bind(live_seed_id).execute(&pool).await.unwrap();
+            sqlx::query("UPDATE qualifier_seeds SET entry_closed_at=NULL WHERE id=$1").bind(live_seed_id).execute(&pool).await.unwrap();
+            let roster = [
+                LiveEntrant { racetime_id: entrants[1].2.clone() },
+                LiveEntrant { racetime_id: "zero-cutoff-new-entrant".into() },
+            ];
+            let summary = freeze_live_eligibility_at_start(&pool, race_id, &roster, go).await.unwrap();
+            assert_eq!(summary.eligible, eligible + 1);
+            assert_eq!(summary.excluded, 1 - eligible);
+        }
+        sqlx::query("UPDATE pooled_qualifier_configs SET live_entry_close_lead=INTERVAL '10 minutes' WHERE series=$1 AND event=$2")
+            .bind(series).bind(event).execute(&pool).await.unwrap();
         sqlx::query("UPDATE races SET start=NOW()+INTERVAL '1 hour' WHERE id=$1").bind(race_id).execute(&pool).await.unwrap();
         sqlx::query("DELETE FROM qualifier_live_entries WHERE seed_id=$1").bind(live_seed_id).execute(&pool).await.unwrap();
         sqlx::query("UPDATE qualifier_seeds SET entry_closed_at=NULL WHERE id=$1").bind(live_seed_id).execute(&pool).await.unwrap();

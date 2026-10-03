@@ -2015,7 +2015,9 @@ async fn status_page(
                               ON config.series = seed.series AND config.event = seed.event
                             WHERE seed.series = $1 AND seed.event = $2 AND seed.source = 'live'
                               AND seed.retired_at IS NULL
-                              AND race.start - config.live_entry_close_lead > NOW()
+                              AND race.start IS NOT NULL
+                              AND (config.live_entry_close_lead = INTERVAL '0'
+                                OR race.start - config.live_entry_close_lead > NOW())
                               AND seed.entry_closed_at IS NULL
                             ORDER BY race.start, seed.id"#
                         ).bind(data.series).bind(&data.event).fetch_all(&mut *transaction).await?;
@@ -2076,7 +2078,7 @@ async fn status_page(
                                         } else if matches!(attempt.state.as_str(), "awaiting_verification" | "finalized") && !retry_used && !retry_declared && config.retry_limit > 0 && config.requests_open(Utc::now(), true) && attempt.retry_banned_at.is_none() {
                                             @let errors = mem::take(&mut pooled_errors);
                                             @let mut field_errors = Vec::new();
-                                            p : "Declare before the live entry cutoff. Your next eligible live race in this pool will replace this result at GO, or you can request an async re-attempt after declaring.";
+                                            p : "Declare before the live entry cutoff, or before GO when the cutoff is disabled. Your next eligible live race in this pool will replace this result at GO, or you can request an async re-attempt after declaring.";
                                             : full_form(uri!(event::declare_pooled_retry(data.series, &*data.event)), csrf, html! {
                                                 input(type = "hidden", name = "mode_id", value = mode.id);
                                                 input(type = "hidden", name = "original_attempt_id", value = attempt.id);
@@ -2563,7 +2565,7 @@ async fn status_page(
                                     : attempt.status_summary(score);
                                 }
                                 @if attempt.retry_declared_at.is_some() {
-                                    p : "Retry declared. Join an eligible live qualifier before its entry cutoff.";
+                                    p : "Retry declared. Join an eligible live qualifier before its entry cutoff, or before GO when the cutoff is disabled.";
                                 } else if config.requests_open(Utc::now(), true) && config.retry_limit > 0 && attempt.retry_banned_at.is_none() && matches!(attempt.state.as_str(), "finalized" | "awaiting_verification") {
                                     : full_form(uri!(declare_pooled_retry(data.series, &*data.event)), csrf, html! {
                                         input(type = "hidden", name = "mode_id", value = attempt.mode_id);

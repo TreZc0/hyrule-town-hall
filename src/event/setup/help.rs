@@ -68,7 +68,7 @@ pub(super) fn label(field: &str, title: &str) -> RawHtml<String> {
         ],
         "prevent_late_joins" => &[
             "In the supported official room workflow, the bot switches an open room to invitational after the stream-delay waiting period. This prevents additional entrants from freely joining at that point.",
-            "This is a race-room entry control, not a website signup deadline. Pooled live qualifiers have their own explicit entry cutoff and eligibility rules on the Qualifiers page.",
+            "This is a race-room entry control, not a website signup deadline. Pooled live qualifiers use their own entry cutoff on the Qualifiers page instead of this control; setting that cutoff to 0 keeps entry open until GO.",
         ],
         "fpa_enabled" => &[
             "Makes the Fair Play Agreement workflow available for eligible official races. Entrants can use !fpa to notify race monitors of a technical problem such as a crash.",
