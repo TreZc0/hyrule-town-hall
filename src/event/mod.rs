@@ -1703,7 +1703,7 @@ pub(crate) async fn races(
         : header;
         //TODO copiable calendar link (with link to index for explanation?)
         @if can_create {
-            div(class = "button-row") {
+            div(class = "button-row race-actions") {
                 @match data.match_source() {
                     MatchSource::Manual | MatchSource::Challonge { .. } => a(class = "button", href = uri!(crate::cal::create_race(series, event, _))) : "New Race";
                     //MatchSource::Challonge { .. } => a(class = "button", href = uri!(crate::cal::import_races(series, event))) : "Import"; // disabled due to Challonge pagination bug

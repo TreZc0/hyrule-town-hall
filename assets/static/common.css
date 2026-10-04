@@ -393,6 +393,40 @@ article, form {
   background-color: var(--bg-surface);
 }
 
+.button-row.race-actions {
+  align-items: center;
+  gap: 0.5rem;
+  margin-block: 0.75rem;
+}
+
+.race-actions > form {
+  display: flex;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.button-row.race-actions > .button,
+.button-row.race-actions > form > input[type="submit"] {
+  box-sizing: border-box;
+  justify-content: center;
+  width: 9rem;
+  min-height: 2.75rem;
+  margin: 0;
+  padding: 0.625rem 0.75rem;
+  border-radius: 0.375rem;
+  font: inherit;
+  line-height: 1.25;
+  text-align: center;
+}
+
+.race-actions > .button:focus-visible,
+.race-actions > form > input[type="submit"]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
 textarea {
   width: 100%;
   resize: vertical;

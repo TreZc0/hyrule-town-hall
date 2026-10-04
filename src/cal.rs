@@ -4945,6 +4945,10 @@ pub(crate) async fn race_table(
 #[derive(Clone)]
 pub(crate) enum RaceImportStatus {
     Preparing(tokio::sync::watch::Receiver<String>),
+    Review {
+        races: Vec<Race>,
+        skipped: Vec<(String, String)>,
+    },
     Failed(String),
     Running {
         total: usize,
@@ -4959,9 +4963,61 @@ pub(crate) enum RaceImportStatus {
     },
 }
 
+impl RaceImportStatus {
+    fn discovered(races: Vec<Race>, skipped: Vec<(String, String)>) -> Self {
+        if races.is_empty() {
+            Self::Done {
+                total: 0,
+                completed: 0,
+                failed: Vec::new(),
+                skipped,
+            }
+        } else {
+            Self::Review { races, skipped }
+        }
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct RaceImportJob {
+    series: Series,
+    event: String,
+    status: RaceImportStatus,
+}
+
+impl RaceImportJob {
+    fn for_event(&self, series: Series, event: &str) -> bool {
+        self.series == series && self.event == event
+    }
+
+    /// Claim the reviewed batch before spawning work so repeated confirmations cannot start it twice.
+    fn confirm(
+        &mut self,
+        series: Series,
+        event: &str,
+    ) -> Result<Option<(Vec<Race>, Vec<(String, String)>)>, Status> {
+        if !self.for_event(series, event) {
+            return Err(Status::NotFound);
+        }
+        let RaceImportStatus::Review { races, .. } = &self.status else {
+            return Ok(None);
+        };
+        let running = RaceImportStatus::Running {
+            total: races.len(),
+            completed: 0,
+            failed: Vec::new(),
+        };
+        let RaceImportStatus::Review { races, skipped } = mem::replace(&mut self.status, running)
+        else {
+            unreachable!()
+        };
+        Ok(Some((races, skipped)))
+    }
+}
+
 /// In-memory job map for background race imports, analogous to `event::PracticeSeeds`. Entries are
 /// retained for the process lifetime so repeated status-page reloads after completion stay safe.
-pub(crate) type RaceImportJobs = Arc<tokio::sync::RwLock<HashMap<Uuid, RaceImportStatus>>>;
+pub(crate) type RaceImportJobs = Arc<tokio::sync::RwLock<HashMap<Uuid, RaceImportJob>>>;
 
 pub(crate) async fn import_races_form(
     mut transaction: Transaction<'_, Postgres>,
@@ -5092,9 +5148,9 @@ pub(crate) async fn import_races_form(
                 full_form(
                     uri!(import_races_post(event.series, &*event.event)),
                     csrf,
-                    html! { p : "Import new matches from start.gg and create their scheduling threads. Progress will appear on the next page."; },
+                    html! { p : "Load new matches from start.gg for review. Races and scheduling threads will only be created after you confirm the import."; },
                     ctx.errors().collect_vec(),
-                    "Import",
+                    "Load matches",
                 )
             } else {
                 html! {
@@ -5223,15 +5279,17 @@ pub(crate) async fn import_races_post(
         let job_id = Uuid::new_v4();
         let (progress, status) =
             tokio::sync::watch::channel("Preparing start.gg import…".to_owned());
-        race_import_jobs
-            .write()
-            .await
-            .insert(job_id, RaceImportStatus::Preparing(status));
+        race_import_jobs.write().await.insert(
+            job_id,
+            RaceImportJob {
+                series: event.series,
+                event: event.event.to_string(),
+                status: RaceImportStatus::Preparing(status),
+            },
+        );
         let pool = pool.inner().clone();
         let http_client = http_client.inner().clone();
         let config = config.inner().clone();
-        let discord_ctx = discord_ctx.inner().clone();
-        let race_import_lock = global_state.race_import_lock();
         let jobs = Arc::clone(race_import_jobs.inner());
         let redirect = Redirect::to(uri!(import_races_status(
             event.series,
@@ -5264,26 +5322,15 @@ pub(crate) async fn import_races_post(
             .await;
             match discovery {
                 Ok((races, skips)) => {
-                    progress.send_replace(format!(
-                        "Found {} new matches. Waiting for other imports to finish…",
-                        races.len()
-                    ));
-                    run_race_import(
-                        &pool,
-                        &discord_ctx,
-                        &race_import_lock,
-                        &jobs,
-                        job_id,
-                        races,
-                        skips,
-                    )
-                    .await;
+                    if let Some(job) = jobs.write().await.get_mut(&job_id) {
+                        job.status = RaceImportStatus::discovered(races, skips);
+                    }
                 }
                 Err(error) => {
                     log::warn!("start.gg race import discovery failed: {error}");
-                    jobs.write()
-                        .await
-                        .insert(job_id, RaceImportStatus::Failed(error.to_string()));
+                    if let Some(job) = jobs.write().await.get_mut(&job_id) {
+                        job.status = RaceImportStatus::Failed(error.to_string());
+                    }
                 }
             }
         });
@@ -5391,10 +5438,14 @@ pub(crate) async fn import_races_post(
             let job_id = Uuid::new_v4();
             race_import_jobs.write().await.insert(
                 job_id,
-                RaceImportStatus::Running {
-                    total: races.len(),
-                    completed: 0,
-                    failed: Vec::default(),
+                RaceImportJob {
+                    series: event.series,
+                    event: event.event.to_string(),
+                    status: RaceImportStatus::Running {
+                        total: races.len(),
+                        completed: 0,
+                        failed: Vec::default(),
+                    },
                 },
             );
             let pool = pool.inner().clone();
@@ -5441,18 +5492,21 @@ pub(crate) async fn import_races_post(
 #[rocket::get("/event/<series>/<event>/races/import/status/<job_id>")]
 pub(crate) async fn import_races_status(
     pool: &State<PgPool>,
+    http_client: &State<reqwest::Client>,
     race_import_jobs: &State<RaceImportJobs>,
-    me: Option<User>,
+    me: User,
     uri: Origin<'_>,
+    csrf: Option<CsrfToken>,
     series: Series,
     event: &str,
     job_id: &str,
 ) -> Result<RawHtml<String>, StatusOrError<event::Error>> {
     let job_id = Uuid::parse_str(job_id).map_err(|_| StatusOrError::Status(Status::NotFound))?;
-    let status = race_import_jobs
+    let job = race_import_jobs
         .read()
         .await
         .get(&job_id)
+        .filter(|job| job.for_event(series, event))
         .cloned()
         .ok_or(StatusOrError::Status(Status::NotFound))?;
 
@@ -5460,18 +5514,54 @@ pub(crate) async fn import_races_status(
     let data = event::Data::new(&mut transaction, series, event)
         .await?
         .ok_or(StatusOrError::Status(Status::NotFound))?;
+    if !data.organizers(&mut transaction).await?.contains(&me) && !me.is_global_admin() {
+        return Err(StatusOrError::Status(Status::Forbidden));
+    }
     let header = data
-        .header(&mut transaction, me.as_ref(), Tab::Races, true)
+        .header(&mut transaction, Some(&me), Tab::Races, true)
         .await?;
     let chests = data.chests().await?;
     let content = html! {
         : header;
-        : race_import_status_content(&status);
-        a(href = uri!(event::races(series, event))) : "Back to races";
+        : race_import_status_content(&job.status);
+        @if let RaceImportStatus::Review { ref races, .. } = job.status {
+            : race_table(
+                &mut transaction,
+                None,
+                http_client,
+                &uri,
+                Some(&data),
+                RaceTableOptions {
+                    game_count: true,
+                    show_multistreams: false,
+                    can_edit: false,
+                    show_restream_consent: false,
+                    challonge_import_ctx: None,
+                },
+                races,
+                None,
+                None,
+            ).await?;
+            @let (errors, button) = button_form(
+                uri!(import_races_confirm(series, event, job_id.to_string())),
+                csrf.as_ref(),
+                Vec::new(),
+                "Confirm import",
+            );
+            : errors;
+            div(class = "button-row race-actions") {
+                : button;
+                a(class = "button", href = uri!(event::races(series, event))) : "Cancel";
+            }
+        } else {
+            div(class = "button-row race-actions") {
+                a(class = "button", href = uri!(event::races(series, event))) : "Back to races";
+            }
+        }
     };
     Ok(page(
         transaction,
-        &me,
+        &Some(me),
         &uri,
         PageStyle {
             chests,
@@ -5483,6 +5573,68 @@ pub(crate) async fn import_races_status(
     .await?)
 }
 
+#[rocket::post(
+    "/event/<series>/<event>/races/import/confirm/<job_id>",
+    data = "<form>"
+)]
+pub(crate) async fn import_races_confirm(
+    pool: &State<PgPool>,
+    discord_ctx: &State<RwFuture<DiscordCtx>>,
+    global_state: &State<Arc<racetime_bot::GlobalState>>,
+    race_import_jobs: &State<RaceImportJobs>,
+    me: User,
+    csrf: Option<CsrfToken>,
+    series: Series,
+    event: &str,
+    job_id: &str,
+    form: Form<Contextual<'_, EmptyForm>>,
+) -> Result<Redirect, StatusOrError<event::Error>> {
+    let job_id = Uuid::parse_str(job_id).map_err(|_| StatusOrError::Status(Status::NotFound))?;
+    let mut form = form.into_inner();
+    form.verify(&csrf);
+    if form.context.errors().next().is_some() || form.value.is_none() {
+        return Err(StatusOrError::Status(Status::Forbidden));
+    }
+    let mut transaction = pool.begin().await?;
+    let data = event::Data::new(&mut transaction, series, event)
+        .await?
+        .ok_or(StatusOrError::Status(Status::NotFound))?;
+    if !data.organizers(&mut transaction).await?.contains(&me) && !me.is_global_admin() {
+        return Err(StatusOrError::Status(Status::Forbidden));
+    }
+    transaction.commit().await?;
+    let batch = {
+        let mut jobs = race_import_jobs.write().await;
+        let job = jobs
+            .get_mut(&job_id)
+            .ok_or(StatusOrError::Status(Status::NotFound))?;
+        job.confirm(series, event).map_err(StatusOrError::Status)?
+    };
+    if let Some((races, skipped)) = batch {
+        let pool = pool.inner().clone();
+        let discord_ctx = discord_ctx.inner().clone();
+        let race_import_lock = global_state.race_import_lock();
+        let jobs = Arc::clone(race_import_jobs.inner());
+        tokio::spawn(async move {
+            run_race_import(
+                &pool,
+                &discord_ctx,
+                &race_import_lock,
+                &jobs,
+                job_id,
+                races,
+                skipped,
+            )
+            .await;
+        });
+    }
+    Ok(Redirect::to(uri!(import_races_status(
+        series,
+        event,
+        job_id.to_string()
+    ))))
+}
+
 fn race_import_status_content(status: &RaceImportStatus) -> RawHtml<String> {
     html! {
         @if matches!(status, RaceImportStatus::Preparing(_) | RaceImportStatus::Running { .. }) {
@@ -5491,10 +5643,26 @@ fn race_import_status_content(status: &RaceImportStatus) -> RawHtml<String> {
         article {
             @match status {
                 RaceImportStatus::Preparing(progress) => {
-                    h2 : "Importing Races…";
+                    h2 : "Loading matches…";
                     progress(aria_label = "Preparing race import") {}
                     p(role = "status") : progress.borrow().clone();
+                    p : "You will be able to review the matches before confirming the import. No races or scheduling threads have been created.";
                     p : "This page will refresh automatically.";
+                }
+                RaceImportStatus::Review { races, skipped } => {
+                    h2 : "Review race import";
+                    p : format!("{} new matches are ready to import.", races.len());
+                    p : "Review the matches below, then confirm to create the races and their scheduling threads. Nothing has been imported yet.";
+                    @if !skipped.is_empty() {
+                        details {
+                            summary : format!("{} matches skipped", skipped.len());
+                            ul {
+                                @for (label, reason) in skipped {
+                                    li : format!("{label}: {reason}");
+                                }
+                            }
+                        }
+                    }
                 }
                 RaceImportStatus::Failed(error) => {
                     h2 : "Race Import Failed";
@@ -5508,7 +5676,7 @@ fn race_import_status_content(status: &RaceImportStatus) -> RawHtml<String> {
                     p : "This page will refresh automatically.";
                 }
                 RaceImportStatus::Done { total, completed, failed, skipped } => {
-                    h2 : "Race Import Complete";
+                    h2 : if *total == 0 { "No new matches to import" } else { "Race Import Complete" };
                     p : format!("{completed} of {total} matches imported.");
                     @if *total == 0 && skipped.is_empty() {
                         p : "The bracket provider did not list any matches for this event.";
@@ -5548,26 +5716,27 @@ async fn run_race_import(
     skipped: Vec<(String, String)>,
 ) {
     if races.is_empty() {
-        jobs.write().await.insert(
-            job_id,
-            RaceImportStatus::Done {
+        if let Some(job) = jobs.write().await.get_mut(&job_id) {
+            job.status = RaceImportStatus::Done {
                 total: 0,
                 completed: 0,
                 failed: Vec::new(),
                 skipped,
-            },
-        );
+            };
+        }
         return;
     }
     lock!(race_import_lock = race_import_lock; {
-        jobs.write().await.insert(job_id, RaceImportStatus::Running {
-            total: races.len(), completed: 0, failed: Vec::new(),
-        });
+        if let Some(job) = jobs.write().await.get_mut(&job_id) {
+            job.status = RaceImportStatus::Running {
+                total: races.len(), completed: 0, failed: Vec::new(),
+            };
+        }
         for race in races {
             let label = format!("{:?}", race.source);
             let result = import_race(pool, &*discord_ctx.read().await, race).await;
             let mut jobs = jobs.write().await;
-            if let Some(RaceImportStatus::Running { completed, failed, .. }) = jobs.get_mut(&job_id) {
+            if let Some(RaceImportJob { status: RaceImportStatus::Running { completed, failed, .. }, .. }) = jobs.get_mut(&job_id) {
                 match result {
                     Ok(()) => *completed += 1,
                     Err(e) => failed.push((label, e.to_string())),
@@ -5576,21 +5745,19 @@ async fn run_race_import(
         }
     });
     let mut jobs = jobs.write().await;
-    if let Some(RaceImportStatus::Running {
-        total,
-        completed,
-        failed,
-    }) = jobs.remove(&job_id)
+    if let Some(RaceImportJob { status, .. }) = jobs.get_mut(&job_id)
+        && let RaceImportStatus::Running {
+            total,
+            completed,
+            failed,
+        } = status
     {
-        jobs.insert(
-            job_id,
-            RaceImportStatus::Done {
-                total,
-                completed,
-                failed,
-                skipped,
-            },
-        );
+        *status = RaceImportStatus::Done {
+            total: *total,
+            completed: *completed,
+            failed: mem::take(failed),
+            skipped,
+        };
     }
 }
 
@@ -8916,6 +9083,148 @@ fn qualifier_import_fields(ctx: &Context<'_>, id: &str) -> RawHtml<String> {
 mod race_import_tests {
     use super::*;
 
+    fn discovered_race() -> Race {
+        Race {
+            id: Id::dummy(),
+            series: Series::Standard,
+            event: "import-test".to_owned(),
+            source: Source::Manual,
+            entrants: Entrants::Open,
+            is_qualifier: false,
+            qualifier_number: None,
+            phase: Some("Bracket".to_owned()),
+            round: Some("Final".to_owned()),
+            game: Some(3),
+            scheduling_thread: None,
+            schedule: RaceSchedule::Unscheduled,
+            schedule_updated_at: None,
+            fpa_invoked: false,
+            breaks_used: false,
+            draft: None,
+            seed: seed::Data::default(),
+            video_urls: HashMap::new(),
+            restreamers: HashMap::new(),
+            last_edited_by: None,
+            last_edited_at: None,
+            ignored: false,
+            schedule_locked: false,
+            notified: false,
+            async_notified_1: false,
+            async_notified_2: false,
+            async_notified_3: false,
+            discord_scheduled_event_id: None,
+            volunteer_request_sent: false,
+            volunteer_request_message_id: None,
+            racetime_goal_slug: None,
+            scheduling_deadline: None,
+            restream_consent_required: false,
+            custom_title: None,
+            custom_create_room: true,
+            companion_race_id: None,
+        }
+    }
+
+    #[test]
+    fn discovered_matches_wait_for_review_without_refreshing() {
+        let status = RaceImportStatus::discovered(
+            vec![discovered_race()],
+            vec![("set 2".to_owned(), "<already imported>".to_owned())],
+        );
+        assert!(matches!(status, RaceImportStatus::Review { .. }));
+        let html = race_import_status_content(&status).0;
+        assert!(html.contains("Review race import"));
+        assert!(html.contains("Nothing has been imported yet"));
+        assert!(html.contains("&lt;already imported&gt;"));
+        assert!(!html.contains("location.reload()"));
+    }
+
+    #[test]
+    fn confirmation_claims_the_reviewed_batch_only_once_and_for_its_event() {
+        let mut job = RaceImportJob {
+            series: Series::Standard,
+            event: "import-test".to_owned(),
+            status: RaceImportStatus::discovered(
+                vec![discovered_race()],
+                vec![("set 2".to_owned(), "already imported".to_owned())],
+            ),
+        };
+        assert!(matches!(
+            job.confirm(Series::Standard, "another-event"),
+            Err(Status::NotFound)
+        ));
+        assert!(matches!(
+            job.confirm(Series::League, "import-test"),
+            Err(Status::NotFound)
+        ));
+        assert!(matches!(job.status, RaceImportStatus::Review { .. }));
+        let (races, skipped) = job
+            .confirm(Series::Standard, "import-test")
+            .unwrap()
+            .unwrap();
+        assert_eq!(races.len(), 1);
+        assert_eq!(races[0].game, Some(3));
+        assert_eq!(races[0].round.as_deref(), Some("Final"));
+        assert_eq!(
+            skipped,
+            [("set 2".to_owned(), "already imported".to_owned())]
+        );
+        assert!(matches!(
+            job.status,
+            RaceImportStatus::Running {
+                total: 1,
+                completed: 0,
+                ..
+            }
+        ));
+        assert!(
+            job.confirm(Series::Standard, "import-test")
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn confirmation_cannot_start_a_preparing_failed_or_completed_job() {
+        let (_progress, status) = tokio::sync::watch::channel("Loading matches".to_owned());
+        for status in [
+            RaceImportStatus::Preparing(status),
+            RaceImportStatus::Failed("Provider unavailable".to_owned()),
+            RaceImportStatus::discovered(Vec::new(), Vec::new()),
+        ] {
+            let mut job = RaceImportJob {
+                series: Series::Standard,
+                event: "import-test".to_owned(),
+                status,
+            };
+            assert!(
+                job.confirm(Series::Standard, "import-test")
+                    .unwrap()
+                    .is_none()
+            );
+            assert!(!matches!(job.status, RaceImportStatus::Running { .. }));
+        }
+    }
+
+    #[test]
+    fn empty_discovery_finishes_without_confirmation() {
+        let status = RaceImportStatus::discovered(
+            Vec::new(),
+            vec![("set 1".to_owned(), "already exists".to_owned())],
+        );
+        assert!(matches!(
+            status,
+            RaceImportStatus::Done {
+                total: 0,
+                completed: 0,
+                ..
+            }
+        ));
+        let html = race_import_status_content(&status).0;
+        assert!(html.contains("No new matches to import"));
+        assert!(html.contains("already exists"));
+        assert!(!html.contains("location.reload()"));
+    }
+
     #[test]
     fn discovery_progress_updates_before_total_is_known() {
         let (progress, status) = tokio::sync::watch::channel("Preparing import".to_owned());
@@ -8965,6 +9274,18 @@ mod race_import_tests {
         let _guard = import_lock.0.lock().await;
         let jobs: RaceImportJobs = Arc::default();
         let job_id = Uuid::new_v4();
+        jobs.write().await.insert(
+            job_id,
+            RaceImportJob {
+                series: Series::Standard,
+                event: "import-test".to_owned(),
+                status: RaceImportStatus::Running {
+                    total: 0,
+                    completed: 0,
+                    failed: Vec::new(),
+                },
+            },
+        );
         let skips = vec![("set 1".to_owned(), "already exists".to_owned())];
         tokio::time::timeout(
             Duration::from_secs(1),
@@ -8981,7 +9302,7 @@ mod race_import_tests {
         .await
         .expect("an empty import should finish immediately");
         let jobs = jobs.read().await;
-        let status = jobs.get(&job_id).unwrap();
+        let status = &jobs.get(&job_id).unwrap().status;
         assert!(matches!(
             status,
             RaceImportStatus::Done {

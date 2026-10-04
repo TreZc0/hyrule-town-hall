@@ -1007,6 +1007,7 @@ pub(crate) async fn rocket(
             cal::create_race,
             cal::create_race_post,
             cal::import_races,
+            cal::import_races_confirm,
             cal::import_races_post,
             cal::import_races_status,
             cal::practice_seed,
