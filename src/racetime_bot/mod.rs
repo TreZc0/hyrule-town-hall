@@ -6858,17 +6858,17 @@ impl RaceHandler<GlobalState> for Handler {
                         return;
                     }
 
-                    let restreams_text = restreams_clone
+                    let announcement = restreams_clone
                         .iter()
                         .map(|(video_url, state)| {
                             format!(
-                                "in {} at {video_url}",
+                                "Restream ({}): {video_url}",
                                 state
                                     .language
                                     .expect("preset restreams should have languages assigned")
                             )
                         })
-                        .join(" and "); // don't use English.join_str since racetime.gg parses the comma as part of the URL
+                        .join(" | "); // don't use English.join_str since racetime.gg parses the comma as part of the URL
                     let mut restream_team_slugs = HashSet::new();
                     for video_url in restreams_clone.keys() {
                         let pattern =
@@ -6928,45 +6928,37 @@ impl RaceHandler<GlobalState> for Handler {
                             let _ = ctx_clone.remove_entrant(restreamer).await;
                         }
                     }
+                    let french = matches!(lang_clone, French)
+                        && restreams_clone
+                            .values()
+                            .exactly_one()
+                            .is_ok_and(|state| matches!(state.language, Some(French)));
                     let text = if restream_gate_is_optional {
-                        if_chain! {
-                            if let French = lang_clone;
-                            if let Ok((video_url, state)) = restreams_clone.iter().exactly_one();
-                            if let Some(French) = state.language;
-                            then {
-                                format!("Cette race est restreamée en français chez {video_url}. L'auto-start reste activé jusqu'à ce qu'un race monitor confirme la présence du restream avec '!restream'. Le restreamer pourra ensuite utiliser '!ready' quand le restream sera prêt.")
-                            } else {
-                                format!("This race is being restreamed {restreams_text}. Auto-start remains enabled until a race monitor confirms that the restream is present with '!restream'. The restreamer can then use '!ready' once the restream is ready.")
-                            }
+                        if french {
+                            "L'auto-start reste activé jusqu'à ce qu'un race monitor confirme la présence du restream avec '!restream'. Le restreamer pourra ensuite utiliser '!ready' quand le restream sera prêt.".to_owned()
+                        } else {
+                            "Auto-start remains enabled until a race monitor confirms that the restream is present with '!restream'. The restreamer can then use '!ready' once the restream is ready.".to_owned()
                         }
                     } else if restreams_clone
                         .values()
                         .any(|state| state.restreamer_racetime_id.is_none())
                     {
-                        if_chain! {
-                            if let French = lang_clone;
-                            if let Ok((video_url, state)) = restreams_clone.iter().exactly_one();
-                            if let Some(French) = state.language;
-                            then {
-                                format!("Cette race est restreamée en français chez {video_url} — l'auto-start est désactivé. Les organisateurs du tournoi peuvent utiliser '!monitor' pour devenir race monitor, puis pour inviter les restreamers en tant que race monitor et leur autoriser le force start.")
-                            } else {
-                                format!("This race is being restreamed {restreams_text} — auto-start is disabled. Tournament organizers can use '!monitor' to become race monitors, then invite the restreamer{0} as race monitor{0} to allow them to force-start.", if restreams_clone.len() == 1 { "" } else { "s" })
-                            }
+                        if french {
+                            "L'auto-start est désactivé. Les organisateurs du tournoi peuvent utiliser '!monitor' pour devenir race monitor, puis pour inviter les restreamers en tant que race monitor et leur autoriser le force start.".to_owned()
+                        } else {
+                            format!(
+                                "Auto-start is disabled. Tournament organizers can use '!monitor' to become race monitors, then invite the restreamer{0} as race monitor{0} to allow them to force-start.",
+                                if restreams_clone.len() == 1 { "" } else { "s" }
+                            )
                         }
-                    } else if let Ok((video_url, state)) = restreams_clone.iter().exactly_one() {
-                        if_chain! {
-                            if let French = lang_clone;
-                            if let Some(French) = state.language;
-                            then {
-                                format!("Cette race est restreamée en français chez {video_url} — l'auto start est désactivé. Le restreamer peut utiliser '!ready' pour débloquer l'auto-start.")
-                            } else {
-                                format!("This race is being restreamed {restreams_text} — auto-start is disabled. The restreamer can use '!ready' to unlock auto-start.")
-                            }
+                    } else if restreams_clone.len() == 1 {
+                        if french {
+                            "L'auto start est désactivé. Le restreamer peut utiliser '!ready' pour débloquer l'auto-start.".to_owned()
+                        } else {
+                            "Auto-start is disabled. The restreamer can use '!ready' to unlock auto-start.".to_owned()
                         }
                     } else {
-                        format!(
-                            "This race is being restreamed {restreams_text} — auto-start is disabled. Restreamers can use '!ready' once the restream is ready. Auto-start will be unlocked once all restreams are ready."
-                        )
+                        "Auto-start is disabled. Restreamers can use '!ready' once the restream is ready. Auto-start will be unlocked once all restreams are ready.".to_owned()
                     };
                     let text = if restream_team_slugs.is_empty() {
                         text
@@ -6985,7 +6977,10 @@ impl RaceHandler<GlobalState> for Handler {
                             )
                         }
                     };
-                    let _ = ctx_clone.send_message(&text, true, Vec::default()).await;
+                    let _ = ctx_clone
+                        .send_message(&announcement, true, Vec::default())
+                        .await;
+                    let _ = ctx_clone.say(text).await;
                 });
             }
             lock!(@read state = this.race_state; {
