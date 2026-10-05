@@ -232,6 +232,11 @@ pub(crate) async fn get(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>)
                                 h3 : "HTH opens the room and distributes the seed";
                                 p : "At the configured times, The Mayor can create the racetime.gg room, invite entrants, apply restream delay, promote the monitor, announce event information, roll or fetch the seed, and post the seed link and hash.";
                                 p : "Exact timing depends on the event configuration. A room or seed may be created immediately when a race is scheduled at short notice.";
+                                p {
+                                    : "Race monitors and event organizers can use ";
+                                    code : "!forceroll";
+                                    : " in the racetime.gg room to bring forward the scheduled seed roll and reveal. Finish any settings draft first. The seed is posted as soon as it is ready, with the usual settings and resolved choices; the official start time stays the same.";
+                                }
                             }
                         }
                         div(class = "hth-info-guide-step") {
@@ -667,7 +672,7 @@ pub(crate) async fn get(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>)
 
             section(id = "faq", class = "hth-info-section hth-info-final hth-info-faq-section") {
                 h2 : "FAQ: something went wrong—what now?";
-                p : "These are the usual recovery paths. Commands must be used in the match's scheduling thread, and some are limited to runners or event organizers. If an event has stricter rules, follow those rules first.";
+                p : "These are the usual recovery paths. Use Discord commands in the match's scheduling thread and racetime.gg commands in the race room, as described below. Some commands are limited to runners, race monitors, or event organizers. If an event has stricter rules, follow those rules first.";
                 div(class = "hth-info-faq") {
                     details {
                         summary : "We scheduled the wrong time. How do we change it?";
@@ -725,6 +730,15 @@ pub(crate) async fn get(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>)
                             code : "/restart-room";
                             : " in the scheduling thread. It only works for a live-scheduled race whose start time has arrived and whose room was cleared after inactivity; it does not open an upcoming room early.";
                         }
+                    }
+                    details {
+                        summary : "Can we get the seed before its scheduled release?";
+                        p {
+                            : "Before the race starts, a race monitor or event organizer can type ";
+                            code : "!forceroll";
+                            : " without arguments in the official racetime.gg room. Any settings draft must be complete and a seed roll must already be scheduled. This works with all supported seed types and posts the seed as soon as it is ready, using the normal settings and choice resolution.";
+                        }
+                        p : "If a seed is already being generated or is prepared and waiting for release, HTH uses that seed. Repeating the command does not create another seed, and a seed that has already been posted cannot be rerolled with this command. The official start time stays the same. Without this command, normal seed generation and release timings are unchanged.";
                     }
                     details {
                         summary : "A volunteer can no longer make the race.";
