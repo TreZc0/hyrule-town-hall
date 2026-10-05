@@ -177,7 +177,7 @@ pub(crate) async fn listen(
                                     break
                                 }
                             }
-                            Ok(ClientMessage::Seed { is_official, spoiler_seed, no_password, no_web: _, seed_gen_type, args }) => {
+                            Ok(ClientMessage::Seed { is_official: _, spoiler_seed, no_password, no_web: _, seed_gen_type, args }) => {
                                 let mut transaction = match global_state.db_pool.begin().await {
                                     Ok(transaction) => transaction,
                                     Err(e) => {
@@ -189,7 +189,6 @@ pub(crate) async fn listen(
                                 let unlock_spoiler_log = racetime_bot::seed_command_unlock_spoiler_log(
                                     spoiler_seed,
                                     None,
-                                    is_official,
                                 );
                                 let mut rx = match seed_gen_type.parse_seed_command(&mut transaction, &global_state, unlock_spoiler_log, no_password, &args).await {
                                     Ok(SeedCommandParseResult::ConfiguredEvent { .. }) => {

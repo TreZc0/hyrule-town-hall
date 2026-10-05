@@ -42,6 +42,7 @@ use {
 };
 
 mod seed_timing;
+mod spoiler_unlock;
 
 pub(crate) mod report;
 
@@ -417,7 +418,6 @@ pub(crate) enum UnlockSpoilerLog {
 pub(crate) fn seed_command_unlock_spoiler_log(
     spoiler_seed: bool,
     configured_mode: Option<&str>,
-    is_official: bool,
 ) -> UnlockSpoilerLog {
     if spoiler_seed {
         UnlockSpoilerLog::Now
@@ -427,10 +427,6 @@ pub(crate) fn seed_command_unlock_spoiler_log(
             "immediately" => UnlockSpoilerLog::Now,
             _ => UnlockSpoilerLog::Never,
         }
-    } else if is_official {
-        // Legacy/non-event callers cannot supply a DB setting. Retain the old
-        // official-race default for those callers only.
-        UnlockSpoilerLog::After
     } else {
         UnlockSpoilerLog::Never
     }
@@ -3959,15 +3955,15 @@ mod configured_choice_tests {
     #[test]
     fn official_seed_commands_honor_database_spoiler_policy() {
         assert_eq!(
-            seed_command_unlock_spoiler_log(false, Some("never"), true),
+            seed_command_unlock_spoiler_log(false, Some("never")),
             UnlockSpoilerLog::Never,
         );
         assert_eq!(
-            seed_command_unlock_spoiler_log(false, Some("after"), true),
+            seed_command_unlock_spoiler_log(false, Some("after")),
             UnlockSpoilerLog::After,
         );
         assert_eq!(
-            seed_command_unlock_spoiler_log(true, Some("never"), true),
+            seed_command_unlock_spoiler_log(true, Some("never")),
             UnlockSpoilerLog::Now,
         );
     }
@@ -4846,7 +4842,6 @@ impl Handler {
             self.official_data
                 .as_ref()
                 .map(|official_data| official_data.event.spoiler_unlock.as_str()),
-            self.is_official(),
         )
     }
 
@@ -6103,7 +6098,8 @@ impl Handler {
                     if let UnlockSpoilerLog::Progression | UnlockSpoilerLog::After = self.effective_unlock_spoiler_log(false /* we may try to unlock a log that's already unlocked, but other than that, this assumption doesn't break anything */) {
                         match seed.files() {
                             Some(seed::Files::MmrWeb { .. }) => {} // Completion reconciliation checks every linked race.
-                            Some(seed::Files::AlttprDoorRando { .. }) => unreachable!(),
+                            // Door Rando and both OWR builds (regular/tournament) share this seed type.
+                            Some(seed::Files::AlttprDoorRando { .. }) => {} // Spoilers remain private.
                             Some(seed::Files::MidosHouse { file_stem, locked_spoiler_log_path }) => if let Some(locked_spoiler_log_path) = locked_spoiler_log_path {
                                 lock!(@write seed_metadata = ctx.global_state.seed_metadata; seed_metadata.remove(&*file_stem));
                                 fs::rename(&locked_spoiler_log_path, Path::new(seed::DIR).join(format!("{file_stem}_Spoiler.json"))).await.to_racetime()?;
@@ -7813,7 +7809,10 @@ impl RaceHandler<GlobalState> for Handler {
                 }
             }
             RaceStatusValue::Finished => {
-                self.unlock_spoiler_log(ctx).await?;
+                spoiler_unlock::best_effort(
+                    &format!("https://{}{}", racetime_host(), data.url),
+                    self.unlock_spoiler_log(ctx),
+                ).await;
                 // An undo followed by another finish needs a fresh confirmation window,
                 // even when the spoiler log was already released on the first finish.
                 if !matches!(old_race_data.status.value, RaceStatusValue::Finished) {
@@ -8049,7 +8048,10 @@ impl RaceHandler<GlobalState> for Handler {
                         }
                     }
                 }
-                self.unlock_spoiler_log(ctx).await?;
+                spoiler_unlock::best_effort(
+                    &format!("https://{}{}", racetime_host(), data.url),
+                    self.unlock_spoiler_log(ctx),
+                ).await;
                 if matches!(
                     self.official_data
                         .as_ref()
