@@ -38,7 +38,7 @@ pub(super) fn configuration(
                 } else {
                     ul { @for error in readiness { li : error; } }
                 }
-                @if locked { p : "Format and scoring settings are locked. Deadlines and the pause control can still be updated. Pausing does not unlock the format."; }
+                @if locked { p : "Format and scoring settings are locked. Deadlines, the live entry cutoff, and the pause control can still be updated. Pausing does not unlock the format."; }
             }
             form(id = "pooled-config-form", action = uri!(super::post_pooled_config(series, event)).to_string(), method = "post") {
                 : csrf;
@@ -51,7 +51,7 @@ pub(super) fn configuration(
                     ]),
                     ("Run limits & retries", "These limits apply across the qualifier workflow, regardless of the mode an entrant selects.", vec![
                         ("async_run_limit_hours", "Async time limit (hours)", "Measured from GO; the submission deadline can shorten it.", config.run_limit().num_hours().to_string(), "1", None, "1"),
-                        ("live_entry_close_minutes", "Live entry cutoff (minutes before start)", "0 disables the cutoff and keeps entry open until GO. Positive values switch the room to invite-only before the scheduled start.", (i64::from(config.live_entry_close_lead.days) * 1440 + config.live_entry_close_lead.microseconds / 60_000_000).to_string(), "0", None, "1"),
+                        ("live_entry_close_minutes", "Live entry cutoff (minutes before start)", "0 keeps entry open until GO. Positive values switch the room to invite-only before the scheduled start. Changes apply to races whose eligibility has not yet frozen; existing eligibility stays unchanged.", (i64::from(config.live_entry_close_lead.days) * 1440 + config.live_entry_close_lead.microseconds / 60_000_000).to_string(), "0", None, "1"),
                         ("retry_limit", "Retries per entrant, across all modes", "0 disables retries. 1 allows one replacement in the event.", config.retry_limit.to_string(), "0", Some("1"), "1"),
                         ("allocation_spread", "Maximum assignment count difference", "Balances the number of entrants assigned to each seed.", config.allocation_spread.to_string(), "1", None, "1"),
                     ]),
@@ -73,7 +73,7 @@ pub(super) fn configuration(
                             @for (name, title, hint, value, min, max, step) in fields {
                                 : field(name, name, title, hint, html! {
                                     input(id = name, type = "number", name = name, min? = (!min.is_empty()).then_some(min), max? = max, step = step,
-                                        value = ctx.field_value(name).unwrap_or(&value), required? = true, readonly? = locked, aria_describedby = format!("{name}-hint"));
+                                        value = ctx.field_value(name).unwrap_or(&value), required? = true, readonly? = locked && name != "live_entry_close_minutes", aria_describedby = format!("{name}-hint"));
                                 });
                             }
                         }
@@ -380,7 +380,12 @@ mod tests {
                 .select("input[type=number][readonly]")
                 .unwrap()
                 .count(),
-            12
+            11
+        );
+        assert!(
+            locked_document
+                .select_first("input[name=live_entry_close_minutes]:not([readonly]):not([disabled])")
+                .is_ok()
         );
         assert_eq!(
             locked_document
