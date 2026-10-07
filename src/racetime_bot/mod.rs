@@ -3731,23 +3731,29 @@ pub(crate) fn owr_choices_description_with_labels(
     config: &seed_gen_type::OwrEventConfig,
     labels: &[(&str, String)],
 ) -> String {
-    let active: Vec<String> = choices
-        .iter()
-        .sorted_by_key(|(key, _)| key.as_str())
-        .filter_map(|(key, value)| {
-            let entry = choice_entry(config, key);
-            if !choice_entry_affects_seed(entry) {
-                return None;
-            }
-            let label = choice_entry_label_with_labels(entry, key, labels);
-            configured_choice_label(entry, &label, *value)
-        })
-        .collect();
-    if active.is_empty() {
-        "base settings".to_string()
-    } else {
-        active.join(", ")
+    let mut active = Vec::new();
+    let mut random = Vec::new();
+    for (key, value) in choices.iter().sorted_by_key(|(key, _)| key.as_str()) {
+        let entry = choice_entry(config, key);
+        if !choice_entry_affects_seed(entry) {
+            continue;
+        }
+        let label = choice_entry_label_with_labels(entry, key, labels);
+        if *value == ChoiceValue::Random && entry
+            .and_then(|entry| entry.get("value_labels"))
+            .and_then(|labels| labels.get("random"))
+            .and_then(serde_json::Value::as_str)
+            .is_none()
+        {
+            random.push(label);
+        } else if let Some(label) = configured_choice_label(entry, &label, *value) {
+            active.push(label);
+        }
     }
+    let plural = if random.len() == 1 { "choice" } else { "choices" };
+    let random = English.join_str_opt(random).map(|labels| format!("random {plural} for {labels}"));
+    English.join_str_opt(English.join_str_opt(active).into_iter().chain(random))
+        .unwrap_or_else(|| "base settings".to_owned())
 }
 
 pub(crate) fn owr_choices_description(

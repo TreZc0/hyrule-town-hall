@@ -166,7 +166,7 @@ fn room_preamble_shows_base_and_agreed_settings_without_leaking_random_outcomes(
                     selected_baseline: None,
                 };
                 let expected = if value == ChoiceValue::Random && timing == Timing::SeedRolling {
-                    "random choice: Option"
+                    "random choice for Option"
                 } else if enabled {
                     "Option"
                 } else {
