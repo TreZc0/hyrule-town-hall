@@ -304,7 +304,7 @@ impl AsyncRaceManager {
                 .filter(|snapshot| snapshot.visible_at(racetime_bot::choice_resolution::Timing::RoomOpening))
             {
                 content.push_line("");
-                content.push(snapshot.display_for_config(true, &config.for_display(race, event.draft_kind_str.is_some())));
+                content.push(racetime_bot::baselines::discord_summary(&snapshot.display_for_config(true, &config.for_display(race, event.draft_kind_str.is_some()))));
                 content.push_line("");
             }
         }
@@ -493,7 +493,7 @@ impl AsyncRaceManager {
             let thread = ChannelId::new(thread_id as u64);
             thread.say(discord_ctx, content.build()).await?;
             if let Some(summary) = settings_summary {
-                for chunk in racetime_bot::baselines::message_chunks(&summary) {
+                for chunk in racetime_bot::baselines::message_chunks(&racetime_bot::baselines::discord_summary(&summary)) {
                     thread.send_message(discord_ctx, CreateMessage::new().content(chunk).allowed_mentions(serenity::all::CreateAllowedMentions::default())).await?;
                 }
             }
@@ -2068,7 +2068,7 @@ pub(crate) async fn handle_ready_qualifier(
     let start_button = start_button(&run);
 
     if let Some(summary) = seed.seed_data.as_ref().and_then(|data| racetime_bot::baselines::seed_summary(data, true)) {
-        for chunk in racetime_bot::baselines::message_chunks(&summary) {
+        for chunk in racetime_bot::baselines::message_chunks(&racetime_bot::baselines::discord_summary(&summary)) {
             interaction.channel_id.send_message(ctx, CreateMessage::new().content(chunk).allowed_mentions(serenity::all::CreateAllowedMentions::default())).await?;
         }
     }

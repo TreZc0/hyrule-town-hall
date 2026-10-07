@@ -2697,7 +2697,7 @@ impl SeedRollUpdate {
                 let summary = saved_summary.or_else(|| seed.seed_data.as_ref().and_then(|data| baselines::seed_summary(data, false)))
                     .or_else(|| resolved_randoms.map(|s| format!("Final settings - {s}")));
                 if let Some(summary) = summary {
-                    for chunk in baselines::message_chunks(&baselines::racetime_summary(&summary)) { ctx.say(chunk).await?; }
+                    for message in baselines::racetime_messages(&summary) { ctx.say(message).await?; }
                 }
 
                 if let Some(VersionedBranch::Tww { identifier, github_url, .. }) = version {
@@ -6232,7 +6232,7 @@ impl RaceHandler<GlobalState> for Handler {
                     if let Some(snapshot) = choice_resolution::ensure(&mut transaction, &cal_event.race, config, choice_resolution::Timing::RoomOpening).await.to_racetime()?
                         .filter(|snapshot| snapshot.visible_at(choice_resolution::Timing::RoomOpening)) {
                         let display_config = config.for_display(&cal_event.race, event.draft_kind_str.is_some());
-                        pending_sends.push(PendingSend::Say(baselines::racetime_summary(&snapshot.display_for_config(!matches!(cal_event.kind, cal::EventKind::Normal), &display_config))));
+                        pending_sends.extend(baselines::racetime_messages(&snapshot.display_for_config(!matches!(cal_event.kind, cal::EventKind::Normal), &display_config)).into_iter().map(PendingSend::Say));
                     }
                 }
                 let mut entrants = Vec::default();

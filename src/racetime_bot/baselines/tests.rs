@@ -501,14 +501,14 @@ fn pooled_modes_keep_explicit_baselines_and_chunks_keep_all_text() {
 }
 
 #[test]
-fn racetime_settings_have_separators_even_when_chat_collapses_newlines() {
+fn racetime_settings_use_separate_messages_for_rules_and_unapplied_choices() {
     assert_eq!(
-        racetime_summary("Choices resolved at seed reveal:\nhovering and moldorm bouncing ALLOWED\nno stream delay\nPseudoboots: applied"),
-        "Choices resolved at seed reveal: hovering and moldorm bouncing ALLOWED, no stream delay, Pseudoboots: applied",
+        racetime_messages("Choices resolved at seed reveal:\nhovering and moldorm bouncing ALLOWED\nno stream delay\nPseudoboots: applied"),
+        ["Choices resolved at seed reveal: Applied: Pseudoboots", "Rules: hovering and moldorm bouncing ALLOWED; no stream delay"],
     );
     assert_eq!(
-        racetime_summary("Choices resolved at room opening:\nBaseline: Crosskeys\nBoots: applied\nFlute: not applied"),
-        "Choices resolved at room opening: Baseline: Crosskeys, Boots: applied, Flute: not applied",
+        racetime_messages("Choices resolved at room opening:\nBaseline: Crosskeys\nBoots: applied\nFlute: not applied"),
+        ["Choices resolved at room opening: Baseline: Crosskeys Applied: Boots", "Not applied: Flute"],
     );
 }
 
