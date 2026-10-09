@@ -2,6 +2,11 @@
 use super::seed_gen_type::OwrEventConfig;
 use crate::{draft, prelude::*};
 
+mod choice_summary;
+
+pub(super) use choice_summary::messages as racetime_messages;
+pub(crate) use choice_summary::discord_summary;
+
 pub(crate) fn validate_match(event: &event::Data<'_>, games: i16) -> Result<(), String> {
     use super::seed_gen_type::{AlttprDrSource, SeedGenType};
     if let Some(
@@ -415,18 +420,6 @@ pub(crate) fn seed_summary(data: &serde_json::Value, is_async: bool) -> Option<S
             .and_then(|v| v.as_str())
             .map(|s| format!("Final settings - {s}"))
     }
-}
-
-/// Racetime chat collapses line breaks, so separate settings explicitly.
-pub(super) fn racetime_summary(text: &str) -> String {
-    let mut summary = String::new();
-    for line in text.lines().map(str::trim).filter(|line| !line.is_empty()) {
-        if !summary.is_empty() {
-            summary.push_str(if summary.ends_with(':') { " " } else { ", " });
-        }
-        summary.push_str(line);
-    }
-    summary
 }
 
 /// Keep individual messages below both Discord and Racetime limits, even for long custom labels.

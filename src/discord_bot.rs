@@ -9,8 +9,9 @@ use {
     serenity::all::{
         CacheHttp, CommandDataOptionValue, Content, CreateActionRow, CreateAllowedMentions,
         CreateButton, CreateCommand, CreateCommandOption, CreateForumPost, CreateInputText,
-        CreateInteractionResponse, CreateInteractionResponseMessage, CreateMessage, CreateModal,
-        CreateThread, EditInteractionResponse, EditMessage, EditRole, EditThread, InputTextStyle,
+        CreateInteractionResponse, CreateInteractionResponseFollowup, CreateInteractionResponseMessage,
+        CreateMessage, CreateModal, CreateThread, EditInteractionResponse, EditMessage, EditRole,
+        EditThread, InputTextStyle,
     },
     serenity_utils::{builder::ErrorNotifier, handler::HandlerMethods as _},
     sqlx::{Database, Decode, Encode, postgres::types::PgInterval, types::Json},
@@ -387,6 +388,35 @@ impl GenericInteraction for ComponentInteraction {
     ) -> serenity::Result<Message> {
         self.edit_response(cache_http, builder).await
     }
+}
+
+// Complete the private defer before posting a public followup: Discord otherwise
+// treats the first followup as the deferred reply and keeps it ephemeral.
+async fn finish_async_schedule_response(
+    ctx: &DiscordCtx,
+    interaction: &CommandInteraction,
+    public_content: String,
+    private_content: Option<String>,
+) -> serenity::Result<()> {
+    interaction
+        .edit_response(
+            ctx,
+            EditInteractionResponse::new()
+                .content(private_content.as_deref().unwrap_or(&public_content)),
+        )
+        .await?;
+    interaction
+        .create_followup(
+            ctx,
+            CreateInteractionResponseFollowup::new()
+                .ephemeral(false)
+                .content(public_content),
+        )
+        .await?;
+    if private_content.is_none() {
+        interaction.delete_response(ctx).await?;
+    }
+    Ok(())
 }
 
 async fn apply_live_schedule(
@@ -3265,29 +3295,32 @@ pub(crate) fn configure_builder(
                         } else if interaction.data.id == command_ids.forfeit_async {
                             forfeit_async_command(ctx, &interaction).await?;
                         } else if interaction.data.id == command_ids.schedule_async {
+                            // Acknowledge before database and permission checks; errors and private
+                            // room links must remain visible only to the caller.
+                            interaction.create_response(ctx, CreateInteractionResponse::Defer(CreateInteractionResponseMessage::new()
+                                .ephemeral(true)
+                            )).await?;
                             let game = interaction.data.options.get(1).map(|option| match option.value {
                                 CommandDataOptionValue::Integer(game) => i16::try_from(game).expect("game number out of range"),
                                 _ => panic!("unexpected slash command option type"),
                             });
-                            if let Some((mut transaction, mut race, team)) = check_scheduling_thread_permissions(ctx, interaction, game, true, None, false, false, SchedulingRaceFilter::UnplayedAsyncPart).await? {
+                            if let Some((mut transaction, mut race, team)) = check_scheduling_thread_permissions(ctx, interaction, game, true, None, true, false, SchedulingRaceFilter::UnplayedAsyncPart).await? {
                                 let event = race.event(&mut transaction).await?;
                                 let is_organizer = event.organizers(&mut transaction).await?.into_iter().any(|organizer| organizer.discord.is_some_and(|discord| discord.id == interaction.user.id));
                                 let was_scheduled = !matches!(race.schedule, RaceSchedule::Unscheduled);
                                 if !race.supports_async() {
-                                    interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
-                                        .ephemeral(true)
+                                    interaction.edit_response(ctx, EditInteractionResponse::new()
                                         .content("Custom matches can only be scheduled as live races.")
-                                    )).await?;
+                                    ).await?;
                                     transaction.rollback().await?;
                                 } else if event.automated_asyncs && event.discord_async_channel.is_none() {
-                                    interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
-                                        .ephemeral(true)
+                                    interaction.edit_response(ctx, EditInteractionResponse::new()
                                         .content(if let French = event.language {
                                             format!("Désolé, la planification automatique des asyncs est mal configurée pour cet événement (canal Discord manquant). Merci de contacter un organisateur du tournoi.")
                                         } else {
                                             format!("Sorry, automated async scheduling is misconfigured for this event (missing Discord channel). Please contact a tournament organizer.")
                                         })
-                                    )).await?;
+                                    ).await?;
                                     transaction.rollback().await?;
                                 } else if speedgaming_export::LEGACY_IMPORT_ENABLED && let Some(speedgaming_slug) = &event.speedgaming_slug {
                                     let response_content = if was_scheduled {
@@ -3299,23 +3332,21 @@ pub(crate) fn configure_builder(
                                             .push("/submit> to schedule races for this event.")
                                             .build()
                                     };
-                                    interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
-                                        .ephemeral(true)
+                                    interaction.edit_response(ctx, EditInteractionResponse::new()
                                         .content(response_content)
-                                    )).await?;
+                                    ).await?;
                                     transaction.rollback().await?;
                                 } else if team.is_some() && event.asyncs_allowed() || is_organizer {
                                         if let Some(ref team) = team {
                                             let async_part = async_part_for_team(&race, team).expect("participant team missing from race entrants");
                                             if async_part_has_been_played(&mut transaction, &race, async_part).await? {
-                                                interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
-                                                    .ephemeral(true)
+                                                interaction.edit_response(ctx, EditInteractionResponse::new()
                                                     .content(if let Some(game) = race.game {
                                                         format!("Sorry, your part of Game {game} has already started and can no longer be rescheduled.")
                                                     } else {
                                                         "Sorry, your part of this async has already started and can no longer be rescheduled.".to_owned()
                                                     })
-                                                )).await?;
+                                                ).await?;
                                                 transaction.rollback().await?;
                                                 return Ok(())
                                             }
@@ -3350,18 +3381,16 @@ pub(crate) fn configure_builder(
                                                 note.build()
                                         });
                                         if (start - Utc::now()).to_std().map_or(false, |schedule_notice| schedule_notice > Duration::from_secs(365 * 24 * 60 * 60)) {
-                                            interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
-                                                .ephemeral(true)
+                                            interaction.edit_response(ctx, EditInteractionResponse::new()
                                                 .content(if let French = event.language {
                                                     format!("Désolé, les races ne peuvent pas être planifiées plus d'un an à l'avance.")
                                                 } else {
                                                     format!("Sorry, races cannot be scheduled more than 1 year in advance.")
                                                 })
-                                            )).await?;
+                                            ).await?;
                                             transaction.rollback().await?;
                                         } else if (start - Utc::now()).to_std().map_or(true, |schedule_notice| schedule_notice < event.min_schedule_notice) {
-                                            interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
-                                                .ephemeral(true)
+                                            interaction.edit_response(ctx, EditInteractionResponse::new()
                                                 .content(if event.min_schedule_notice <= Duration::default() {
                                                     if let French = event.language {
                                                         format!("Désolé mais cette date est dans le passé.")
@@ -3375,7 +3404,7 @@ pub(crate) fn configure_builder(
                                                         format!("Sorry, races must be scheduled at least {} in advance.", English.format_duration(event.min_schedule_notice, true))
                                                     }
                                                 })
-                                            )).await?;
+                                            ).await?;
                                             transaction.rollback().await?;
                                         } else {
                                             let (kind, was_scheduled) = match race.entrants {
@@ -3391,10 +3420,9 @@ pub(crate) fn configure_builder(
                                                         race.save(&mut transaction).await?;
                                                         (cal::EventKind::Async2, was_scheduled)
                                                     } else {
-                                                        interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
-                                                            .ephemeral(false)
+                                                        interaction.edit_response(ctx, EditInteractionResponse::new()
                                                             .content("Sorry, only participants in this race can use this command for now. Please contact TreZ to edit the schedule.") //TODO allow TOs to schedule as async (with team parameter)
-                                                        )).await?;
+                                                        ).await?;
                                                         transaction.rollback().await?;
                                                         return Ok(())
                                                     }
@@ -3416,10 +3444,9 @@ pub(crate) fn configure_builder(
                                                         race.save(&mut transaction).await?;
                                                         (cal::EventKind::Async3, was_scheduled)
                                                     } else {
-                                                        interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
-                                                            .ephemeral(false)
+                                                        interaction.edit_response(ctx, EditInteractionResponse::new()
                                                             .content("Sorry, only participants in this race can use this command for now. Please contact TreZ to edit the schedule.") //TODO allow TOs to schedule as async (with team parameter)
-                                                        )).await?;
+                                                        ).await?;
                                                         transaction.rollback().await?;
                                                         return Ok(())
                                                     }
@@ -3441,6 +3468,7 @@ pub(crate) fn configure_builder(
                                                     )
                                                 };
                                                 lock!(new_room_lock = new_room_lock; {
+                                                    let mut private_room_message = None;
                                                     let should_post_regular_response = if let Some((is_room_url, mut msg, _notification_channel)) = racetime_bot::create_room(&mut transaction, ctx, &racetime_host, &racetime_config.client_id, &racetime_config.client_secret, &http_client, clean_shutdown, &extra_room_senders, &cal_event, &event).await? {
                                                         if is_room_url && cal_event.is_private_async_part() {
                                                             msg = match cal_event.race.entrants {
@@ -3461,11 +3489,13 @@ pub(crate) fn configure_builder(
                                                                 }
                                                             }
                                                         }
-                                                        interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
-                                                            .ephemeral(cal_event.is_private_async_part()) //TODO create public response without room link
-                                                            .content(msg)
-                                                        )).await?;
-                                                        cal_event.is_private_async_part()
+                                                        if cal_event.is_private_async_part() {
+                                                            private_room_message = Some(msg);
+                                                            true
+                                                        } else {
+                                                            finish_async_schedule_response(ctx, interaction, msg, None).await?;
+                                                            false
+                                                        }
                                                     } else {
                                                         true
                                                     };
@@ -3481,10 +3511,7 @@ pub(crate) fn configure_builder(
                                                         let response_content = response_content
                                                             .push(". The async thread will be opened momentarily.")
                                                             .build();
-                                                        interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
-                                                            .ephemeral(false)
-                                                            .content(response_content)
-                                                        )).await?;
+                                                        finish_async_schedule_response(ctx, interaction, response_content, private_room_message).await?;
                                                     }
                                                     transaction.commit().await?;
                                                 });
@@ -3745,26 +3772,21 @@ pub(crate) fn configure_builder(
                                                 } else {
                                                     response_content
                                                 };
-                                                interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
-                                                    .ephemeral(false)
-                                                    .content(response_content)
-                                                )).await?;
+                                                finish_async_schedule_response(ctx, interaction, response_content, None).await?;
                                             }
                                         }
                                     } else {
-                                                interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
-                                                    .ephemeral(true)
+                                                interaction.edit_response(ctx, EditInteractionResponse::new()
                                                     .content(if let French = event.language {
                                                         "Désolé, cela n'est pas un timestamp au format de Discord. Vous pouvez utiliser <https://hammertime.cyou/> pour en générer un, ou entrer directement la date — par exemple `vendredi 20h UTC`, `demain 15h EST` ou `vendredi 20h Europe/Paris`."
                                                     } else {
                                                         "Sorry, I couldn't parse that time. Try natural language like `friday 8pm UTC`, `tomorrow 15:00 EST`, or `friday 20:00 Europe/Berlin`, or use <https://hammertime.cyou/> to generate a Discord timestamp."
                                                     })
-                                        )).await?;
+                                        ).await?;
                                         transaction.rollback().await?;
                                     }
                                 } else {
-                                    interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
-                                        .ephemeral(true)
+                                    interaction.edit_response(ctx, EditInteractionResponse::new()
                                         .content(if event.asyncs_allowed() && race.supports_async() {
                                             if let French = event.language {
                                                 "Désolé, seuls les participants de cette race et les organisateurs peuvent utiliser cette commande."
@@ -3774,7 +3796,7 @@ pub(crate) fn configure_builder(
                                         } else {
                                             "Sorry, asyncing races is not allowed for this event."
                                         })
-                                    )).await?;
+                                    ).await?;
                                     transaction.rollback().await?;
                                 }
                             }

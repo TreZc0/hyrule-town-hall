@@ -783,10 +783,9 @@ pub(crate) async fn post_pooled_config(
         || old.score_offset != value.score_offset
         || old.score_minimum != value.score_minimum
         || old.score_maximum != value.score_maximum
-        || old.run_limit().num_hours() != value.async_run_limit_hours
-        || i64::from(old.live_entry_close_lead.days) * 1440
-            + old.live_entry_close_lead.microseconds / 60_000_000
-            != value.live_entry_close_minutes;
+        || old.run_limit().num_hours() != value.async_run_limit_hours;
+    // The live entry cutoff remains editable: races whose eligibility is
+    // already frozen retain their stored roster, while future freezes use it.
     if (old.settings_locked_at.is_some() && structural_changed)
         || (old.signup_closed() && old.submissions_close_at != submissions_close)
     {
@@ -3155,6 +3154,39 @@ pub(crate) mod route_tests {
                 .unwrap();
                 assert_eq!(unchanged, saved_config);
             }
+        }
+        // Exercise saves through the locked organizer form, preserving its
+        // schedule. Other format fields must still reject edits.
+        assert!(!saved_config["settings_locked_at"].is_null());
+        let dates = {
+            use kuchiki::traits::TendrilSink as _;
+            let document = kuchiki::parse_html().one(private.clone());
+            let mut dates = url::form_urlencoded::Serializer::new(String::new());
+            for input in document.select("#pooled-config-form input[type=datetime-local]").unwrap() {
+                let attrs = input.attributes.borrow();
+                dates.append_pair(attrs.get("name").unwrap(), attrs.get("value").unwrap_or(""));
+            }
+            dates.finish()
+        };
+        for (minutes, run_limit, expected) in [
+            (20, 12, Status::SeeOther),
+            (0, 12, Status::SeeOther),
+            (10, 13, Status::Conflict),
+            (10, 12, Status::SeeOther),
+        ] {
+            let body = config_body
+                .replace("live_entry_close_minutes=10", &format!("live_entry_close_minutes={minutes}"))
+                .replace("async_run_limit_hours=12", &format!("async_run_limit_hours={run_limit}"));
+            let response = client.post(format!("{base}/pooled-config"))
+                .header(ContentType::Form)
+                .private_cookie(rocket::http::Cookie::new("csrf_token", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="))
+                .header(rocket::http::Header::new("x-test-user", staff.to_string()))
+                .body(encode(&format!("{body}&{dates}")))
+                .dispatch().await;
+            assert_eq!(response.status(), expected);
+            let actual: i32 = sqlx::query_scalar("SELECT (EXTRACT(EPOCH FROM live_entry_close_lead)/60)::INT FROM pooled_qualifier_configs WHERE series=$1 AND event=$2")
+                .bind(series).bind(event).fetch_one(pool).await.unwrap();
+            assert_eq!(actual, if expected == Status::Conflict { 0 } else { minutes });
         }
         let response = client
             .post(format!("{base}/pooled-mode"))

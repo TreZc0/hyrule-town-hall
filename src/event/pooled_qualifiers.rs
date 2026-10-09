@@ -2857,6 +2857,28 @@ pub(crate) mod tests {
         sqlx::query("UPDATE qualifier_seeds SET entry_closed_at=NULL WHERE id=$1").bind(live_seed_id).execute(&pool).await.unwrap();
         declare_retry(&pool, entrants[1].0, mode_id, live_original_id, entrants[1].1).await.unwrap();
         freeze_live_eligibility(&pool, race_id, &[LiveEntrant { racetime_id: entrants[1].2.clone() }]).await.unwrap();
+        let frozen_entries: Vec<serde_json::Value> = sqlx::query_scalar(
+            "SELECT to_jsonb(entry) FROM qualifier_live_entries entry WHERE seed_id=$1 ORDER BY id",
+        ).bind(live_seed_id).fetch_all(&pool).await.unwrap();
+        // Changing or disabling the cutoff must preserve all eligibility and
+        // retry reservations, including when GO supplies a different roster.
+        for minutes in [20_i32, 0, 10] {
+            sqlx::query("UPDATE pooled_qualifier_configs SET live_entry_close_lead=make_interval(mins => $3) WHERE series=$1 AND event=$2")
+                .bind(series).bind(event).bind(minutes).execute(&pool).await.unwrap();
+            let scheduled_start: DateTime<Utc> = sqlx::query_scalar("SELECT start FROM races WHERE id=$1")
+                .bind(race_id).fetch_one(&pool).await.unwrap();
+            assert_eq!(
+                live_entry_cutoff(&pool, race_id).await.unwrap(),
+                (minutes > 0).then_some(scheduled_start - chrono::Duration::minutes(i64::from(minutes))),
+            );
+            let summary = freeze_live_eligibility_at_start(&pool, race_id, &[], Utc::now()).await.unwrap();
+            assert!(summary.already_frozen);
+            assert_eq!(summary.eligible, 1);
+            let unchanged: Vec<serde_json::Value> = sqlx::query_scalar(
+                "SELECT to_jsonb(entry) FROM qualifier_live_entries entry WHERE seed_id=$1 ORDER BY id",
+            ).bind(live_seed_id).fetch_all(&pool).await.unwrap();
+            assert_eq!(unchanged, frozen_entries);
+        }
         let repeated_freeze = freeze_live_eligibility(&pool, race_id, &[]).await.unwrap();
         assert!(repeated_freeze.already_frozen);
         assert_eq!(repeated_freeze.eligible, 1);

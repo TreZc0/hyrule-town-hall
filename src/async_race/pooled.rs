@@ -499,7 +499,7 @@ async fn deliver(pool: &PgPool, http: &Arc<Http>, id: i64, claim: &str) -> Resul
         "revealed" => {
             if row.delivery_messages.get("seed").is_none() {
                 if let Some(summary) = racetime_bot::baselines::seed_summary(&row.seed_data, true) {
-                    for chunk in racetime_bot::baselines::message_chunks(&summary) {
+                    for chunk in racetime_bot::baselines::message_chunks(&racetime_bot::baselines::discord_summary(&summary)) {
                         channel.send_message(http, CreateMessage::new().content(chunk).allowed_mentions(serenity::all::CreateAllowedMentions::default())).await?;
                     }
                 }
