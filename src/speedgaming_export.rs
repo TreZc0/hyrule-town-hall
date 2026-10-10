@@ -107,6 +107,7 @@ pub(crate) enum DeliveryState {
     Succeeded,
     Failed,
     Ambiguous,
+    Ignored,
 }
 
 #[derive(Debug, Clone)]
@@ -811,15 +812,20 @@ async fn sync_races_for_export(
     http_client: &reqwest::Client,
     export: &ExportConfig,
 ) -> Result<(), Error> {
-    let race_ids = sqlx::query_scalar!(
+    let race_ids = sqlx::query_scalar::<_, Id<Races>>(
         r#"
-        SELECT id AS "id: Id<Races>" FROM races
-        WHERE series = $1 AND event = $2 AND ignored = false AND start > NOW()
-        ORDER BY start, id
+        SELECT r.id FROM races r
+        WHERE r.series = $1 AND r.event = $2 AND NOT r.ignored AND r.start > NOW()
+          AND NOT EXISTS (
+              SELECT 1 FROM speedgaming_race_exports re
+              WHERE re.race_id = r.id AND re.export_id = $3 AND re.state = 'ignored'
+          )
+        ORDER BY r.start, r.id
     "#,
-        export.series as _,
-        &export.event
     )
+    .bind(export.series)
+    .bind(&export.event)
+    .bind(export.id)
     .fetch_all(pool)
     .await?;
 
@@ -907,10 +913,11 @@ async fn claim_volunteer_export(
             state = 'in_progress', attempt_count = speedgaming_volunteer_exports.attempt_count + 1,
             last_attempt_at = NOW(), last_error = NULL, submitted_at=NULL,
             episode_id=EXCLUDED.episode_id,role=EXCLUDED.role,remote_id=NULL
-        WHERE speedgaming_volunteer_exports.state='pending'
+        WHERE speedgaming_volunteer_exports.state<>'ignored' AND (
+           speedgaming_volunteer_exports.state='pending'
            OR (speedgaming_volunteer_exports.state='failed' AND
                speedgaming_volunteer_exports.last_attempt_at<NOW()-INTERVAL '5 minutes')
-           OR speedgaming_volunteer_exports.episode_id IS DISTINCT FROM EXCLUDED.episode_id
+           OR speedgaming_volunteer_exports.episode_id IS DISTINCT FROM EXCLUDED.episode_id)
         RETURNING true AS "claimed!"
     "#,
     )
@@ -1276,14 +1283,14 @@ async fn poll_export(
         .await?;
 
     for episode in episodes {
-        let race_id = sqlx::query_scalar!(
+        let race_id = sqlx::query_scalar::<_, Id<Races>>(
             r#"
-            SELECT race_id AS "race_id: Id<Races>" FROM speedgaming_race_exports
-            WHERE export_id = $1 AND episode_id = $2
+            SELECT race_id FROM speedgaming_race_exports
+            WHERE export_id = $1 AND episode_id = $2 AND state <> 'ignored'
         "#,
-            export.id,
-            episode.id
         )
+        .bind(export.id)
+        .bind(episode.id)
         .fetch_optional(pool)
         .await?;
         let Some(race_id) = race_id else { continue };

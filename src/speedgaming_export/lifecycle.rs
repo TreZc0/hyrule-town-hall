@@ -372,7 +372,7 @@ async fn retire(pool: &PgPool, remote: &RemoteRace) -> Result<(), Error> {
     let mut tx = pool.begin().await?;
     // The episode identifies the remote race. Reset applications only
     // after remote deletion is verified, so a recreated episode gets new signups.
-    sqlx::query("DELETE FROM speedgaming_volunteer_exports WHERE export_id=$1 AND episode_id=$2")
+    sqlx::query("DELETE FROM speedgaming_volunteer_exports WHERE export_id=$1 AND episode_id=$2 AND state<>'ignored'")
         .bind(remote.export_id)
         .bind(remote.episode_id)
         .execute(&mut *tx)
@@ -513,6 +513,7 @@ pub(crate) async fn reconcile(pool: &PgPool, http: &reqwest::Client) -> Result<(
         re.episode_id,re.match_id,re.synced_start,re.state::text AS state
         FROM speedgaming_race_exports re JOIN speedgaming_exports e ON e.id=re.export_id
         WHERE re.episode_id IS NOT NULL AND e.enabled AND e.archived_at IS NULL
+          AND re.state<>'ignored'
           AND (re.state IN ('pending','succeeded') OR re.last_attempt_at IS NULL
                OR re.last_attempt_at < NOW()-INTERVAL '5 minutes')
         ORDER BY re.export_id,re.race_id",

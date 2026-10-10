@@ -1218,6 +1218,7 @@ pub(crate) async fn rocket(
             event::speedgaming_export::add_export,
             event::speedgaming_export::update_export,
             event::speedgaming_export::delete_export,
+            event::speedgaming_export::resolve_issues,
             event::speedgaming_export::sync_all,
         ],
     )
