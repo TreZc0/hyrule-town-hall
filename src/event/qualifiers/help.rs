@@ -93,7 +93,7 @@ pub(super) fn label(id: &str, field: &str, title: &str) -> RawHtml<String> {
         ],
         "seed_gen_type" => &[
             "Selects the generator for this mode’s private seeds and linked live qualifier races. It is independent of the main event generator in Setup.",
-            "ALTTPR OWR uses the regular build; ALTTPR OWR (tourney build) uses the tournament installation. Door Rando supports mutual_choices with one baseline or mystery_pool with a weights URL; its boothisman preset source is not supported here. Avianart needs a default preset, and TWWR needs a settings permalink.",
+            "ALTTPR OWR uses the regular build; ALTTPR OWR (tourney build) uses the tournament installation. Door Rando (stable) and Door Rando (latest) support mutual_choices with one baseline or mystery_pool with a weights URL; the boothisman preset source is not supported here. Avianart needs a default preset, and TWWR needs a settings permalink.",
             "Every selection needs matching Baseline settings JSON. Choose the generator first, use the examples in that field’s help, and verify your intended settings before generating the pool. The ALTTPR generator selection chooses the installation. MMR instead uses branch, version and settings in its configuration; use a pinned version and a full flat MMR settings export.",
         ],
         "seed_config" => &[

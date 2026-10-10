@@ -1116,7 +1116,9 @@ impl GlobalState {
     pub(crate) fn roll_mystery_pool_seed(
         self: Arc<Self>,
         weights_url: String,
+        build: seed_gen_type::DoorRandoBuild,
     ) -> mpsc::Receiver<SeedRollUpdate> {
+        let (python, directory) = build.installation();
         let (update_tx, update_rx) = mpsc::channel(128);
         let update_tx2 = update_tx.clone();
         tokio::spawn(
@@ -1143,8 +1145,8 @@ impl GlobalState {
 
                 for attempt in 0..=MAX_RETRIES {
                     let output = match timeout(Duration::from_secs(180), async {
-                        Command::new(ALTTPR_PYTHON)
-                            .current_dir("/opt/alttpr")
+                        Command::new(python)
+                            .current_dir(directory)
                             .arg("Mystery.py")
                             .arg("--weights")
                             .arg(yaml_path)
@@ -1346,7 +1348,9 @@ impl GlobalState {
         config: seed_gen_type::OwrEventConfig,
         resolved: HashMap<String, bool>,
         resolved_randoms: Option<String>,
+        build: seed_gen_type::DoorRandoBuild,
     ) -> mpsc::Receiver<SeedRollUpdate> {
+        let (python, directory) = build.installation();
         let uuid = Uuid::new_v4();
         if config.baselines.is_some() {
             return alttpr_dr_error_receiver(RollError::AlttprDe("Select a baseline before rolling.".into()));
@@ -1355,8 +1359,8 @@ impl GlobalState {
             Ok((yaml_content, report)) => baselines::with_presentation(self.roll_alttpr_dr_seed(
                 yaml_content,
                 uuid,
-                ALTTPR_PYTHON,
-                "/opt/alttpr",
+                python,
+                directory,
                 false,
                 "DR_",
                 resolved_randoms,
@@ -1369,7 +1373,9 @@ impl GlobalState {
     pub(crate) fn roll_boothisman_dr_seed(
         self: Arc<Self>,
         alttprde_options: AlttprDeRaceOptions,
+        build: seed_gen_type::DoorRandoBuild,
     ) -> mpsc::Receiver<SeedRollUpdate> {
+        let (python, directory) = build.boothisman_installation();
         let (update_tx, update_rx) = mpsc::channel(128);
         let update_tx2 = update_tx.clone();
         tokio::spawn(async move {
@@ -1396,8 +1402,8 @@ impl GlobalState {
             tokio::fs::File::from_std(yaml_file.reopen().at(&yaml_file)?).write_all(updated_yaml_content.as_bytes()).await.at(&yaml_file)?;
             const MAX_RETRIES: u8 = 4;
             for attempt in 0..=MAX_RETRIES {
-                let output = Command::new(PYTHON)
-                    .current_dir("../ALttPDoorRandomizer")
+                let output = Command::new(python)
+                    .current_dir(directory)
                     .arg("DungeonRandomizer.py")
                     .arg("--customizer")
                     .arg(yaml_path)
@@ -1521,8 +1527,10 @@ impl GlobalState {
             SeedGenType::Mmr { config } => self.roll_mmr_seed(config.clone(), crate::mmr_web::Purpose::Competition, Some(cal_event.race.id), None, unlock_spoiler_log),
             SeedGenType::AlttprDoorRando {
                 source: AlttprDrSource::Boothisman,
+                build,
                 ..
             } => {
+                let (python, directory) = build.boothisman_installation();
                 let alttprde_options = AlttprDeRaceOptions::for_race(
                     &self.db_pool,
                     &cal_event.race,
@@ -1548,8 +1556,8 @@ impl GlobalState {
                     Ok(yaml) => self.roll_alttpr_dr_seed(
                         yaml,
                         uuid,
-                        PYTHON,
-                        "../ALttPDoorRandomizer",
+                        python,
+                        directory,
                         true,
                         "DR_",
                         None,
@@ -1559,6 +1567,7 @@ impl GlobalState {
             }
             SeedGenType::AlttprDoorRando {
                 source: AlttprDrSource::MutualChoices { config },
+                build,
                 ..
             } => {
                 let config = match config.for_race(&cal_event.race, event).await {
@@ -1579,12 +1588,13 @@ impl GlobalState {
                 let resolved_randoms_str =
                     snapshot.as_ref().and_then(|snapshot| snapshot.reveal(&config, &labels));
                 let presentation = snapshot.as_ref().map(|snapshot| snapshot.seed_presentation(&config));
-                baselines::with_presentation(self.roll_mutual_choices_dr_seed(config.clone(), resolved, resolved_randoms_str), presentation)
+                baselines::with_presentation(self.roll_mutual_choices_dr_seed(config.clone(), resolved, resolved_randoms_str, *build), presentation)
             }
             SeedGenType::AlttprDoorRando {
                 source: AlttprDrSource::MysteryPool { weights_url },
+                build,
                 ..
-            } => self.roll_mystery_pool_seed(weights_url.clone()),
+            } => self.roll_mystery_pool_seed(weights_url.clone(), *build),
             SeedGenType::AlttprAvianart { default_preset, .. } => {
                 let game_num = cal_event.race.game.unwrap_or(1);
                 let preset = cal_event
@@ -3812,6 +3822,7 @@ mod configured_choice_tests {
             SeedGenType::Owr { config: OwrEventConfig::default(), build: OwrBuild::Tournament },
             SeedGenType::AlttprDoorRando {
                 source: AlttprDrSource::MysteryPool { weights_url: String::new() },
+                build: seed_gen_type::DoorRandoBuild::Stable,
                 practice_modes: Vec::new(), practice_choices: Vec::new(),
             },
             SeedGenType::AlttprAvianart { default_preset: None, practice_presets: Vec::new() },
@@ -5354,6 +5365,7 @@ impl Handler {
         cal_event: cal::Event,
         language: Language,
         article: &'static str,
+        build: seed_gen_type::DoorRandoBuild,
     ) {
         let official_start = cal_event
             .start()
@@ -5388,6 +5400,7 @@ impl Handler {
         .await;
         let seed_options_str = alttprde_options.as_seed_options_str();
         let race_options_str = alttprde_options.as_race_options_str();
+        let (python, directory) = build.boothisman_installation();
         let uuid = Uuid::new_v4();
         let receiver = async {
             let url = alttprde_options.seed_url().ok_or_else(|| {
@@ -5405,8 +5418,8 @@ impl Handler {
             Ok::<_, RollError>(ctx.global_state.clone().roll_alttpr_dr_seed(
                 yaml,
                 uuid,
-                PYTHON,
-                "../ALttPDoorRandomizer",
+                python,
+                directory,
                 true,
                 "DR_",
                 None,
@@ -5483,6 +5496,7 @@ impl Handler {
         cal_event: cal::Event,
         language: Language,
         article: &'static str,
+        build: seed_gen_type::DoorRandoBuild,
     ) {
         let official_start = cal_event
             .start()
@@ -5544,6 +5558,7 @@ impl Handler {
             config,
             resolved,
             resolved_randoms_str,
+            build,
         );
         self.roll_seed_inner(
             ctx,
@@ -5636,6 +5651,7 @@ impl Handler {
         weights_url: String,
         language: Language,
         article: &'static str,
+        build: seed_gen_type::DoorRandoBuild,
     ) {
         let official_start = cal_event
             .start()
@@ -5645,7 +5661,7 @@ impl Handler {
         self.roll_seed_inner(
             ctx,
             Some(delay_until),
-            ctx.global_state.clone().roll_mystery_pool_seed(weights_url),
+            ctx.global_state.clone().roll_mystery_pool_seed(weights_url, build),
             language,
             article,
             "mystery seed".to_string(),
@@ -5756,23 +5772,26 @@ impl Handler {
         match official_data.event.seed_gen_type.clone() {
             Some(seed_gen_type::SeedGenType::AlttprDoorRando {
                 source: seed_gen_type::AlttprDrSource::Boothisman,
+                build,
                 ..
             }) => {
-                self.roll_boothisman_dr_seed(ctx, cal_event, language, article)
+                self.roll_boothisman_dr_seed(ctx, cal_event, language, article, build)
                     .await
             }
             Some(seed_gen_type::SeedGenType::AlttprDoorRando {
                 source: seed_gen_type::AlttprDrSource::MutualChoices { .. },
+                build,
                 ..
             }) => {
-                self.roll_mutual_choices_dr_seed(ctx, cal_event, language, article)
+                self.roll_mutual_choices_dr_seed(ctx, cal_event, language, article, build)
                     .await
             }
             Some(seed_gen_type::SeedGenType::AlttprDoorRando {
                 source: seed_gen_type::AlttprDrSource::MysteryPool { weights_url },
+                build,
                 ..
             }) => {
-                self.roll_mystery_pool_seed(ctx, cal_event, weights_url, language, article)
+                self.roll_mystery_pool_seed(ctx, cal_event, weights_url, language, article, build)
                     .await
             }
             Some(seed_gen_type::SeedGenType::AlttprAvianart { default_preset, .. }) => {

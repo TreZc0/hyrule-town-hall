@@ -159,10 +159,10 @@ pub(super) fn modes(
                             : field(&id, "seed_gen_type", "Seed generator", "This mode’s generator, independent of the event’s main settings.", html! {
                                 select(id = &id, name = "seed_gen_type", required? = true, aria_describedby = format!("{id}-hint")) {
                                     option(value = "", selected? = mode.seed_gen_type.is_empty(), disabled? = true) : "Choose a generator…";
-                                    @for (value, title) in [("owr", "ALTTPR OWR"), ("owr_tourney", "ALTTPR OWR (tourney build)"), ("alttpr_dr", "ALTTPR Door Rando"), ("alttpr_avianart", "ALTTPR Avianart"), ("twwr", "The Wind Waker Randomizer"), ("mmr", "Majora’s Mask Randomizer")] {
+                                    @for (value, title) in [("owr", "ALTTPR OWR"), ("owr_tourney", "ALTTPR OWR (tourney build)"), ("alttpr_dr", "ALTTPR Door Rando (stable)"), ("alttpr_dr_latest", "ALTTPR Door Rando (latest)"), ("alttpr_avianart", "ALTTPR Avianart"), ("twwr", "The Wind Waker Randomizer"), ("mmr", "Majora’s Mask Randomizer")] {
                                         option(value = value, selected? = mode.seed_gen_type == value) : title;
                                     }
-                                    @if !mode.seed_gen_type.is_empty() && !["owr", "owr_tourney", "alttpr_dr", "alttpr_avianart", "twwr", "mmr"].contains(&mode.seed_gen_type.as_str()) {
+                                    @if !mode.seed_gen_type.is_empty() && !["owr", "owr_tourney", "alttpr_dr", "alttpr_dr_latest", "alttpr_avianart", "twwr", "mmr"].contains(&mode.seed_gen_type.as_str()) {
                                         option(value = &mode.seed_gen_type, selected? = true) : format!("{} (check pooled support)", mode.seed_gen_type);
                                     }
                                 }
@@ -356,6 +356,8 @@ mod tests {
             for (value, label) in [
                 ("owr", "ALTTPR OWR"),
                 ("owr_tourney", "ALTTPR OWR (tourney build)"),
+                ("alttpr_dr", "ALTTPR Door Rando (stable)"),
+                ("alttpr_dr_latest", "ALTTPR Door Rando (latest)"),
             ] {
                 let option = select
                     .as_node()

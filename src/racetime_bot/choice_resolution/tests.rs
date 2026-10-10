@@ -462,7 +462,7 @@ async fn database_timing_retries_concurrency_and_per_game_storage() {
     base_config.choices.as_object_mut().unwrap().remove("delay");
     sqlx::query("INSERT INTO races (id, team1, team2) VALUES (7, 1, 2)").execute(&pool).await.unwrap();
     for_seed(&pool, &race(7), &base_config).await.unwrap().unwrap();
-    for slug in ["owr", "alttpr_dr"] {
+    for slug in ["owr", "alttpr_dr", "alttpr_dr_latest"] {
         let mut value = serde_json::to_value(&base_config).unwrap();
         value["source"] = json!("mutual_choices");
         let kind = SeedGenType::from_db(Some(slug), Some(&value)).unwrap();

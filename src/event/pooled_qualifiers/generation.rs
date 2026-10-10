@@ -38,12 +38,14 @@ pub(crate) fn roll(
         SeedGenType::Owr { config, build } => state.roll_pooled_owr_seed(config.clone(), *build),
         SeedGenType::AlttprDoorRando {
             source: AlttprDrSource::MutualChoices { config },
+            build,
             ..
-        } => state.roll_mutual_choices_dr_seed(config.clone(), HashMap::new(), None),
+        } => state.roll_mutual_choices_dr_seed(config.clone(), HashMap::new(), None, *build),
         SeedGenType::AlttprDoorRando {
             source: AlttprDrSource::MysteryPool { weights_url },
+            build,
             ..
-        } => state.roll_mystery_pool_seed(weights_url.clone()),
+        } => state.roll_mystery_pool_seed(weights_url.clone(), *build),
         SeedGenType::AlttprAvianart {
             default_preset: Some(preset),
             ..

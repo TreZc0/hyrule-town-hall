@@ -89,11 +89,42 @@ impl OwrBuild {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(unix, derive(Protocol))]
+pub(crate) enum DoorRandoBuild {
+    Stable,
+    Latest,
+}
+
+impl DoorRandoBuild {
+    pub(crate) fn installation(self) -> (&'static str, &'static str) {
+        match self {
+            Self::Stable => (super::ALTTPR_PYTHON, "/opt/alttpr"),
+            Self::Latest => {
+                #[cfg(unix)]
+                let python = "/opt/alttpr_latest/.venv/bin/python";
+                #[cfg(windows)]
+                let python = "/opt/alttpr_latest/.venv/Scripts/python.exe";
+                (python, "/opt/alttpr_latest")
+            }
+        }
+    }
+
+    pub(crate) fn boothisman_installation(self) -> (&'static str, &'static str) {
+        match self {
+            // Preserve the existing preset generator installation for stable events.
+            Self::Stable => (super::PYTHON, "../ALttPDoorRandomizer"),
+            Self::Latest => self.installation(),
+        }
+    }
+}
+
 /// Which seed generator an event uses, stored in `events.seed_gen_type`.
 #[derive(Debug, Clone)]
 #[cfg_attr(unix, derive(Protocol))]
 pub(crate) enum SeedGenType {
     AlttprDoorRando {
+        build: DoorRandoBuild,
         source: AlttprDrSource,
         /// Modes to display in the practice seed mode dropdown (from seed_config).
         practice_modes: Vec<PracticeOption>,
@@ -148,7 +179,7 @@ impl SeedGenType {
         seed_config: Option<&serde_json::Value>,
     ) -> Option<Self> {
         match seed_gen_type? {
-            "alttpr_dr" => {
+            name @ ("alttpr_dr" | "alttpr_dr_latest") => {
                 let source_str = seed_config
                     .and_then(|c| c.get("source"))
                     .and_then(|v| v.as_str());
@@ -186,6 +217,7 @@ impl SeedGenType {
                     .and_then(|v| serde_json::from_value(v.clone()).ok())
                     .unwrap_or_default();
                 Some(Self::AlttprDoorRando {
+                    build: if name == "alttpr_dr_latest" { DoorRandoBuild::Latest } else { DoorRandoBuild::Stable },
                     source,
                     practice_modes,
                     practice_choices,
@@ -411,6 +443,52 @@ impl std::str::FromStr for SeedGenType {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn door_rando_build_selection_preserves_sources_and_settings() {
+        use super::DoorRandoBuild;
+        for (slug, expected_build, directory) in [
+            ("alttpr_dr", DoorRandoBuild::Stable, "/opt/alttpr"),
+            ("alttpr_dr_latest", DoorRandoBuild::Latest, "/opt/alttpr_latest"),
+        ] {
+            for source in ["boothisman", "mutual_choices", "mystery_pool"] {
+                let input = serde_json::json!({
+                    "source": source,
+                    "base_settings": {"mode": "open"},
+                    "choices": {"keydrop": {"label": "Key Drop Shuffle"}},
+                    "mystery_weights_url": "https://example.com/weights.yaml",
+                    "practice_modes": [{"value": "crossed", "label": "Crossed"}],
+                    "practice_choices": [{"value": "keydrop", "label": "Key Drop Shuffle"}],
+                });
+                crate::event::configuration::validate_seed(Some(slug), Some(&input)).unwrap();
+                let kind = SeedGenType::from_db(Some(slug), Some(&input)).unwrap();
+                let SeedGenType::AlttprDoorRando { build, source: parsed_source, practice_modes, practice_choices } = &kind else {
+                    panic!("expected Door Rando");
+                };
+                assert_eq!(*build, expected_build);
+                assert_eq!(build.installation().1, directory);
+                assert!(build.installation().0.starts_with(&format!("{directory}/.venv/")));
+                assert_eq!(practice_modes[0].value, "crossed");
+                assert_eq!(practice_choices[0].value, "keydrop");
+                match (source, parsed_source) {
+                    ("boothisman", AlttprDrSource::Boothisman) => {},
+                    ("mutual_choices", AlttprDrSource::MutualChoices { config }) => {
+                        assert_eq!(config.base_settings, input["base_settings"]);
+                        assert_eq!(config.choices, input["choices"]);
+                        assert!(kind.has_display_settings());
+                    },
+                    ("mystery_pool", AlttprDrSource::MysteryPool { weights_url }) => {
+                        assert_eq!(weights_url, "https://example.com/weights.yaml");
+                    },
+                    _ => panic!("source changed for {slug}"),
+                }
+                assert_eq!(crate::event::pooled_qualifiers::generation::supported(&kind), source != "boothisman");
+            }
+            assert!(matches!(SeedGenType::from_db(Some(slug), None), Some(SeedGenType::AlttprDoorRando { source: AlttprDrSource::Boothisman, .. })));
+        }
+        assert_eq!(DoorRandoBuild::Stable.boothisman_installation(), (super::super::PYTHON, "../ALttPDoorRandomizer"));
+        assert_eq!(DoorRandoBuild::Latest.boothisman_installation(), DoorRandoBuild::Latest.installation());
+    }
+
     #[test]
     fn owr_build_selection_preserves_settings_and_choices() {
         let input = serde_json::json!({

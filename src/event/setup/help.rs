@@ -4,7 +4,7 @@ pub(super) fn label(field: &str, title: &str) -> RawHtml<String> {
     let paragraphs: &[&str] = match field {
         "series" => &[
             "Groups related events and determines their URL prefix. For example, series alttprmain with event slug 2026 produces /event/alttprmain/2026. Choose the community or tournament family, rather than the seed generator.",
-            "A series must be connected to the correct game in game administration for category lookup and race-room creation. The two OWR builds are selected independently under Seed Gen Type. Existing events in the same series do not automatically share settings.",
+            "A series must be connected to the correct game in game administration for category lookup and race-room creation. The OWR and Door Rando builds are selected independently under Seed Gen Type. Existing events in the same series do not automatically share settings.",
         ],
         "event" => &[
             "The event slug is the stable identifier within a series and forms part of event links. Use a short, readable value such as 2026 or spring26. The combination of series and event slug must be unique.",
@@ -223,8 +223,8 @@ pub(super) fn label(field: &str, title: &str) -> RawHtml<String> {
             "Leave it disabled for an online tournament, including online races played live rather than asynchronously. The word live here describes an in-person venue, not the live-versus-async qualifier distinction.",
         ],
         "seed_gen_type" => &[
-            "Chooses how the site generates event seeds. None means manual/external delivery. ALTTPR Door Rando selects one of the sources in Seed Config JSON; Avianart uses a preset; TWWR uses a settings permalink.",
-            "OWR (regular build), stored as owr, uses /opt/owr. OWR (tournament build), stored as owr_tourney, uses /opt/owr_tourney. Both use the same baseline/choice JSON structure and support live, async and practice rolling. The installed build must support your supplied settings; a branch name in JSON does not switch installations.",
+            "Chooses how the site generates event seeds. None means manual/external delivery. Both ALTTPR Door Rando builds select one of the sources in Seed Config JSON; Avianart uses a preset; TWWR uses a settings permalink.",
+            "OWR (regular build), stored as owr, uses /opt/owr. OWR (tournament build), stored as owr_tourney, uses /opt/owr_tourney. Both use the same baseline/choice JSON structure and support live, async and practice rolling. Door Rando (stable), stored as alttpr_dr, keeps the existing installation paths. Door Rando (latest), stored as alttpr_dr_latest, uses /opt/alttpr_latest and its .venv for every source. Install that build separately. The installed build must support your supplied settings; a branch name in JSON does not switch installations.",
             "Pooled qualifier modes have their own generator and baseline configuration on the Qualifiers page. Existing pooled OWR modes also use the tournament installation. Changing the event generator does not replace already generated seeds. MMR uses branch, version and a flat settings map in Seed Config. Competition seeds are encrypted; practice seeds are not. Both have locked spoilers.",
         ],
         "seed_config" => &[

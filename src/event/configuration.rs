@@ -31,7 +31,7 @@ pub(crate) fn validate_seed(kind: Option<&str>, config: Option<&Value>) -> Resul
         }
     }
     match kind {
-        "alttpr_dr" => match config.get("source") {
+        "alttpr_dr" | "alttpr_dr_latest" => match config.get("source") {
             None => Ok(()),
             Some(Value::String(source)) => match source.as_str() {
                 "boothisman" => Ok(()),
@@ -125,7 +125,7 @@ pub(crate) fn validate_draft(
     game_count: Option<i16>,
 ) -> Result<(), String> {
     let named = if matches!(seed_kind, Some("owr" | "owr_tourney"))
-        || seed_kind == Some("alttpr_dr")
+        || matches!(seed_kind, Some("alttpr_dr" | "alttpr_dr_latest"))
             && seed_config
                 .and_then(|c| c.get("source"))
                 .and_then(Value::as_str)
@@ -179,7 +179,7 @@ pub(crate) fn validate_draft(
     if draft.uses_button_draft() {
         let consumes_preset = named.is_some()
             || seed_kind == Some("alttpr_avianart")
-            || seed_kind == Some("alttpr_dr")
+            || matches!(seed_kind, Some("alttpr_dr" | "alttpr_dr_latest"))
                 && seed_config
                     .and_then(|c| c.get("source"))
                     .and_then(Value::as_str)
@@ -224,7 +224,7 @@ pub(crate) fn validate_seed_policies(
         return Err("MMR seeds must remain locked until the race is complete. Choose Never or After.".into());
     }
     if matches!(preroll, "short" | "long")
-        && generator.is_some_and(|g| matches!(g, "alttpr_dr" | "alttpr_avianart" | "owr" | "owr_tourney" | "twwr"))
+        && generator.is_some_and(|g| matches!(g, "alttpr_dr" | "alttpr_dr_latest" | "alttpr_avianart" | "owr" | "owr_tourney" | "twwr"))
     {
         return Err("This seed generator supports None or Medium preroll; Short and Long are not implemented.".into());
     }
@@ -259,6 +259,26 @@ pub(crate) async fn test_pool() -> sqlx::PgPool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn both_door_rando_builds_validate_sources_and_preroll() {
+        for kind in ["alttpr_dr", "alttpr_dr_latest"] {
+            assert!(validate_seed(Some(kind), None).is_ok());
+            for config in [
+                serde_json::json!({"source": "typo"}),
+                serde_json::json!({"source": "mutual_choices"}),
+                serde_json::json!({"source": "mystery_pool", "mystery_weights_url": "file:///weights.yaml"}),
+            ] {
+                assert!(validate_seed(Some(kind), Some(&config)).is_err());
+            }
+            for preroll in ["none", "medium"] {
+                assert!(validate_seed_policies(preroll, "never", Some(kind)).is_ok());
+            }
+            for preroll in ["short", "long"] {
+                assert!(validate_seed_policies(preroll, "never", Some(kind)).is_err());
+            }
+        }
+    }
+
     #[test]
     fn both_owr_builds_require_valid_settings_and_supported_preroll() {
         for kind in ["owr", "owr_tourney"] {

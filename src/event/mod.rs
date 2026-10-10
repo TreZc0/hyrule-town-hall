@@ -5240,6 +5240,7 @@ pub(crate) async fn practice_seed(
             source: AlttprDrSource::Boothisman,
             practice_modes,
             practice_choices,
+            ..
         }) if !practice_modes.is_empty() => {
             let modes = practice_modes.clone();
             let choices = practice_choices.clone();
@@ -5447,6 +5448,7 @@ pub(crate) async fn practice_seed_post(
         }
         SeedGenType::AlttprDoorRando {
             source: AlttprDrSource::MutualChoices { config },
+            build,
             ..
         } => {
             transaction.commit().await?;
@@ -5460,11 +5462,13 @@ pub(crate) async fn practice_seed_post(
                 config.clone(),
                 resolved,
                 None,
+                build,
             );
             racetime_bot::start_practice_seed_roll(Arc::clone(&seeds), job_id, rx, vec![]);
         }
         SeedGenType::AlttprDoorRando {
             source: AlttprDrSource::Boothisman,
+            build,
             ..
         } => {
             transaction.commit().await?;
@@ -5489,7 +5493,7 @@ pub(crate) async fn practice_seed_post(
                 custom_choices,
                 choices: Vec::new(),
             };
-            let rx = Arc::clone(&*global_state).roll_boothisman_dr_seed(options);
+            let rx = Arc::clone(&*global_state).roll_boothisman_dr_seed(options, build);
             racetime_bot::start_practice_seed_roll(Arc::clone(&seeds), job_id, rx, vec![]);
         }
         SeedGenType::AlttprAvianart { .. } => {

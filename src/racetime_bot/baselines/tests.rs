@@ -99,9 +99,9 @@ fn scoped_choices_isolate_settings_inventory_placements_and_summaries() {
 #[test]
 fn configuration_references_defaults_and_legacy_formats() {
     let config = fixture();
-    for generator in ["owr", "owr_tourney", "alttpr_dr"] {
+    for generator in ["owr", "owr_tourney", "alttpr_dr", "alttpr_dr_latest"] {
         let mut value = config.clone();
-        if generator == "alttpr_dr" {
+        if matches!(generator, "alttpr_dr" | "alttpr_dr_latest") {
             value["source"] = json!("mutual_choices");
         }
         configuration::validate_seed(Some(generator), Some(&value)).unwrap();
@@ -477,7 +477,7 @@ async fn presentation_survives_delivery_reload_and_config_changes() {
 
 #[test]
 fn pooled_modes_keep_explicit_baselines_and_chunks_keep_all_text() {
-    for generator in ["owr", "owr_tourney", "alttpr_dr"] {
+    for generator in ["owr", "owr_tourney", "alttpr_dr", "alttpr_dr_latest"] {
         let mut value = fixture();
         value["source"] = json!("mutual_choices");
         let kind = SeedGenType::from_db(Some(generator), Some(&value)).unwrap();

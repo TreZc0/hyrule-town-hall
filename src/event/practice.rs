@@ -369,7 +369,7 @@ mod tests {
 
     #[test]
     fn practice_rejects_options_from_another_baseline() {
-        for name in ["owr", "owr_tourney", "alttpr_dr"] {
+        for name in ["owr", "owr_tourney", "alttpr_dr", "alttpr_dr_latest"] {
             let value = json!({"source": "mutual_choices", "baselines": {
                 "a": {"label": "A", "base_settings": {}}, "b": {"label": "B", "base_settings": {}}
             }, "choices": {"a_only": {"baselines": ["a"], "settings": {"goal": "dungeons"}}, "shared": {"settings": {"common": true}}},

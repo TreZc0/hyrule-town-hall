@@ -61,7 +61,7 @@ fn seed_config_help() -> RawHtml<String> {
                     "base_settings": {"shuffle": "crossed"}, "base_placements": {}, "start_inventory": [],
                     "choices": {"flute": {"label": "Starting activated flute", "settings": {"flute_mode": "active"}, "start_inventory": ["Ocarina (Activated)"]}}
                 })),
-                ("OWR — named baselines with shared choices", "Structure example, not approved tournament settings: replace all three baselines with your intended full configurations. Select owr or owr_tourney and use matching preset keys in a generic draft. For alttpr_dr add source: mutual_choices. Without a draft, add default_baseline naming one entry.", json!({
+                ("OWR — named baselines with shared choices", "Structure example, not approved tournament settings: replace all three baselines with your intended full configurations. Select owr or owr_tourney and use matching preset keys in a generic draft. For either Door Rando build add source: mutual_choices. Without a draft, add default_baseline naming one entry.", json!({
                     "baselines": {
                         "mode_a": {"label": "Mode A", "base_settings": {"goal": "crystals"}, "base_placements": {}, "start_inventory": []},
                         "mode_b": {"label": "Mode B", "base_settings": {"goal": "dungeons"}, "base_placements": {}, "start_inventory": []},
@@ -69,14 +69,14 @@ fn seed_config_help() -> RawHtml<String> {
                     },
                     "choices": {"flute": {"label": "Starting activated flute", "settings": {"flute_mode": "active"}, "start_inventory": ["Ocarina (Activated)"]}}
                 })),
-                ("ALTTPR Door Rando — boothisman presets", "Select alttpr_dr. Presets come from a race draft or round mode; practice_modes defines the practice dropdown. This source is not supported for pooled qualifiers.", json!({
+                ("ALTTPR Door Rando — boothisman presets", "Select alttpr_dr (stable) or alttpr_dr_latest (latest). Presets come from a race draft or round mode; practice_modes defines the practice dropdown. This source is not supported for pooled qualifiers.", json!({
                     "source": "boothisman", "practice_modes": [{"value": "open", "label": "Open"}, {"value": "crosskeys", "label": "Crosskeys"}],
                     "practice_choices": [{"value": "pots", "label": "Pottery Shuffle"}]
                 })),
-                ("ALTTPR Door Rando — mutual choices", "Select alttpr_dr. base_settings is required. Uses the same choices/placements/inventory structure as OWR, but runs the Door Rando generator.", json!({
+                ("ALTTPR Door Rando — mutual choices", "Select alttpr_dr (stable) or alttpr_dr_latest (latest). base_settings is required. Uses the same choices/placements/inventory structure as OWR, but runs the Door Rando generator.", json!({
                     "source": "mutual_choices", "base_settings": {"shuffle": "crossed"}, "base_placements": {}, "start_inventory": [], "choices": {}
                 })),
-                ("ALTTPR Door Rando — mystery weights", "Select alttpr_dr. Replace the URL with your event's accessible mystery weights YAML.", json!({
+                ("ALTTPR Door Rando — mystery weights", "Select alttpr_dr (stable) or alttpr_dr_latest (latest). Replace the URL with your event's accessible mystery weights YAML.", json!({
                     "source": "mystery_pool", "mystery_weights_url": "https://example.com/event-weights.yaml"
                 })),
                 ("ALTTPR Avianart — default and practice presets", "Select alttpr_avianart. preset is the default when no draft supplies one. practice_presets optionally lists available practice options; otherwise practice uses preset. Pooled modes require a default preset.", json!({
@@ -599,7 +599,8 @@ async fn setup_form(
                             select(id = "seed_gen_type", name = "seed_gen_type", style = "width: 100%; max-width: 600px;") {
                                 option(value = "", selected? = ctx.field_value("seed_gen_type").map_or(seed_gen_type_str.is_none(), |v| v.is_empty())) : "None (manual / external)";
                                 @for (val, label) in &[
-                                    ("alttpr_dr", "ALTTPR Door Rando"),
+                                    ("alttpr_dr", "ALTTPR Door Rando (stable)"),
+                                    ("alttpr_dr_latest", "ALTTPR Door Rando (latest)"),
                                     ("alttpr_avianart", "ALTTPR Avianart"),
                                     ("owr", "ALTTPR OWR (regular build)"),
                                     ("owr_tourney", "ALTTPR OWR (tournament build)"),
@@ -612,7 +613,7 @@ async fn setup_form(
                                     option(value = val, selected? = ctx.field_value("seed_gen_type").map_or(seed_gen_type_str.as_deref() == Some(val), |v| v == *val)) : *label;
                                 }
                             }
-                            label(class = "help") : "Choose OWR (regular build) for /opt/owr or OWR (tournament build) for /opt/owr_tourney. The selection applies to this event's live, async and practice seeds. Both accept the same JSON structure; use settings supported by the installed build.";
+                            label(class = "help") : "Choose OWR (regular build) for /opt/owr or OWR (tournament build) for /opt/owr_tourney. The selection applies to this event's live, async and practice seeds. Both accept the same JSON structure; use settings supported by the installed build. Door Rando (stable) keeps the existing installation; Door Rando (latest) uses /opt/alttpr_latest with the same source and settings options.";
                             p(class = "help") : "For pooled qualifiers, configure each mode's generator and baseline settings on the Qualifiers page after creating the event. Existing pooled OWR modes also use the tournament build. A branch name in Seed Config JSON does not switch installations.";
                         });
 
@@ -2297,7 +2298,8 @@ fn create_form_content(
                             select(id = "seed_gen_type", name = "seed_gen_type", style = "width: 100%; max-width: 600px;") {
                                 option(value = "", selected? = field_value("seed_gen_type").map_or(true, |v| v.is_empty())) : "None (manual / external)";
                                 @for (val, label) in &[
-                                    ("alttpr_dr", "ALTTPR Door Rando"),
+                                    ("alttpr_dr", "ALTTPR Door Rando (stable)"),
+                                    ("alttpr_dr_latest", "ALTTPR Door Rando (latest)"),
                                     ("alttpr_avianart", "ALTTPR Avianart"),
                                     ("owr", "ALTTPR OWR (regular build)"),
                                     ("owr_tourney", "ALTTPR OWR (tournament build)"),
@@ -2311,7 +2313,7 @@ fn create_form_content(
                                     option(value = val, selected? = field_value("seed_gen_type").map_or(false, |v| v == *val)) : *label;
                                 }
                             }
-                            label(class = "help") : "Choose OWR (regular build) for /opt/owr or OWR (tournament build) for /opt/owr_tourney. The selection applies to this event's live, async and practice seeds. Both accept the same JSON structure; use settings supported by the installed build.";
+                            label(class = "help") : "Choose OWR (regular build) for /opt/owr or OWR (tournament build) for /opt/owr_tourney. The selection applies to this event's live, async and practice seeds. Both accept the same JSON structure; use settings supported by the installed build. Door Rando (stable) keeps the existing installation; Door Rando (latest) uses /opt/alttpr_latest with the same source and settings options.";
                             p(class = "help") : "For pooled qualifiers, configure each mode's generator and baseline settings on the Qualifiers page after creating the event. Existing pooled OWR modes also use the tournament build. A branch name in Seed Config JSON does not switch installations.";
                         });
 

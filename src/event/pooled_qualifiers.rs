@@ -772,7 +772,7 @@ async fn allocation_candidates(
         WHERE seed.mode_id = $1 AND seed.source = 'async_pool'
           AND seed.generation_state = 'ready' AND seed.retired_at IS NULL
           AND (seed.generation_claim IS NOT NULL OR seed.settings_attested_at IS NOT NULL)
-          AND seed.seed_data->>'type' = (SELECT CASE WHEN seed_gen_type IN ('owr', 'owr_tourney') THEN 'alttpr_owr' ELSE seed_gen_type END FROM qualifier_modes WHERE id = $1)
+          AND seed.seed_data->>'type' = (SELECT CASE WHEN seed_gen_type IN ('owr', 'owr_tourney') THEN 'alttpr_owr' WHEN seed_gen_type = 'alttpr_dr_latest' THEN 'alttpr_dr' ELSE seed_gen_type END FROM qualifier_modes WHERE id = $1)
           AND seed.generator_profile = (SELECT generator_profile FROM qualifier_modes WHERE id = $1)
           AND seed.settings_fingerprint = (SELECT settings_fingerprint FROM qualifier_modes WHERE id = $1)
           AND NOT EXISTS (
@@ -2612,6 +2612,15 @@ pub(crate) mod tests {
         sqlx::query("UPDATE qualifier_seeds SET seed_data=jsonb_set(seed_data, '{type}', '\"alttpr_dr\"') WHERE id=$1")
             .bind(seed_ids[0]).execute(&mut *allocation_tx).await.unwrap();
         assert_eq!(allocation_candidates(&mut allocation_tx, mode_id, entrants[0].0).await.unwrap().len(), 1);
+        sqlx::query("UPDATE qualifier_seeds SET physical_seed_identity=replace(physical_seed_identity, 'alttpr_owr:', 'alttpr_dr:') WHERE id=$1")
+            .bind(seed_ids[0]).execute(&mut *allocation_tx).await.unwrap();
+        for generator in ["alttpr_dr", "alttpr_dr_latest"] {
+            sqlx::query("UPDATE qualifier_modes SET seed_gen_type=$2 WHERE id=$1")
+                .bind(mode_id).bind(generator).execute(&mut *allocation_tx).await.unwrap();
+            let candidates = allocation_candidates(&mut allocation_tx, mode_id, entrants[0].0).await.unwrap();
+            assert_eq!(candidates.len(), 1, "allocation for {generator}");
+            assert_eq!(candidates[0].id, seed_ids[0]);
+        }
         allocation_tx.rollback().await.unwrap();
         let first = request_async(&pool, entrants[0].0, mode_id, entrants[0].1)
             .await
