@@ -1740,6 +1740,25 @@ pub(crate) async fn run_countdown(
     run_countdown_inner(pool, http, channel_id, run, false).await
 }
 
+/// Hold this transaction until GO has been persisted. Both manual and forced
+/// starts must claim it before checking start_time, which stays unset during
+/// the countdown so the player's timer still starts at GO.
+async fn claim_countdown(pool: &PgPool, run: &AsyncRun) -> Result<Option<Transaction<'static, Postgres>>, Error> {
+    let mut transaction = pool.begin().await?;
+    let claimed = sqlx::query_scalar::<_, bool>(
+        "SELECT pg_try_advisory_xact_lock(728915, hashtext($1))",
+    )
+        .bind(run.button_id("start_countdown"))
+        .fetch_one(&mut *transaction)
+        .await?;
+    if claimed {
+        Ok(Some(transaction))
+    } else {
+        transaction.rollback().await?;
+        Ok(None)
+    }
+}
+
 async fn run_countdown_inner(
     pool: &PgPool,
     http: &Arc<Http>,
@@ -1758,6 +1777,7 @@ async fn run_countdown_inner(
         }
         return Ok(claimed);
     }
+    let Some(countdown_claim) = claim_countdown(pool, run).await? else { return Ok(false); };
     run.verify_thread(pool, channel_id).await?;
     if run.is_started(pool).await? { return Ok(false); }
 
@@ -1775,6 +1795,7 @@ async fn run_countdown_inner(
         .components(vec![race_buttons])
     ).await?;
 
+    countdown_claim.commit().await?;
     Ok(true)
 }
 
@@ -2212,13 +2233,20 @@ pub(crate) async fn handle_start_countdown(
         return Err(Error::AlreadyStarted);
     }
 
-    interaction.defer(&ctx.http).await?;
-
-    run_countdown(pool, &ctx.http, interaction.channel_id, run).await?;
-
     interaction
-        .edit_response(ctx, EditInteractionResponse::new().components(vec![]))
+        .create_response(ctx, CreateInteractionResponse::UpdateMessage(
+            CreateInteractionResponseMessage::new().components(vec![]),
+        ))
         .await?;
+
+    if let Err(error) = run_countdown(pool, &ctx.http, interaction.channel_id, run).await {
+        // A failed countdown before GO can be retried without another READY.
+        if !run.is_started(pool).await.unwrap_or(true) {
+            let _ = interaction.edit_response(ctx, EditInteractionResponse::new()
+                .components(vec![start_button(run)])).await;
+        }
+        return Err(error);
+    }
 
     Ok(())
 }

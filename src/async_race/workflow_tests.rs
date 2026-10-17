@@ -18,6 +18,32 @@ fn runs() -> [AsyncRun; 3] {
     ]
 }
 
+#[tokio::test]
+#[ignore = "requires HTH_TEST_DATABASE_URL pointing to a *_test database"]
+async fn countdown_claim_excludes_duplicate_and_force_starts_until_released() {
+    let pool = event::configuration::test_pool().await;
+    let [bracket, qualifier, _] = runs();
+    for run in [&bracket, &qualifier] {
+        // Manual clicks and automatic starts share this claim. Even while
+        // start_time is unset, exactly one concurrent caller can send messages.
+        let (first, second) = tokio::join!(claim_countdown(&pool, run), claim_countdown(&pool, run));
+        let (first, second) = (first.unwrap(), second.unwrap());
+        assert_ne!(first.is_some(), second.is_some());
+        let claim = first.or(second).unwrap();
+        assert!(claim_countdown(&pool, run).await.unwrap().is_none());
+
+        // Another run with the same numeric ID must not be blocked.
+        let other_run = if matches!(run, AsyncRun::BracketRace { .. }) { &qualifier } else { &bracket };
+        claim_countdown(&pool, other_run).await.unwrap().unwrap().commit().await.unwrap();
+
+        // A failed countdown rolls back its claim so it can be retried.
+        claim.rollback().await.unwrap();
+        let retry = claim_countdown(&pool, run).await.unwrap().unwrap();
+        retry.commit().await.unwrap();
+        claim_countdown(&pool, run).await.unwrap().unwrap().rollback().await.unwrap();
+    }
+}
+
 #[test]
 fn async_workflow_messages_and_existing_buttons_agree() {
     let [bracket, qualifier, pooled] = runs();
