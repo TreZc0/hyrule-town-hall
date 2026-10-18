@@ -28,6 +28,7 @@ pub(super) struct AttemptRow {
     pub(super) team_id: Option<i64>,
     pub(super) racetime_id: String,
     pub(super) signup_eligible: bool,
+    pub(super) signup_resigned: bool,
     pub(super) entrant_name: String,
     pub(super) mode_name: String,
     pub(super) source: String,
@@ -75,6 +76,14 @@ pub(super) async fn load_attempts(
                     AND NOT EXISTS (SELECT 1 FROM team_members WHERE team=teams.id AND status='unconfirmed')
                     LIMIT 1) AS team_id,
                 qualifier_signup_eligible(attempt.series, attempt.event, attempt.racetime_id) AS signup_eligible,
+                (EXISTS (SELECT 1 FROM teams JOIN team_members ON team_members.team = teams.id
+                    JOIN users ON users.id = team_members.member
+                    WHERE teams.series = attempt.series AND teams.event = attempt.event
+                        AND users.racetime_id = attempt.racetime_id AND teams.resigned)
+                AND NOT EXISTS (SELECT 1 FROM teams JOIN team_members ON team_members.team = teams.id
+                    JOIN users ON users.id = team_members.member
+                    WHERE teams.series = attempt.series AND teams.event = attempt.event
+                        AND users.racetime_id = attempt.racetime_id AND NOT teams.resigned)) AS signup_resigned,
                 COALESCE(user_account.discord_display_name, user_account.racetime_display_name,
                     attempt.allocation_metadata->>'racetime_name', attempt.racetime_id) AS entrant_name,
                 mode.display_name AS mode_name, attempt.source, attempt.state,
@@ -314,7 +323,10 @@ pub(super) fn overview(
                         p {
                             : format!("{}; {}", attempt.source, attempt.state);
                             @if attempt.state == "void" { : "; void — excluded from population and scoring"; }
-                            else if !attempt.signup_eligible { : "; excluded from scoring: no active signup at the required time"; }
+                            else if !attempt.signup_eligible {
+                                @if attempt.signup_resigned { : "; excluded from scoring: player has resigned from this event"; }
+                                else { : "; excluded from scoring: no active signup at the required time"; }
+                            }
                             else if attempt.counts_for_entrant { : "; counted for entrant"; }
                             else { : "; not counted for entrant"; }
                             @if let Some(original) = attempt.retry_of {

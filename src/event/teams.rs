@@ -1882,6 +1882,25 @@ pub(crate) async fn list(
     } else {
         false
     };
+    let mut resigned_entrants = Vec::new();
+    if is_organizer {
+        let ids: Vec<i64> = sqlx::query_scalar(
+            "SELECT id FROM teams WHERE series = $1 AND event = $2 AND resigned ORDER BY id",
+        )
+        .bind(data.series)
+        .bind(&data.event)
+        .fetch_all(&mut *transaction)
+        .await?;
+        for team in Team::from_ids(&mut transaction, &ids).await? {
+            let name = team
+                .name(&mut transaction)
+                .await?
+                .unwrap_or_default()
+                .into_owned();
+            resigned_entrants.push((name, team.to_html(&mut transaction, false).await?));
+        }
+        resigned_entrants.sort_by(|(left, _), (right, _)| left.cmp(right));
+    }
     let qualifier_kind = data.qualifier_kind(&mut transaction, me.as_ref()).await?;
     let pooled_config = if matches!(qualifier_kind, QualifierKind::PooledByMode { .. }) {
         pooled_qualifiers::Config::load(&mut transaction, data.series, &data.event).await?
@@ -2232,6 +2251,20 @@ pub(crate) async fn list(
                     : " | ";
                     : opted_out_count;
                     : " opted out";
+                }
+            }
+        }
+        @if is_organizer {
+            details(class = "resigned-entrants") {
+                summary : format!("Resigned {}s ({})", entrant_word, resigned_entrants.len());
+                @if resigned_entrants.is_empty() {
+                    p : "No resigned signups.";
+                } else {
+                    ul {
+                        @for (_, entrant) in &resigned_entrants {
+                            li : entrant;
+                        }
+                    }
                 }
             }
         }
