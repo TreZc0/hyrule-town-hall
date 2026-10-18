@@ -2879,7 +2879,7 @@ pub(crate) mod route_tests {
                 assert_ne!(client.get(&url).dispatch().await.status(), Status::Ok);
             }
             for kind in ["results", "pool", "live"] {
-                assert_eq!(client.get(format!("{base}/{kind}/0"))
+                assert_eq!(client.get(format!("{base}/details/{kind}/0"))
                     .header(rocket::http::Header::new("x-test-user", staff.to_string()))
                     .dispatch().await.status(), Status::NotFound);
             }

@@ -126,7 +126,7 @@ fn results(
     }
 }
 
-#[rocket::get("/event/<series>/<event>/qualifiers/results/<seed_id>")]
+#[rocket::get("/event/<series>/<event>/qualifiers/details/results/<seed_id>")]
 pub(crate) async fn get_results(
     pool: &State<PgPool>,
     me: User,
@@ -165,7 +165,7 @@ async fn require_seed(
     Ok(())
 }
 
-#[rocket::get("/event/<series>/<event>/qualifiers/pool/<seed_id>")]
+#[rocket::get("/event/<series>/<event>/qualifiers/details/pool/<seed_id>")]
 pub(crate) async fn get_pool(
     pool: &State<PgPool>,
     me: User,
@@ -207,7 +207,7 @@ struct LiveEntryRow {
     retry_released_at: Option<DateTime<Utc>>,
 }
 
-#[rocket::get("/event/<series>/<event>/qualifiers/live/<race_id>")]
+#[rocket::get("/event/<series>/<event>/qualifiers/details/live/<race_id>")]
 pub(crate) async fn get_live(
     pool: &State<PgPool>,
     me: User,
