@@ -16,8 +16,8 @@ pub(super) struct SeedRow {
     pub(super) released_at: Option<DateTime<Utc>>,
     pub(super) generation_error: Option<String>,
 }
-#[derive(sqlx::FromRow)]
-#[cfg_attr(test, derive(Default))]
+#[derive(Default, sqlx::FromRow)]
+#[sqlx(default)]
 pub(super) struct AttemptRow {
     pub(super) mode_id: i64,
     pub(super) seed_id: i64,
@@ -64,10 +64,32 @@ pub(super) async fn load_seeds(
     .await
 }
 
+// Only scoring and summary fields are needed before a disclosure is opened.
+pub(super) async fn load_summary_attempts(
+    transaction: &mut Transaction<'_, Postgres>,
+    series: Series,
+    event: &str,
+) -> Result<Vec<AttemptRow>, sqlx::Error> {
+    sqlx::query_as::<_, AttemptRow>(
+        r#"SELECT attempt.id, attempt.mode_id, attempt.seed_id, attempt.racetime_id,
+            attempt.par_eligible, attempt.state, attempt.counts_for_entrant,
+            attempt.official_outcome, attempt.official_time, mode.display_name AS mode_name,
+            qualifier_signup_eligible(attempt.series, attempt.event, attempt.racetime_id) AS signup_eligible
+        FROM qualifier_attempts attempt JOIN qualifier_modes mode ON mode.id = attempt.mode_id
+        WHERE attempt.series = $1 AND attempt.event = $2
+        ORDER BY attempt.requested_at, attempt.id"#,
+    )
+    .bind(series)
+    .bind(event)
+    .fetch_all(&mut **transaction)
+    .await
+}
+
 pub(super) async fn load_attempts(
     transaction: &mut Transaction<'_, Postgres>,
     series: Series,
     event: &str,
+    seed_id: Option<i64>,
 ) -> Result<Vec<AttemptRow>, sqlx::Error> {
     sqlx::query_as::<_, AttemptRow>(
             r#"SELECT attempt.id, attempt.mode_id, attempt.seed_id, attempt.par_eligible, attempt.superseded_by, attempt.discord_thread, attempt.racetime_id,
@@ -92,11 +114,12 @@ pub(super) async fn load_attempts(
             FROM qualifier_attempts attempt
             JOIN qualifier_modes mode ON mode.id = attempt.mode_id
             LEFT JOIN users user_account ON user_account.racetime_id = attempt.racetime_id
-            WHERE attempt.series = $1 AND attempt.event = $2
+            WHERE attempt.series = $1 AND attempt.event = $2 AND ($3::BIGINT IS NULL OR attempt.seed_id = $3)
             ORDER BY attempt.requested_at, attempt.id"#,
         )
         .bind(series)
         .bind(event)
+        .bind(seed_id)
         .fetch_all(&mut **transaction)
         .await
 }
@@ -254,11 +277,11 @@ fn population(config: &pooled_qualifiers::Config, attempts: &[&AttemptRow]) -> P
 }
 
 pub(super) fn overview(
+    series: Series,
     config: &pooled_qualifiers::Config,
     mode_id: i64,
     seeds: &[SeedRow],
     attempts: &[AttemptRow],
-    guild: Option<u64>,
 ) -> RawHtml<String> {
     let groups = seeds
         .iter()
@@ -309,61 +332,74 @@ pub(super) fn overview(
                 }
             }
         }
-        @for (seed, assigned, stats) in &groups {
-            details(id = format!("pool-seed-{}", seed.id), style = "text-align: left; overflow-wrap: anywhere; margin: 1rem 0;") {
+        @for (seed, assigned, _) in &groups {
+            details(id = format!("pool-seed-{}", seed.id),
+                data_qualifier_url = uri!(details::get_pool(series, &*config.event, seed.id)).to_string(), style = "text-align: left; overflow-wrap: anywhere; margin: 1rem 0;") {
                 summary : format!("{} — entrant history ({} attempts)", seed_label(seed.id, seeds), assigned.len());
-                p : format!("{} assignments; {} currently counted; {} eligible finishes", stats.assigned, stats.counted, stats.eligible_finishes);
-                @if stats.par.is_none() { p : format!("{}/{} finishes — par pending", stats.eligible_finishes, config.par_finishers); }
-                p { : "Identity: "; : seed.physical_seed_identity.as_deref().unwrap_or("not generated"); }
-                @if let Some(released) = seed.released_at { p : format!("Released: {}", released.to_rfc3339()); }
-                @if assigned.is_empty() { p : "No entrants assigned."; }
-                @for attempt in assigned {
-                    section {
-                        h5 { : &attempt.entrant_name; : format!(" (attempt {})", attempt.id); }
-                        p {
-                            : format!("{}; {}", attempt.source, attempt.state);
-                            @if attempt.state == "void" { : "; void — excluded from population and scoring"; }
-                            else if !attempt.signup_eligible {
-                                @if attempt.signup_resigned { : "; excluded from scoring: player has resigned from this event"; }
-                                else { : "; excluded from scoring: no active signup at the required time"; }
-                            }
-                            else if attempt.counts_for_entrant { : "; counted for entrant"; }
-                            else { : "; not counted for entrant"; }
-                            @if let Some(original) = attempt.retry_of {
-                                : "; replacement of "; a(href = format!("#attempt-{original}")) : format!("attempt {original}");
-                            } else { : "; original attempt"; }
-                            @if let Some(replacement) = attempt.superseded_by {
-                                : "; replaced by "; a(href = format!("#attempt-{replacement}")) : format!("attempt {replacement}");
-                            }
-                        }
-                        @if let Some(outcome) = attempt.outcome() {
-                            p {
-                                @match outcome {
-                                    pooled_qualifiers::Outcome::Finished(time) => { : English.format_duration(time, false); }
-                                    pooled_qualifiers::Outcome::Forfeit => { : "Forfeit"; }
-                                    pooled_qualifiers::Outcome::Dq => { : "Disqualified"; }
-                                    pooled_qualifiers::Outcome::Invalid => { : "Invalid result"; }
-                                }
-                                : " — ";
-                                @if !attempt.signup_eligible { : "excluded from scoring"; }
-                                else { @match pooled_qualifiers::performance_score(config, outcome, stats.par) {
-                                    pooled_qualifiers::ModeScore::Pending => { : "points pending"; }
-                                    pooled_qualifiers::ModeScore::Score(points) => { : format!("{points:.2} points"); }
-                                }
-                                }
-                                @if matches!(outcome, pooled_qualifiers::Outcome::Finished(_)) && attempt.par_eligible && attempt.signup_eligible { : "; eligible for par"; }
-                                else { : "; excluded from par"; }
-                            }
-                        }
-                        p {
-                            a(href = format!("#attempt-{}", attempt.id)) : "Review result / history";
-                            @if let (Some(guild), Some(thread)) = (guild, attempt.discord_thread) {
-                                : " · ";
-                                a(href = format!("https://discord.com/channels/{guild}/{}", thread as u64)) : "Private async thread";
-                            }
-                            @if let Some(vod) = &attempt.vod { : " · "; a(href = vod) : "VOD"; }
-                        }
+                : details::placeholder(uri!(details::get_pool(series, &*config.event, seed.id)));
+            }
+        }
+    }
+}
+
+pub(super) fn history(
+    config: &pooled_qualifiers::Config,
+    seed: &SeedRow,
+    assigned: &[&AttemptRow],
+    guild: Option<u64>,
+) -> RawHtml<String> {
+    let stats = population(config, assigned);
+    html! {
+        p : format!("{} assignments; {} currently counted; {} eligible finishes", stats.assigned, stats.counted, stats.eligible_finishes);
+        @if stats.par.is_none() { p : format!("{}/{} finishes — par pending", stats.eligible_finishes, config.par_finishers); }
+        p { : "Identity: "; : seed.physical_seed_identity.as_deref().unwrap_or("not generated"); }
+        @if let Some(released) = seed.released_at { p : format!("Released: {}", released.to_rfc3339()); }
+        @if assigned.is_empty() { p : "No entrants assigned."; }
+        @for attempt in assigned {
+            section {
+                h5 { : &attempt.entrant_name; : format!(" (attempt {})", attempt.id); }
+                p {
+                    : format!("{}; {}", attempt.source, attempt.state);
+                    @if attempt.state == "void" { : "; void — excluded from population and scoring"; }
+                    else if !attempt.signup_eligible {
+                        @if attempt.signup_resigned { : "; excluded from scoring: player has resigned from this event"; }
+                        else { : "; excluded from scoring: no active signup at the required time"; }
                     }
+                    else if attempt.counts_for_entrant { : "; counted for entrant"; }
+                    else { : "; not counted for entrant"; }
+                    @if let Some(original) = attempt.retry_of {
+                        : "; replacement of "; a(href = format!("#attempt-{original}")) : format!("attempt {original}");
+                    } else { : "; original attempt"; }
+                    @if let Some(replacement) = attempt.superseded_by {
+                        : "; replaced by "; a(href = format!("#attempt-{replacement}")) : format!("attempt {replacement}");
+                    }
+                }
+                @if let Some(outcome) = attempt.outcome() {
+                    p {
+                        @match outcome {
+                            pooled_qualifiers::Outcome::Finished(time) => { : English.format_duration(time, false); }
+                            pooled_qualifiers::Outcome::Forfeit => { : "Forfeit"; }
+                            pooled_qualifiers::Outcome::Dq => { : "Disqualified"; }
+                            pooled_qualifiers::Outcome::Invalid => { : "Invalid result"; }
+                        }
+                        : " — ";
+                        @if !attempt.signup_eligible { : "excluded from scoring"; }
+                        else { @match pooled_qualifiers::performance_score(config, outcome, stats.par) {
+                            pooled_qualifiers::ModeScore::Pending => { : "points pending"; }
+                            pooled_qualifiers::ModeScore::Score(points) => { : format!("{points:.2} points"); }
+                        }
+                        }
+                        @if matches!(outcome, pooled_qualifiers::Outcome::Finished(_)) && attempt.par_eligible && attempt.signup_eligible { : "; eligible for par"; }
+                        else { : "; excluded from par"; }
+                    }
+                }
+                p {
+                    a(href = format!("#attempt-{}", attempt.id)) : "Review result / history";
+                    @if let (Some(guild), Some(thread)) = (guild, attempt.discord_thread) {
+                        : " · ";
+                        a(href = format!("https://discord.com/channels/{guild}/{}", thread as u64)) : "Private async thread";
+                    }
+                    @if let Some(vod) = &attempt.vod { : " · "; a(href = vod) : "VOD"; }
                 }
             }
         }
@@ -488,7 +524,12 @@ mod tests {
                 ..Default::default()
             },
         ];
-        let html = overview(&config, 1, &seeds, &attempts, Some(456)).0;
+        let overview = overview(Series::Standard, &config, 1, &seeds, &attempts).0;
+        assert!(!overview.contains("Entrant &lt;"));
+        assert!(overview.contains("data-qualifier-url"));
+        let html = format!("{}{}{}", overview,
+            history(&config, &seeds[0], &attempts.iter().collect_vec(), Some(456)).0,
+            history(&config, &seeds[1], &[], Some(456)).0);
         assert_eq!(seed_title(1, &seeds), "Async slot 2");
         assert_eq!(seed_title(2, &seeds), "Live qualifier <1>");
         for text in [
@@ -508,7 +549,7 @@ mod tests {
         assert!(html.contains("0/5 finishes — par pending"));
         assert!(html.contains("void — excluded"));
         assert!(
-            !overview(&config, 2, &seeds, &attempts, Some(456))
+            !self::overview(Series::Standard, &config, 2, &seeds, &attempts)
                 .0
                 .contains("Entrant &lt;")
         );

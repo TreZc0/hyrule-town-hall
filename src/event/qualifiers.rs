@@ -8,6 +8,7 @@ use crate::{
     seed, volunteer_requests,
 };
 
+pub(crate) mod details;
 mod editor;
 mod help;
 mod pools;
@@ -60,18 +61,6 @@ async fn qualifiers_form(
     .fetch_optional(&mut *transaction)
     .await?;
 
-    #[derive(sqlx::FromRow)]
-    struct LiveEntryRow {
-        live_race_id: i64,
-        racetime_entrant_id: String,
-        entrant_name: Option<String>,
-        eligible: Option<bool>,
-        exclusion_reason: Option<String>,
-        present_at_go: Option<bool>,
-        retry_reserved_at: Option<DateTime<Utc>>,
-        retry_committed_at: Option<DateTime<Utc>>,
-        retry_released_at: Option<DateTime<Utc>>,
-    }
     let pooled_config =
         pooled_qualifiers::Config::load(&mut transaction, event.series, &event.event).await?;
     let pooled_modes = if pooled_config.is_some() {
@@ -90,47 +79,24 @@ async fn qualifiers_form(
         Vec::new()
     };
     let pooled_attempts = if pooled_config.is_some() {
-        pools::load_attempts(&mut transaction, event.series, &event.event).await?
+        pools::load_summary_attempts(&mut transaction, event.series, &event.event).await?
     } else {
         Vec::new()
     };
-    let mut pooled_live_entries: HashMap<i64, Vec<LiveEntryRow>> = HashMap::new();
+    let mut pooled_live_entries: HashMap<i64, i64> = HashMap::new();
     if pooled_config.is_some() {
-        let entries = sqlx::query_as::<_, LiveEntryRow>(
-            r#"SELECT seed.live_race_id, entry.racetime_entrant_id,
-                COALESCE(user_account.racetime_display_name, user_account.discord_display_name,
-                    linked_account.racetime_display_name, linked_account.discord_display_name,
-                    result.racetime_name) AS entrant_name,
-                entry.eligible, entry.exclusion_reason, entry.present_at_go,
-                entry.retry_reserved_at, entry.retry_committed_at, entry.retry_released_at
-            FROM qualifier_live_entries entry
+        pooled_live_entries = sqlx::query_as::<_, (i64, i64)>(
+            r#"SELECT seed.live_race_id, COUNT(*) FROM qualifier_live_entries entry
             JOIN qualifier_seeds seed ON seed.id = entry.seed_id
-            LEFT JOIN users user_account ON user_account.racetime_id = entry.racetime_entrant_id
-            LEFT JOIN users linked_account ON linked_account.id = entry.user_id
-            LEFT JOIN LATERAL (
-                SELECT attempt.allocation_metadata->>'racetime_name' AS racetime_name
-                FROM qualifier_attempts attempt
-                WHERE attempt.racetime_id = entry.racetime_entrant_id
-                    AND NULLIF(attempt.allocation_metadata->>'racetime_name', '') IS NOT NULL
-                ORDER BY attempt.requested_at DESC, attempt.id DESC LIMIT 1
-            ) result ON TRUE
-            WHERE entry.series = $1 AND entry.event = $2
-                AND EXISTS (SELECT 1 FROM qualifier_live_entries started
-                    WHERE started.seed_id = entry.seed_id AND started.present_at_go = TRUE)
-            ORDER BY LOWER(COALESCE(user_account.racetime_display_name, user_account.discord_display_name,
-                linked_account.racetime_display_name, linked_account.discord_display_name,
-                result.racetime_name, entry.racetime_entrant_id)), entry.racetime_entrant_id"#,
+            WHERE entry.series = $1 AND entry.event = $2 AND seed.live_race_id IS NOT NULL
+            GROUP BY seed.live_race_id HAVING BOOL_OR(entry.present_at_go = TRUE)"#,
         )
         .bind(event.series)
         .bind(&event.event)
         .fetch_all(&mut *transaction)
-        .await?;
-        for entry in entries {
-            pooled_live_entries
-                .entry(entry.live_race_id)
-                .or_default()
-                .push(entry);
-        }
+        .await?
+        .into_iter()
+        .collect();
     }
     let pooled_standings = if let Some(config) = &pooled_config {
         standings::load(
@@ -179,7 +145,9 @@ async fn qualifiers_form(
                     @for seed in pooled_seeds.iter().filter(|seed| pooled_attempts.iter().any(|attempt| attempt.seed_id == seed.id)) {
                         @let attempts = pooled_attempts.iter().filter(|attempt| attempt.seed_id == seed.id).collect_vec();
                         @let (finalized, to_review) = pools::review_counts(&attempts);
-                        details(id = format!("attempt-results-{}", seed.id), class = "qualifier-pool-card") {
+                        details(id = format!("attempt-results-{}", seed.id), class = "qualifier-pool-card",
+                            data_qualifier_url = uri!(details::get_results(event.series, &*event.event, seed.id)).to_string(),
+                            data_attempt_ids = attempts.iter().map(|attempt| attempt.id.to_string()).join(" ")) {
                             summary {
                                 : pools::seed_title(seed.id, &pooled_seeds);
                                 @if let Some(mode_name) = attempts.first().map(|attempt| attempt.mode_name.as_str()) {
@@ -188,115 +156,7 @@ async fn qualifiers_form(
                                 span(class = "qualifier-badge") : format!("{finalized} finalized");
                                 span(class = "qualifier-badge") : format!("{to_review} to review");
                             }
-                            table {
-                                thead { tr { th : "Entrant"; th : "Mode"; th : "Source"; th : "State"; th : "Outcome"; th : "Counted"; th : "Retry of"; th : "Re-attempt declaration"; th : "Review / history"; th : "VOD"; } }
-                                tbody {
-                                    @for attempt in attempts {
-                                tr(id = format!("attempt-{}", attempt.id)) {
-                                    td { : &attempt.entrant_name; : format!(" ({})", attempt.team_id.map_or_else(|| "awaiting signup".into(), |team| team.to_string())); }
-                                    td : &attempt.mode_name;
-                                    td : &attempt.source;
-                                    td : &attempt.state;
-                                    td {
-                                        : attempt.official_outcome.as_deref().unwrap_or("");
-                                        @if let Some(ref time) = attempt.official_time {
-                                            : format!(" — {}", English.format_duration(Duration::from_micros(u64::try_from(time.microseconds.max(0)).unwrap_or_default()), false));
-                                        }
-                                    }
-                                    td : if attempt.counts_for_entrant { "yes" } else { "no" };
-                                    td {
-                                        @if let Some(id) = attempt.retry_of {
-                                            a(href = format!("#attempt-{id}")) : "Previous result";
-                                        }
-                                    }
-                                    td {
-                                        @if let Some(declared_at) = attempt.retry_declared_at {
-                                            : if attempt.superseded_by.is_some() { "Used — " } else if attempt.retry_banned_at.is_some() { "Blocked — " } else if attempt.counts_for_entrant && attempt.state != "void" { "Pending — " } else { "Inactive — " };
-                                            : format_datetime(declared_at, DateTimeFormat { long: true, running_text: false });
-                                        }
-                                    }
-                                    td {
-                                        @if let Some(error) = &attempt.delivery_error { p : error; }
-                                        @if attempt.delivery_error.is_some() {
-                                            details {
-                                                summary : "Recover Discord delivery";
-                                                p : "Review the private thread or organizers channel first. Retrying READY or seed delivery keeps the original seed and preparation deadline. GO recovery only accepts an existing bot GO message.";
-                                                : full_form(uri!(post_pooled_recover(event.series, &*event.event)), csrf, html! {
-                                                    input(type = "hidden", name = "attempt_id", value = attempt.id);
-                                                    input(type = "hidden", name = "control_version", value = attempt.control_version);
-                                                    : help::label(&format!("recovery-{}-action", attempt.id), "recovery_action", "Recovery action");
-                                                    select(id = format!("recovery-{}-action", attempt.id), name = "action") {
-                                                        option(value = "ready") : "Retry READY delivery";
-                                                        option(value = "seed") : "Retry same seed delivery";
-                                                        option(value = "thread") : "Connect existing private thread";
-                                                        option(value = "go") : "Connect existing GO message";
-                                                        option(value = "retry-declared") : "Retry re-attempt announcement (or connect existing message)";
-                                                    }
-                                                    : help::label(&format!("recovery-{}-discord_id", attempt.id), "discord_id", "Discord thread/message ID (for connection actions)");
-                                                    input(id = format!("recovery-{}-discord_id", attempt.id), name = "discord_id", type = "number");
-                                                    : help::label(&format!("recovery-{}-reason", attempt.id), "reason", "Reason (optional)");
-                                                    textarea(id = format!("recovery-{}-reason", attempt.id), name = "reason");
-                                                }, Vec::new(), "Save recovery");
-                                            }
-                                        }
-
-                                        @if attempt.source == "async" || attempt.state == "void" || attempt.correction_history.as_array().is_some_and(|history| !history.is_empty()) {
-                                            details {
-                                                summary : if attempt.source == "async" && attempt.state != "void" { "Review / correct result" } else { "Review history" };
-                                                @if attempt.state == "void" {
-                                                    p : "This attempt was invalidated and does not count.";
-                                                } else if attempt.source == "async" {
-                                                    p(class = "qualifier-hint") : "Verify this run’s evidence or correct its recorded result. For a finish, enter the official time and recording URL.";
-                                                    : full_form(uri!(post_pooled_result(event.series, &*event.event)), csrf, html! {
-                                                        input(type = "hidden", name = "attempt_id", value = attempt.id);
-                                                        input(type = "hidden", name = "control_version", value = attempt.control_version);
-                                                        input(type = "hidden", name = "action", value = "result");
-                                                        : help::label(&format!("review-{}-outcome", attempt.id), "outcome", "Official outcome");
-                                                        select(id = format!("review-{}-outcome", attempt.id), name = "outcome") {
-                                                            option(value = "finished") : "Finished";
-                                                            option(value = "forfeit") : "Forfeit / missing evidence";
-                                                        }
-                                                        : help::label(&format!("review-{}-finish_time", attempt.id), "finish_time", "Time (HH:MM:SS, required for a finish)");
-                                                        input(id = format!("review-{}-finish_time", attempt.id), name = "finish_time", placeholder = "01:23:45");
-                                                        : help::label(&format!("review-{}-vod", attempt.id), "vod", "VOD URL (required for a finish)");
-                                                        input(id = format!("review-{}-vod", attempt.id), name = "vod", type = "url", value = attempt.vod.as_deref().unwrap_or(""));
-                                                        : help::label(&format!("review-{}-reason", attempt.id), "reason", "Reason (optional)");
-                                                        textarea(id = format!("review-{}-reason", attempt.id), name = "reason");
-                                                    }, Vec::new(), "Save reviewed change");
-                                                }
-                                                @if attempt.correction_history.as_array().is_some_and(|history| !history.is_empty()) {
-                                                    pre : serde_json::to_string_pretty(&attempt.correction_history).unwrap_or_default();
-                                                }
-                                            }
-                                        }
-                                        @if attempt.state != "void" {
-                                            details {
-                                                summary : "DQ / invalidate attempt";
-                                                form(action = uri!(post_pooled_result(event.series, &*event.event)).to_string(), method = "post") {
-                                                    : csrf;
-                                                    input(type = "hidden", name = "attempt_id", value = attempt.id);
-                                                    input(type = "hidden", name = "control_version", value = attempt.control_version);
-                                                    p(class = "qualifier-hint") : "DQ keeps this attempt with 0 points. Invalidate cancels it, removing it from scoring and freeing the attempt or retry it used.";
-                                                    : help::label(&format!("attempt-{}-reason", attempt.id), "reason", "Reason (optional)");
-                                                    textarea(id = format!("attempt-{}-reason", attempt.id), name = "reason");
-                                                    fieldset {
-                                                        button(type = "submit", name = "action", value = "dq", onclick = "return confirm('Disqualify this attempt? It will remain used and count for 0 points.')") : "DQ";
-                                                        button(type = "submit", name = "action", value = "invalidate", onclick = "return confirm('Invalidate this attempt? It will be removed from scoring and its attempt or retry usage will be released. If this was a retry, the previous valid result will be restored.')") : "Invalidate";
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-
-                                    td {
-                                        @if let Some(ref vod) = attempt.vod {
-                                            a(href = vod) : "VOD";
-                                        }
-                                    }
-                                }
-                                    }
-                                }
-                            }
+                            : details::placeholder(uri!(details::get_results(event.series, &*event.event, seed.id)));
                         }
                     }
                 }
@@ -309,7 +169,7 @@ async fn qualifiers_form(
                         details(class = "qualifier-pool-card") {
                             summary { : &mode.display_name; span(class = "qualifier-badge") : if mode.enabled { "Enabled" } else { "Disabled" }; }
                             p(class = "qualifier-hint") : "Assignment counts exclude void attempts. Replaced attempts remain in their original seed group and may still contribute to par. Expand a seed for its assigned entrants and results.";
-                            : pools::overview(config, mode.id, &pooled_seeds, &pooled_attempts, event.discord_guild.map(|guild| guild.get()));
+                            : pools::overview(event.series, config, mode.id, &pooled_seeds, &pooled_attempts);
                         }
                     }
                 }
@@ -321,8 +181,9 @@ async fn qualifiers_form(
                     p : "Entrants will appear here once a live race has started.";
                 }
                 @for race in &races {
-                    @if let Some(entries) = pooled_live_entries.get(&i64::from(race.id)) {
-                        details(class = "qualifier-pool-card") {
+                    @if let Some(count) = pooled_live_entries.get(&i64::from(race.id)) {
+                        details(class = "qualifier-pool-card",
+                            data_qualifier_url = uri!(details::get_live(event.series, &*event.event, i64::from(race.id))).to_string()) {
                             summary {
                                 : race.round.as_deref().filter(|round| !round.trim().is_empty()).map(str::to_owned)
                                     .unwrap_or_else(|| format!("Live qualifier {}", race.qualifier_number.unwrap_or(1)));
@@ -331,27 +192,10 @@ async fn qualifiers_form(
                                     : " — ";
                                     : format_datetime(start, DateTimeFormat { long: true, running_text: false });
                                 }
-                                span(class = "qualifier-badge") : format!("{} entrants", entries.len());
+                                span(class = "qualifier-badge") : format!("{count} entrants");
                             }
                             @if let Some(room) = &race.room { p { a(href = room) : "Race room"; } }
-                            table {
-                                thead { tr { th : "Entrant"; th : "Eligible"; th : "Present at start"; th : "Re-attempt"; th : "Reason"; } }
-                                tbody {
-                                    @for entry in entries {
-                                        tr {
-                                            td {
-                                                a(href = format!("https://{}/user/{}", racetime_host(), entry.racetime_entrant_id)) {
-                                                    : entry.entrant_name.as_deref().unwrap_or("Unknown racer");
-                                                }
-                                            }
-                                            td : entry.eligible.map(|value| if value { "yes" } else { "no" }).unwrap_or("pending");
-                                            td : entry.present_at_go.map(|value| if value { "yes" } else { "no" }).unwrap_or("pending");
-                                            td : if entry.retry_committed_at.is_some() { "Used" } else if entry.retry_released_at.is_some() { "Not used" } else if entry.retry_reserved_at.is_some() { "Pending" } else { "" };
-                                            td : entry.exclusion_reason.as_deref().unwrap_or("");
-                                        }
-                                    }
-                                }
-                            }
+                            : details::placeholder(uri!(details::get_live(event.series, &*event.event, i64::from(race.id))));
                         }
                     }
                 }
@@ -2887,7 +2731,7 @@ pub(crate) mod route_tests {
         let mut tx = pool.begin().await.unwrap();
         let series: Series = series.parse().unwrap();
         let seeds = pools::load_seeds(&mut tx, series, event).await.unwrap();
-        let attempts = pools::load_attempts(&mut tx, series, event).await.unwrap();
+        let attempts = pools::load_attempts(&mut tx, series, event, None).await.unwrap();
         let original = attempts
             .iter()
             .find(|attempt| attempt.id == original)
@@ -2910,9 +2754,8 @@ pub(crate) mod route_tests {
             .iter()
             .find(|seed| seed.id == original.seed_id)
             .unwrap();
-        let html = pools::overview(&config, seed.mode_id, &seeds, &attempts, Some(123)).0;
+        let html = pools::history(&config, seed, &attempts.iter().filter(|attempt| attempt.seed_id == seed.id).collect_vec(), Some(123)).0;
         assert!(html.contains(&format!("#attempt-{}", replacement.id)));
-        assert!(html.contains(&format!("pool-seed-{}", original.seed_id)));
         assert!(html.contains("1/5 finishes — par pending"));
         assert!(html.contains("Private async thread"));
         tx.rollback().await.unwrap();
@@ -2954,6 +2797,9 @@ pub(crate) mod route_tests {
                 rocket::routes![
                     token,
                     get,
+                    details::get_results,
+                    details::get_pool,
+                    details::get_live,
                     post_pooled_config,
                     post_pooled_mode,
                     post_pooled_result,
@@ -2982,9 +2828,8 @@ pub(crate) mod route_tests {
         let private = private.into_string().await.unwrap();
         assert!(private.contains("Qualifier seed pools"));
         assert!(private.contains("Awaiting verification"));
-        assert!(private.contains("Review result / history"));
-        assert!(private.contains("Re-attempt declaration"));
-        assert!(private.contains("Used — "));
+        assert!(!private.contains("Re-attempt declaration"));
+        assert!(!private.contains("name=\"control_version\""));
         {
             use kuchiki::traits::TendrilSink as _;
             let document = kuchiki::parse_html().one(private.clone());
@@ -3005,7 +2850,38 @@ pub(crate) mod route_tests {
                 let summary = group.as_node().select_first("summary").unwrap().text_contents();
                 assert!(summary.contains(" finalized"));
                 assert!(summary.contains(" to review"));
-                assert!(group.as_node().select_first("tr[id^=\"attempt-\"]").is_ok());
+                assert!(group.as_node().select_first("tr[id^=\"attempt-\"]").is_err());
+                let url = group.attributes.borrow().get("data-qualifier-url").unwrap().to_owned();
+                let response = client.get(&url)
+                    .header(rocket::http::Header::new("x-test-user", staff.to_string()))
+                    .dispatch().await;
+                assert_eq!(response.status(), Status::Ok);
+                let fragment = response.into_string().await.unwrap();
+                assert!(fragment.contains("Re-attempt declaration"));
+                let rows = kuchiki::parse_html().one(fragment);
+                let expected = group.attributes.borrow().get("data-attempt-ids").unwrap().to_owned();
+                let actual = rows.select("tr[id]").unwrap().map(|row| {
+                    row.attributes.borrow().get("id").unwrap().trim_start_matches("attempt-").to_owned()
+                }).join(" ");
+                assert_eq!(actual, expected);
+            }
+            // Every lazy endpoint enforces the same access control as the page.
+            for block in document.select("details[data-qualifier-url]").unwrap() {
+                let url = block.attributes.borrow().get("data-qualifier-url").unwrap().to_owned();
+                let response = client.get(&url)
+                    .header(rocket::http::Header::new("x-test-user", staff.to_string()))
+                    .dispatch().await;
+                assert_eq!(response.status(), Status::Ok);
+                assert!(!response.into_string().await.unwrap().contains("qualifier-lazy-content"));
+                assert_eq!(client.get(&url)
+                    .header(rocket::http::Header::new("x-test-user", outsider.to_string()))
+                    .dispatch().await.status(), Status::Forbidden);
+                assert_ne!(client.get(&url).dispatch().await.status(), Status::Ok);
+            }
+            for kind in ["results", "pool", "live"] {
+                assert_eq!(client.get(format!("{base}/{kind}/0"))
+                    .header(rocket::http::Header::new("x-test-user", staff.to_string()))
+                    .dispatch().await.status(), Status::NotFound);
             }
             assert!(
                 document

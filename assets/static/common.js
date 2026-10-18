@@ -1,24 +1,28 @@
-document.querySelectorAll('.datetime').forEach(function(dateTime) {
-    var longFormat = dateTime.dataset.long == 'true';
-    var date = new Date(parseInt(dateTime.dataset.timestamp));
-    if (longFormat) {
-        dateTime.textContent = date.toLocaleString(['en'], {
-            dateStyle: 'full',
-            timeStyle: 'full',
-        });
-    } else {
-        var dateText = date.toLocaleDateString(['en'], {
-            month: 'short',
-            day: 'numeric',
-            year: 'numeric',
-        }).replace(/, (?=\d{4}$)/, ' ');
-        var timeText = date.toLocaleTimeString(['en'], {
-            hour: 'numeric',
-            minute: '2-digit',
-        });
-        dateTime.textContent = dateText + ', ' + timeText;
-    }
-});
+function formatDateTimes(root) {
+    root.querySelectorAll('.datetime').forEach(function(dateTime) {
+        var longFormat = dateTime.dataset.long == 'true';
+        var date = new Date(parseInt(dateTime.dataset.timestamp));
+        if (longFormat) {
+            dateTime.textContent = date.toLocaleString(['en'], {
+                dateStyle: 'full',
+                timeStyle: 'full',
+            });
+        } else {
+            var dateText = date.toLocaleDateString(['en'], {
+                month: 'short',
+                day: 'numeric',
+                year: 'numeric',
+            }).replace(/, (?=\d{4}$)/, ' ');
+            var timeText = date.toLocaleTimeString(['en'], {
+                hour: 'numeric',
+                minute: '2-digit',
+            });
+            dateTime.textContent = dateText + ', ' + timeText;
+        }
+    });
+}
+formatDateTimes(document);
+document.addEventListener('qualifier:loaded', event => formatDateTimes(event.detail));
 
 document.querySelectorAll('.daterange').forEach(function(dateRange) {
     var start = new Date(parseInt(dateRange.dataset.start));
