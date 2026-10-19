@@ -15,6 +15,7 @@ use {
 pub(crate) mod async_results;
 pub(crate) mod configuration;
 pub(crate) mod configure;
+mod participant_roles;
 pub(crate) mod pooled_qualifiers;
 pub(crate) mod scoring;
 
@@ -3288,6 +3289,9 @@ pub(crate) async fn resign_post(
             .push_safe(&data.display_name)
             .push(".")
             .build();
+        // Capture users before deleting memberships so Discord cleanup also runs
+        // for teams that do not leave a historical record.
+        let team_members = team.members(&mut transaction).await?;
         let members = if keep_record {
             sqlx::query!(
                 r#"UPDATE teams SET resigned = TRUE WHERE id = $1"#,
@@ -3386,9 +3390,11 @@ pub(crate) async fn resign_post(
             }
             if let (Some(discord_guild), Some(PgSnowflake(participant_role))) = (data.discord_guild, sqlx::query_scalar!(r#"SELECT id AS "id: PgSnowflake<RoleId>" FROM discord_roles WHERE guild = $1 AND series = $2 AND event = $3"#, PgSnowflake(data.discord_guild.unwrap()) as _, series as _, event).fetch_optional(&mut *transaction).await?) {
                 let discord_ctx = discord_ctx.read().await;
-                let team_members = team.members(&mut transaction).await?;
                 for user in team_members {
                     if let Some(discord_user) = user.discord.as_ref() {
+                        if participant_roles::still_needed(&mut transaction, discord_guild, participant_role, discord_user.id, team.id).await? {
+                            continue;
+                        }
                         if let Ok(member) = discord_guild.member(&*discord_ctx, discord_user.id).await {
                             let _ = member.remove_role(&*discord_ctx, participant_role).await;
                         }
@@ -4054,6 +4060,9 @@ pub(crate) async fn manage_team_post(
                         let discord_ctx = discord_ctx.read().await;
                         for user in &team_members {
                             if let Some(discord_user) = user.discord.as_ref() {
+                                if participant_roles::still_needed(&mut transaction, discord_guild, participant_role, discord_user.id, team).await? {
+                                    continue;
+                                }
                                 if let Ok(member) = discord_guild.member(&*discord_ctx, discord_user.id).await {
                                     let _ = member.remove_role(&*discord_ctx, participant_role).await;
                                 }

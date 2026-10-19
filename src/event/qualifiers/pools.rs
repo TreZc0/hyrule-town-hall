@@ -72,7 +72,8 @@ pub(super) async fn load_summary_attempts(
 ) -> Result<Vec<AttemptRow>, sqlx::Error> {
     sqlx::query_as::<_, AttemptRow>(
         r#"SELECT attempt.id, attempt.mode_id, attempt.seed_id, attempt.racetime_id,
-            attempt.par_eligible, attempt.state, attempt.counts_for_entrant,
+            (attempt.par_eligible AND qualifier_par_eligible(attempt.series, attempt.event, attempt.racetime_id)) AS par_eligible,
+            attempt.state, attempt.counts_for_entrant,
             attempt.official_outcome, attempt.official_time, mode.display_name AS mode_name,
             qualifier_signup_eligible(attempt.series, attempt.event, attempt.racetime_id) AS signup_eligible
         FROM qualifier_attempts attempt JOIN qualifier_modes mode ON mode.id = attempt.mode_id
@@ -92,7 +93,9 @@ pub(super) async fn load_attempts(
     seed_id: Option<i64>,
 ) -> Result<Vec<AttemptRow>, sqlx::Error> {
     sqlx::query_as::<_, AttemptRow>(
-            r#"SELECT attempt.id, attempt.mode_id, attempt.seed_id, attempt.par_eligible, attempt.superseded_by, attempt.discord_thread, attempt.racetime_id,
+            r#"SELECT attempt.id, attempt.mode_id, attempt.seed_id,
+                (attempt.par_eligible AND qualifier_par_eligible(attempt.series, attempt.event, attempt.racetime_id)) AS par_eligible,
+                attempt.superseded_by, attempt.discord_thread, attempt.racetime_id,
                 (SELECT teams.id FROM teams WHERE teams.series=attempt.series AND teams.event=attempt.event
                     AND NOT teams.resigned AND qualifier_runner_team(attempt.series, attempt.event, attempt.racetime_id, teams.id)
                     AND NOT EXISTS (SELECT 1 FROM team_members WHERE team=teams.id AND status='unconfirmed')

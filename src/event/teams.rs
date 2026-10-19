@@ -1161,6 +1161,9 @@ pub(crate) async fn signups_sorted(
             let modes =
                 pooled_qualifiers::Mode::for_event(transaction, data.series, &data.event).await?;
             let standings = pooled_qualifiers::standings(transaction, &config).await?;
+            let opted_out =
+                pooled_qualifiers::opted_out_racetime_ids(transaction, data.series, &data.event)
+                    .await?;
             let teams = sqlx::query!(r#"SELECT id AS "id: Id<Teams>", name, racetime_slug, challonge_id, startgg_id AS "startgg_id: startgg::ID", plural_name, custom_choices AS "custom_choices: Json<HashMap<String, String>>", restream_consent, mw_impl AS "mw_impl: mw::Impl", qualifier_rank FROM teams WHERE
                 series = $1
                 AND event = $2
@@ -1296,18 +1299,32 @@ pub(crate) async fn signups_sorted(
                         continue;
                     }
                 }
+                let is_opted_out = members.iter().any(|member| match &member.user {
+                    MemberUser::MidosHouse(user) => user
+                        .racetime
+                        .as_ref()
+                        .is_some_and(|racetime| opted_out.contains(&racetime.id)),
+                    _ => false,
+                });
+                if is_opted_out && !include_opted_out {
+                    continue;
+                }
                 signups.push(SignupsTeam {
                     team: Some(team),
                     members,
                     qualification: qualification(standing),
                     custom_choices: row.custom_choices.0,
-                    is_opted_out: false,
+                    is_opted_out,
                 });
             }
             for unregistered in standings
                 .iter()
                 .filter(|standing| standing.team_id.is_none())
             {
+                let is_opted_out = opted_out.contains(&unregistered.racetime_id);
+                if is_opted_out && !include_opted_out {
+                    continue;
+                }
                 let standing = Some(unregistered);
                 signups.push(SignupsTeam {
                     team: None,
@@ -1324,7 +1341,7 @@ pub(crate) async fn signups_sorted(
                     }],
                     qualification: qualification(standing),
                     custom_choices: HashMap::new(),
-                    is_opted_out: false,
+                    is_opted_out,
                 });
             }
             signups

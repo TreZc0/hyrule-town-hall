@@ -71,6 +71,15 @@ pub(super) fn label(id: &str, field: &str, title: &str) -> RawHtml<String> {
             "Each seed needs at least N eligible finishes before finish scores can be calculated. Until then they remain pending. A forfeit, disqualification or invalid result scores zero and does not supply an eligible finish.",
             "Replaced attempts may remain eligible for par even though they no longer count toward that entrant’s average. Staff result corrections can change par and consequently other scores on that seed.",
         ],
+        "include_opted_out_in_par" => &[
+            "Include keeps opted-out players' otherwise eligible finish times in the seed's par calculation. Exclude removes those times from par without deleting their results or scores. Opt-outs still do not take ranking positions.",
+            "This setting remains editable after the format locks. Saving recalculates existing par times, points, and rankings on the next load. Both par inclusion settings must allow a player for their finish times to count.",
+        ],
+        "include_unqualified_in_par" => &[
+            "Unqualified means the player does not yet have a finalized counted result in every required mode. This checks participation, not ranking or points, so it does not depend on the par calculation itself.",
+            "Forfeits, disqualifications, and invalid results fulfill a mode with zero points but never supply finish times for par. Pending, voided, and replaced attempts do not fulfill a mode. A completed replacement can restore eligibility for the player's otherwise eligible earlier finishes too.",
+            "Exclude removes all of an incomplete player's finish times from par. They become eligible again when every required mode has a finalized counted result. This setting remains editable and applies retroactively; scores can remain pending if too few eligible finishers remain.",
+        ],
         "score_scale" | "score_offset" | "score_minimum" | "score_maximum" => &[
             "Finished-run points = scale × (offset − finish time ÷ seed par), clamped between the minimum and maximum. Times use the same units. Par is calculated separately for each physical seed from its fastest eligible finishes.",
             "With scale 100, offset 2, minimum 0 and maximum 105: a finish at par earns 100 points; a finish at 1.2 times par earns 80; a finish at 0.9 times par would earn 110 and is capped at 105.",

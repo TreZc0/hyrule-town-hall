@@ -118,6 +118,8 @@ pub(crate) struct Config {
     pub(crate) retry_limit: i16,
     pub(crate) allocation_spread: i16,
     pub(crate) par_finishers: i16,
+    pub(crate) include_opted_out_in_par: bool,
+    pub(crate) include_unqualified_in_par: bool,
     pub(crate) score_scale: f64,
     pub(crate) score_offset: f64,
     pub(crate) score_minimum: f64,
@@ -139,7 +141,7 @@ impl Config {
                 results_release_at, async_run_limit, live_entry_close_lead,
                 retry_limit, allocation_spread, par_finishers, score_scale,
                 score_offset, score_minimum, score_maximum, requests_paused,
-                settings_locked_at
+                settings_locked_at, include_opted_out_in_par, include_unqualified_in_par
             FROM pooled_qualifier_configs WHERE series = $1 AND event = $2"#,
         )
         .bind(series)
@@ -854,7 +856,7 @@ async fn lock_request_context(
             results_release_at, async_run_limit, live_entry_close_lead,
             retry_limit, allocation_spread, par_finishers, score_scale,
             score_offset, score_minimum, score_maximum, requests_paused,
-            settings_locked_at
+            settings_locked_at, include_opted_out_in_par, include_unqualified_in_par
         FROM pooled_qualifier_configs WHERE series = $1 AND event = $2 FOR UPDATE"#,
     )
     .bind(&series)
@@ -1165,6 +1167,8 @@ pub(crate) fn standings_notice(config: &Config) -> RawHtml<String> {
                 p { : "Event signup deadline: "; : format_datetime(deadline, DateTimeFormat { long: true, running_text: false }); }
             }
             p : format!("After signup closes, each seed's par is the average of its fastest {} eligible finishers, or all remaining eligible finishers if fewer remain.", config.par_finishers);
+            p : if config.include_opted_out_in_par { "Opted-out players' eligible finishes are included in par." } else { "Opted-out players' finishes are excluded from par." };
+            p : if config.include_unqualified_in_par { "Eligible finishes count toward par even before a player has finalized results in every required mode." } else { "Only players with a finalized counted result in every required mode contribute to par. Forfeits, disqualifications, and invalid results count as completed modes but do not supply finish times for par." };
         }
     }
 }
@@ -1862,6 +1866,25 @@ pub(crate) fn hide_score(
         }
 }
 
+pub(super) async fn opted_out_racetime_ids(
+    transaction: &mut Transaction<'_, Postgres>,
+    series: Series,
+    event: &str,
+) -> Result<HashSet<String>, sqlx::Error> {
+    // Resolve account-based opt-outs too, including a changed linked racetime account.
+    let ids: Vec<String> = sqlx::query_scalar(
+        r#"SELECT racetime_id FROM opt_outs WHERE series = $1 AND event = $2
+        UNION
+        SELECT users.racetime_id FROM opt_outs JOIN users ON users.id = opt_outs.user_id
+        WHERE opt_outs.series = $1 AND opt_outs.event = $2 AND users.racetime_id IS NOT NULL"#,
+    )
+    .bind(series)
+    .bind(event)
+    .fetch_all(&mut **transaction)
+    .await?;
+    Ok(ids.into_iter().collect())
+}
+
 pub(crate) async fn standings(
     transaction: &mut Transaction<'_, Postgres>,
     config: &Config,
@@ -1882,7 +1905,9 @@ pub(crate) async fn standings(
     );
     let rows: Vec<Row> = sqlx::query_as(
         r#"SELECT attempt.racetime_id, attempt.mode_id, mode.position, attempt.seed_id,
-            attempt.counts_for_entrant, attempt.par_eligible, attempt.state,
+            attempt.counts_for_entrant,
+            (attempt.par_eligible AND qualifier_par_eligible(attempt.series, attempt.event, attempt.racetime_id)),
+            attempt.state,
             attempt.official_outcome, attempt.official_time, attempt.source,
             (SELECT teams.id FROM teams JOIN team_members ON team_members.team=teams.id
              JOIN users ON users.id=team_members.member WHERE users.racetime_id=attempt.racetime_id
@@ -2186,6 +2211,8 @@ pub(crate) mod tests {
             retry_limit: 1,
             allocation_spread: 2,
             par_finishers: 5,
+            include_opted_out_in_par: true,
+            include_unqualified_in_par: true,
             score_scale: 100.0,
             score_offset: 2.0,
             score_minimum: 0.0,

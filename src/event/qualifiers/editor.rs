@@ -38,7 +38,7 @@ pub(super) fn configuration(
                 } else {
                     ul { @for error in readiness { li : error; } }
                 }
-                @if locked { p : "Format and scoring settings are locked. Deadlines, the live entry cutoff, and the pause control can still be updated. Pausing does not unlock the format."; }
+                @if locked { p : "Format and scoring formula settings are locked. Par inclusion settings, deadlines, the live entry cutoff, and the pause control can still be updated. Pausing does not unlock the format."; }
             }
             form(id = "pooled-config-form", action = uri!(super::post_pooled_config(series, event)).to_string(), method = "post") {
                 : csrf;
@@ -75,6 +75,23 @@ pub(super) fn configuration(
                                     input(id = name, type = "number", name = name, min? = (!min.is_empty()).then_some(min), max? = max, step = step,
                                         value = ctx.field_value(name).unwrap_or(&value), required? = true, readonly? = locked && name != "live_entry_close_minutes", aria_describedby = format!("{name}-hint"));
                                 });
+                            }
+                        }
+                        @if heading == "Scoring" {
+                            p(class = "qualifier-hint") : "Changing either par inclusion setting recalculates existing points and rankings when results are loaded. Both settings remain editable after the format locks. Signup eligibility and result validity still apply.";
+                            div(class = "qualifier-grid") {
+                                @for (name, title, hint, included) in [
+                                    ("include_opted_out_in_par", "Include opted-out players in par", "Include eligible finish times from players who have opted out of upcoming stages.", config.include_opted_out_in_par),
+                                    ("include_unqualified_in_par", "Include unqualified players in par", "When excluded, a player needs a finalized counted result in every required mode. Forfeits, disqualifications, and invalid results count as completed modes, but their times never contribute to par. Pending reviews and missing modes do not count.", config.include_unqualified_in_par),
+                                ] {
+                                    @let included = ctx.field_value(name).map_or(included, |value| value == "true");
+                                    : field(name, name, title, hint, html! {
+                                        select(id = name, name = name, aria_describedby = format!("{name}-hint")) {
+                                            option(value = "true", selected? = included) : "Include";
+                                            option(value = "false", selected? = !included) : "Exclude";
+                                        }
+                                    });
+                                }
                             }
                         }
                     }
@@ -377,6 +394,37 @@ mod tests {
         )
         .0;
         let locked_document = kuchiki::parse_html().one(locked);
+        for name in ["include_opted_out_in_par", "include_unqualified_in_par"] {
+            assert!(
+                locked_document
+                    .select_first(&format!(
+                        "select[name={name}]:not([disabled]) option[value=true][selected]"
+                    ))
+                    .is_ok()
+            );
+        }
+        config.include_opted_out_in_par = false;
+        config.include_unqualified_in_par = false;
+        let excluded = kuchiki::parse_html().one(
+            configuration(
+                Series::Standard,
+                "test",
+                None,
+                &config,
+                &[],
+                &Context::default(),
+            )
+            .0,
+        );
+        for name in ["include_opted_out_in_par", "include_unqualified_in_par"] {
+            assert!(
+                excluded
+                    .select_first(&format!(
+                        "select[name={name}]:not([disabled]) option[value=false][selected]"
+                    ))
+                    .is_ok()
+            );
+        }
         assert_eq!(
             locked_document
                 .select("input[type=number][readonly]")
@@ -386,7 +434,9 @@ mod tests {
         );
         assert!(
             locked_document
-                .select_first("input[name=live_entry_close_minutes]:not([readonly]):not([disabled])")
+                .select_first(
+                    "input[name=live_entry_close_minutes]:not([readonly]):not([disabled])"
+                )
                 .is_ok()
         );
         assert_eq!(

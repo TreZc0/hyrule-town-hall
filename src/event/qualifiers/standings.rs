@@ -24,7 +24,8 @@ pub(super) async fn load(
     .fetch_all(&mut **transaction)
     .await?;
     let scores = pooled_qualifiers::standings(transaction, config).await?;
-    Ok(render(entrants, scores, modes, attempts))
+    let opted_out = pooled_qualifiers::opted_out_racetime_ids(transaction, series, event).await?;
+    Ok(render(entrants, scores, modes, attempts, &opted_out))
 }
 
 fn render(
@@ -32,6 +33,7 @@ fn render(
     scores: Vec<pooled_qualifiers::Standing>,
     modes: &[pooled_qualifiers::Mode],
     attempts: &[pools::AttemptRow],
+    opted_out: &HashSet<String>,
 ) -> RawHtml<String> {
     for score in &scores {
         if !entrants.iter().any(|(id, _)| id == &score.racetime_id) {
@@ -59,7 +61,7 @@ fn render(
     html! {
         section(id = "pooled-standings", class = "qualifier-section") {
             h2 : "Qualifier standings";
-            p(class = "qualifier-intro") : "Organizer view of reviewed results, including scores hidden from entrants. Scores remain pending until a seed has enough finishes to establish par. The average is available after every required mode has a score.";
+            p(class = "qualifier-intro") : "Organizer view of reviewed results, including scores hidden from entrants. Scores remain pending until a seed has enough finishes to establish par. The average is available after every required mode has a score. Opted-out entrants keep their scores but have no rank and do not take a ranking position.";
             @if entrants.is_empty() {
                 p : "No confirmed entrants yet.";
             } else {
@@ -74,8 +76,11 @@ fn render(
                     tbody {
                         @for (team_id, name) in &entrants {
                             tr {
-                                td : average(team_id).map(|score| (1 + entrants.iter().take_while(|(other, _)| average(other) != Some(score)).count()).to_string()).unwrap_or_else(|| "—".into());
-                                td : name;
+                                td : average(team_id).filter(|_| !opted_out.contains(team_id)).map(|score| (1 + entrants.iter().filter(|(other, _)| !opted_out.contains(other) && average(other).is_some_and(|other_score| other_score > score)).count()).to_string()).unwrap_or_else(|| "—".into());
+                                td {
+                                    : name;
+                                    @if opted_out.contains(team_id) { : " (Opted out)"; }
+                                }
                                 @for mode in modes.iter().filter(|mode| mode.enabled) {
                                     @let outcome = attempts.iter().find(|attempt| attempt.racetime_id == *team_id && attempt.signup_eligible && attempt.mode_id == mode.id && attempt.counts_for_entrant && attempt.state == "finalized").and_then(|attempt| attempt.official_outcome.as_deref());
                                     td : match outcome {
@@ -156,6 +161,7 @@ mod tests {
             scores,
             &[mode],
             &attempts,
+            &HashSet::new(),
         );
         let document = kuchiki::parse_html().one(html.0);
         let rows: Vec<_> = document
@@ -181,7 +187,7 @@ mod tests {
     }
 
     #[test]
-    fn standings_rank_ties_and_keep_pending_entrants_unranked() {
+    fn standings_rank_ties_without_counting_opted_out_or_pending_entrants() {
         let score = |team_id: i64, average| pooled_qualifiers::Standing {
             team_id: Some(team_id),
             racetime_id: team_id.to_string(),
@@ -198,14 +204,19 @@ mod tests {
                 ("2".into(), "Zero".into()),
                 ("3".into(), "Winner B".into()),
                 ("4".into(), "Winner A".into()),
+                ("5".into(), "Opted-out leader".into()),
+                ("6".into(), "Opted-out tie".into()),
             ],
             vec![
                 score(2, Some(0.0)),
                 score(3, Some(100.0)),
                 score(4, Some(100.0)),
+                score(5, Some(110.0)),
+                score(6, Some(100.0)),
             ],
             &[],
             &[],
+            &HashSet::from(["5".into(), "6".into()]),
         );
         let document = kuchiki::parse_html().one(html.0);
         let rows: Vec<Vec<String>> = document
@@ -222,6 +233,8 @@ mod tests {
         assert_eq!(
             rows,
             vec![
+                vec!["—", "Opted-out leader (Opted out)", "0", "110.00"],
+                vec!["—", "Opted-out tie (Opted out)", "0", "100.00"],
                 vec!["1", "Winner A", "0", "100.00"],
                 vec!["1", "Winner B", "0", "100.00"],
                 vec!["3", "Zero", "0", "0.00"],

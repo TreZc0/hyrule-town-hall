@@ -497,6 +497,10 @@ pub(crate) struct PooledConfigForm {
     retry_limit: i16,
     allocation_spread: i16,
     par_finishers: i16,
+    #[field(default = true)]
+    include_opted_out_in_par: bool,
+    #[field(default = true)]
+    include_unqualified_in_par: bool,
     score_scale: f64,
     score_offset: f64,
     score_minimum: f64,
@@ -628,6 +632,7 @@ pub(crate) async fn post_pooled_config(
         || old.score_minimum != value.score_minimum
         || old.score_maximum != value.score_maximum
         || old.run_limit().num_hours() != value.async_run_limit_hours;
+    // Par inclusion policies remain editable and recalculate existing results.
     // The live entry cutoff remains editable: races whose eligibility is
     // already frozen retain their stored roster, while future freezes use it.
     if (old.settings_locked_at.is_some() && structural_changed)
@@ -644,7 +649,8 @@ pub(crate) async fn post_pooled_config(
         live_entry_close_lead = make_interval(mins => $13::INT), retry_limit = $14,
         allocation_spread = $15, par_finishers = $16, score_scale = $17,
         score_offset = $18, score_minimum = $19, score_maximum = $20,
-        requests_paused = $21, updated_at = NOW()
+        requests_paused = $21, include_opted_out_in_par = $22,
+        include_unqualified_in_par = $23, updated_at = NOW()
         WHERE series = $1 AND event = $2"#,
     )
     .bind(series)
@@ -674,6 +680,8 @@ pub(crate) async fn post_pooled_config(
     .bind(value.score_minimum)
     .bind(value.score_maximum)
     .bind(value.requests_paused)
+    .bind(value.include_opted_out_in_par)
+    .bind(value.include_unqualified_in_par)
     .execute(&mut *transaction)
     .await?;
     if !value.requests_paused {
@@ -3063,6 +3071,19 @@ pub(crate) mod route_tests {
             let actual: i32 = sqlx::query_scalar("SELECT (EXTRACT(EPOCH FROM live_entry_close_lead)/60)::INT FROM pooled_qualifier_configs WHERE series=$1 AND event=$2")
                 .bind(series).bind(event).fetch_one(pool).await.unwrap();
             assert_eq!(actual, if expected == Status::Conflict { 0 } else { minutes });
+        }
+        // Par policies remain editable after locking, including explicit false values.
+        for (include_opted_out, include_unqualified) in [(false, true), (true, false), (false, false), (true, true)] {
+            let body = format!("{config_body}&{dates}&include_opted_out_in_par={include_opted_out}&include_unqualified_in_par={include_unqualified}");
+            let response = client.post(format!("{base}/pooled-config"))
+                .header(ContentType::Form)
+                .private_cookie(rocket::http::Cookie::new("csrf_token", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="))
+                .header(rocket::http::Header::new("x-test-user", staff.to_string()))
+                .body(encode(&body)).dispatch().await;
+            assert_eq!(response.status(), Status::SeeOther);
+            let actual: (bool, bool) = sqlx::query_as("SELECT include_opted_out_in_par, include_unqualified_in_par FROM pooled_qualifier_configs WHERE series=$1 AND event=$2")
+                .bind(series).bind(event).fetch_one(pool).await.unwrap();
+            assert_eq!(actual, (include_opted_out, include_unqualified));
         }
         let response = client
             .post(format!("{base}/pooled-mode"))
