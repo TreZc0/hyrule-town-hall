@@ -475,6 +475,7 @@ pub(crate) async fn preload_event_sets(
 pub(crate) enum ImportSkipReason {
     Exists,
     Preview,
+    Resigned,
     Slots,
     SetGamesType,
 }
@@ -484,6 +485,7 @@ impl fmt::Display for ImportSkipReason {
         match self {
             Self::Exists => write!(f, "already exists"),
             Self::Preview => write!(f, "is a preview"),
+            Self::Resigned => write!(f, "includes a resigned entrant"),
             Self::Slots => write!(f, "no match on slots"),
             Self::SetGamesType => write!(f, "unknown games type"),
         }
@@ -677,6 +679,7 @@ pub(crate) async fn races_to_import(
         event: &event::Data<'_>,
         event_slug: &str,
         existing_sets: &HashSet<ID>,
+        resigned_entrants: &HashSet<ID>,
         teams: &mut HashMap<ID, Team>,
         progress: Option<&tokio::sync::watch::Sender<String>>,
         page: i64,
@@ -745,6 +748,10 @@ pub(crate) async fn races_to_import(
                 }),
             ] = *slots
             {
+                if resigned_entrants.contains(team1) || resigned_entrants.contains(team2) {
+                    skips.push((id, ImportSkipReason::Resigned));
+                    continue;
+                }
                 // Entrants recur across rounds. Resolve each linked team once per import.
                 async fn team_for_entrant(
                     transaction: &mut Transaction<'_, Postgres>,
@@ -845,6 +852,18 @@ pub(crate) async fn races_to_import(
     .await?
     .into_iter()
     .collect::<HashSet<_>>();
+    // Read local resignations on each import, independently of the cached bracket.
+    // Existing races are preserved; only new sets involving these entrants are skipped.
+    let resigned_entrants = sqlx::query_scalar::<_, ID>(
+        "SELECT startgg_id FROM teams \
+         WHERE series = $1 AND event = $2 AND resigned AND startgg_id IS NOT NULL",
+    )
+    .bind(event.series)
+    .bind(&event.event)
+    .fetch_all(&mut **transaction)
+    .await?
+    .into_iter()
+    .collect::<HashSet<_>>();
     let mut teams = HashMap::new();
     let mut races = Vec::default();
     let mut skips = Vec::default();
@@ -860,6 +879,7 @@ pub(crate) async fn races_to_import(
         event,
         event_slug,
         &existing_sets,
+        &resigned_entrants,
         &mut teams,
         progress,
         1,
@@ -878,6 +898,7 @@ pub(crate) async fn races_to_import(
             event,
             event_slug,
             &existing_sets,
+            &resigned_entrants,
             &mut teams,
             progress,
             page,
