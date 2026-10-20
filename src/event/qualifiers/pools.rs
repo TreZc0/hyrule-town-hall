@@ -200,7 +200,7 @@ fn seed_metadata(seed: &SeedRow) -> RawHtml<String> {
 }
 
 impl AttemptRow {
-    fn outcome(&self) -> Option<pooled_qualifiers::Outcome> {
+    pub(super) fn outcome(&self) -> Option<pooled_qualifiers::Outcome> {
         use pooled_qualifiers::Outcome;
         if self.state != "finalized" {
             return None;
@@ -220,7 +220,7 @@ impl AttemptRow {
 }
 
 #[derive(Debug)]
-struct Population {
+pub(super) struct Population {
     assigned: usize,
     counted: usize,
     active: usize,
@@ -228,10 +228,10 @@ struct Population {
     finalized: usize,
     forfeited: usize,
     eligible_finishes: usize,
-    par: Option<f64>,
+    pub(super) par: Option<f64>,
 }
 
-fn population(config: &pooled_qualifiers::Config, attempts: &[&AttemptRow]) -> Population {
+pub(super) fn population(config: &pooled_qualifiers::Config, attempts: &[&AttemptRow]) -> Population {
     let finishes: Vec<_> = attempts
         .iter()
         .filter(|attempt| attempt.par_eligible && attempt.signup_eligible)
@@ -389,7 +389,7 @@ pub(super) fn history(
                         @if !attempt.signup_eligible { : "excluded from scoring"; }
                         else { @match pooled_qualifiers::performance_score(config, outcome, stats.par) {
                             pooled_qualifiers::ModeScore::Pending => { : "points pending"; }
-                            pooled_qualifiers::ModeScore::Score(points) => { : format!("{points:.2} points"); }
+                            pooled_qualifiers::ModeScore::Score(points) => { : format!("{points:.3} points"); }
                         }
                         }
                         @if matches!(outcome, pooled_qualifiers::Outcome::Finished(_)) && attempt.par_eligible && attempt.signup_eligible { : "; eligible for par"; }
@@ -539,7 +539,7 @@ mod tests {
             "Async slot 2",
             "Live qualifier &lt;1&gt;",
             "Entrant &lt;1&gt;",
-            "105.00 points",
+            "105.000 points",
             "eligible for par",
             "#attempt-7",
             "Seed meta",

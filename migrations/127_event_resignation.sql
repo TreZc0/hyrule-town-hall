@@ -1,0 +1,2 @@
+ALTER TABLE events
+    ADD COLUMN allow_resignation BOOLEAN NOT NULL DEFAULT TRUE;

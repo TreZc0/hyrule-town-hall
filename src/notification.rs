@@ -301,7 +301,7 @@ pub(crate) async fn team_invite(
         : errors;
         div(class = "button-row") {
             : accept_button;
-            : decline_button;
+            @if event.allow_resignation { : decline_button; }
             //TODO options to block sender or event
         }
     })

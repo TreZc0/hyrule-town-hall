@@ -210,6 +210,7 @@ pub(crate) struct Data<'a> {
     pub(crate) team_config: TeamConfig,
     enter_flow: Option<enter::Flow>,
     pub(crate) show_opt_out: bool,
+    pub(crate) allow_resignation: bool,
     pub(crate) show_qualifier_times: bool,
     pub(crate) default_game_count: i16,
     pub(crate) min_schedule_notice: Duration,
@@ -314,6 +315,7 @@ impl<'a> Data<'a> {
             team_config AS "team_config: TeamConfig",
             enter_flow AS "enter_flow: Json<enter::Flow>",
             show_opt_out,
+            allow_resignation,
             show_qualifier_times,
             default_game_count,
             min_schedule_notice,
@@ -390,6 +392,7 @@ impl<'a> Data<'a> {
                 team_config: row.team_config,
                 enter_flow: row.enter_flow.map(|Json(flow)| flow),
                 show_opt_out: row.show_opt_out,
+                allow_resignation: row.allow_resignation,
                 show_qualifier_times: row.show_qualifier_times,
                 default_game_count: row.default_game_count,
                 min_schedule_notice: decode_pginterval(row.min_schedule_notice)?,
@@ -2514,7 +2517,14 @@ async fn status_page(
                             }
                             //TODO options to change team name or swap roles
                         }, errors, "Save");
-                        @let (resign_errors, resign_button) = button_form_confirm(uri!(resign_post(data.series, &*data.event, row.id)), csrf, Vec::new(), "Resign", "Are you sure you want to resign? You will be removed from the standings entirely.");
+                        @if !data.allow_resignation {
+                            p : "To withdraw from this event, please contact an organizer.";
+                        }
+                        @let (resign_errors, resign_button) = if data.allow_resignation {
+                            button_form_confirm(uri!(resign_post(data.series, &*data.event, row.id)), csrf, Vec::new(), "Resign", "Are you sure you want to resign? You will be removed from the standings entirely.")
+                        } else {
+                            (html! {}, html! {})
+                        };
                         : resign_errors;
                         @let show_opt_out = data.show_opt_out && matches!(qualifier_kind, QualifierKind::Score(_)) && !event_started;
                         @if show_opt_out {
@@ -3164,7 +3174,7 @@ async fn resign_page(
     let data = Data::new(&mut transaction, series, event)
         .await?
         .ok_or(StatusOrError::Status(Status::NotFound))?;
-    if data.is_ended() {
+    if data.is_ended() || !data.allow_resignation {
         return Err(StatusOrError::Status(Status::Forbidden));
     }
     let is_started = data.is_started(&mut transaction).await?;
@@ -3259,9 +3269,15 @@ pub(crate) async fn resign_post(
     let data = Data::new(&mut transaction, series, event)
         .await?
         .ok_or(StatusOrError::Status(Status::NotFound))?;
+    if !data.allow_resignation {
+        return Err(StatusOrError::Status(Status::Forbidden));
+    }
     let team = Team::from_id(&mut transaction, team)
         .await?
         .ok_or(StatusOrError::Status(Status::NotFound))?;
+    if team.series != series || team.event != event {
+        return Err(StatusOrError::Status(Status::NotFound));
+    }
     let mut form = form.into_inner();
     form.verify(&csrf);
     if let Some(ref value) = form.value {
@@ -3497,6 +3513,8 @@ async fn opt_out_page(
     Ok(page(transaction, &me, &uri, PageStyle { chests: data.chests().await?, ..PageStyle::default() }, &format!("Opt Out — {}", data.display_name), html! {
         @if opted_out {
             p : "You have already opted out.";
+        } else if entered && !data.allow_resignation {
+            p : "To withdraw from this event, please contact an organizer.";
         } else if entered {
             p : "You can no longer opt out since you have already entered this event. You can resign from your status page."; //TODO direct link or redirect to resign page
         } else {

@@ -2414,7 +2414,7 @@ pub(crate) async fn list(
                                             : user;
                                             @if let Some(ref team) = team {
                                                 @if *is_confirmed {
-                                                    @if me.as_ref().is_some_and(|me| me == user) && members.iter().any(|member| !member.is_confirmed) {
+                                                    @if data.allow_resignation && me.as_ref().is_some_and(|me| me == user) && members.iter().any(|member| !member.is_confirmed) {
                                                         : " ";
                                                         @let (errors, button) = button_form_ext(uri!(crate::event::resign_post(series, event, team.id)), csrf.as_ref(), ctx.errors().collect(), event::ResignFormSource::Teams, "Retract");
                                                         : errors;
@@ -2429,7 +2429,7 @@ pub(crate) async fn list(
                                                         : errors;
                                                         span(class = "button-row") {
                                                             : accept_button;
-                                                            : decline_button;
+                                                            @if data.allow_resignation { : decline_button; }
                                                             //TODO options to block sender or event
                                                         }
                                                     } else {
@@ -2862,7 +2862,7 @@ fn pooled_score_cell(
                                             details(class = "round-breakdown") {
                                                 summary {
                                                     @if score < r64(0.0) { : "—"; }
-                                                    else { : format!("{score:.2}"); }
+                                                    else { : format!("{score:.3}"); }
                                                 }
                                                 div(class = "round-scores") {
                                                     @for round_score in round_scores.iter().take(required_modes) {
@@ -2871,7 +2871,7 @@ fn pooled_score_cell(
                                                             @if round_score.score < r64(0.0) {
                                                                 : "(pending)";
                                                             } else {
-                                                                : format!("{:.2}", round_score.score);
+                                                                : format!("{:.3}", round_score.score);
                                                             }
                                                         }
                                                     }
@@ -2903,20 +2903,20 @@ mod pooled_presentation_tests {
             },
         ];
         let html = pooled_score_cell(r64(95.0), &scores, 3, false).0;
-        assert!(html.contains("95.00"));
+        assert!(html.contains("95.000"));
         assert!(html.contains("Mode &lt;A&gt;"));
         assert!(html.contains("Enemizer: "));
-        assert!(html.contains("96.00"));
+        assert!(html.contains("96.000"));
         assert!(!html.contains("Mode 1"));
         let hidden = pooled_score_cell(r64(95.0), &scores, 3, true).0;
-        assert!(!hidden.contains("95.00"));
-        assert!(!hidden.contains("98.00"));
+        assert!(!hidden.contains("95.000"));
+        assert!(!hidden.contains("98.000"));
         assert!(!hidden.contains("<details"));
         scores[2].score = r64(-1.0);
         let partial = pooled_score_cell(r64(-1.0), &scores, 3, false).0;
-        assert!(partial.contains("98.00"));
+        assert!(partial.contains("98.000"));
         assert!(partial.contains("Crosskeys: (pending)"));
-        assert!(!partial.contains("95.00"));
+        assert!(!partial.contains("95.000"));
         if let Ok(path) = std::env::var("HTH_POOL_BROWSER_FIXTURE") {
             let css = include_str!("../../assets/static/common.css");
             std::fs::write(format!("{path}.totals"), format!("<!doctype html><html><head><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><style>{css}</style></head><body><main><h1>Qualifier averages</h1><table><tbody><tr id=\"complete\">{html}</tr><tr id=\"pending\">{partial}</tr><tr id=\"hidden\">{hidden}</tr></tbody></table></main></body></html>")).unwrap();

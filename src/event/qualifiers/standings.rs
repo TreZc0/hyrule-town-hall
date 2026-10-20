@@ -84,17 +84,17 @@ fn render(
                                 @for mode in modes.iter().filter(|mode| mode.enabled) {
                                     @let outcome = attempts.iter().find(|attempt| attempt.racetime_id == *team_id && attempt.signup_eligible && attempt.mode_id == mode.id && attempt.counts_for_entrant && attempt.state == "finalized").and_then(|attempt| attempt.official_outcome.as_deref());
                                     td : match outcome {
-                                        Some("forfeit") => "Forfeit (0.00)".into(),
-                                        Some("dq") => "Disqualified (0.00)".into(),
-                                        Some("invalid") => "Invalid (0.00)".into(),
+                                        Some("forfeit") => "Forfeit (0.000)".into(),
+                                        Some("dq") => "Disqualified (0.000)".into(),
+                                        Some("invalid") => "Invalid (0.000)".into(),
                                         _ => match scores.get(team_id).and_then(|standing| standing.mode_scores.iter().find(|(position, _, _)| *position == mode.position)).map(|(_, score, _)| score) {
-                                            Some(pooled_qualifiers::ModeScore::Score(score)) => format!("{score:.2}"),
+                                            Some(pooled_qualifiers::ModeScore::Score(score)) => format!("{score:.3}"),
                                             _ => "Pending".into(),
                                         },
                                     };
                                 }
                                 td : attempts.iter().filter(|attempt| attempt.racetime_id == *team_id && attempt.signup_eligible && attempt.counts_for_entrant && attempt.state == "finalized" && attempt.official_outcome.as_deref() == Some("forfeit")).count();
-                                td : average(team_id).map(|score| format!("{score:.2}")).unwrap_or_else(|| "Pending".into());
+                                td : average(team_id).map(|score| format!("{score:.3}")).unwrap_or_else(|| "Pending".into());
                             }
                         }
                     }
@@ -176,10 +176,10 @@ mod tests {
             })
             .collect();
         for (row, result, count) in [
-            (&rows[0], "Forfeit (0.00)", "1"),
-            (&rows[1], "Disqualified (0.00)", "0"),
-            (&rows[2], "0.00", "0"),
-            (&rows[3], "Invalid (0.00)", "0"),
+            (&rows[0], "Forfeit (0.000)", "1"),
+            (&rows[1], "Disqualified (0.000)", "0"),
+            (&rows[2], "0.000", "0"),
+            (&rows[3], "Invalid (0.000)", "0"),
         ] {
             assert_eq!(row[2], result);
             assert_eq!(row[3], count);
@@ -233,11 +233,11 @@ mod tests {
         assert_eq!(
             rows,
             vec![
-                vec!["—", "Opted-out leader (Opted out)", "0", "110.00"],
-                vec!["—", "Opted-out tie (Opted out)", "0", "100.00"],
-                vec!["1", "Winner A", "0", "100.00"],
-                vec!["1", "Winner B", "0", "100.00"],
-                vec!["3", "Zero", "0", "0.00"],
+                vec!["—", "Opted-out leader (Opted out)", "0", "110.000"],
+                vec!["—", "Opted-out tie (Opted out)", "0", "100.000"],
+                vec!["1", "Winner A", "0", "100.000"],
+                vec!["1", "Winner B", "0", "100.000"],
+                vec!["3", "Zero", "0", "0.000"],
                 vec!["—", "Pending", "0", "Pending"],
             ]
         );

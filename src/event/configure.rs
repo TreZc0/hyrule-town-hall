@@ -163,6 +163,11 @@ async fn configure_form(
                             label(for = "listed") : "Listed";
                             label(class = "help") : " (Publish this event on the main page)";
                         });
+                        : form_field("allow_resignation", &mut errors, html! {
+                            input(type = "checkbox", id = "allow_resignation", name = "allow_resignation", checked? = ctx.field_value("allow_resignation").map_or(event.allow_resignation && ctx.errors().next().is_none(), |value| value == "on"));
+                            label(for = "allow_resignation") : "Allow participants to resign";
+                            label(class = "help") : " (When disabled, participants must contact an organizer to withdraw or retract their registration. Organizers can still remove entrants.)";
+                        });
                         @if matches!(event.match_source(), MatchSource::StartGG(_) | MatchSource::Challonge { .. }) {
                             : form_field("auto_import", &mut errors, html! {
                                 input(type = "checkbox", id = "auto_import", name = "auto_import", checked? = ctx.field_value("auto_import").map_or(event.auto_import, |value| value == "on"));
@@ -373,6 +378,7 @@ pub(crate) struct ConfigureForm {
     #[field(default = String::new())]
     csrf: String,
     listed: bool,
+    allow_resignation: bool,
     auto_import: bool,
     #[field(default = String::new())]
     min_schedule_notice: String,
@@ -562,6 +568,12 @@ pub(crate) async fn post(
                 .execute(&mut *transaction)
                 .await?;
             }
+            sqlx::query("UPDATE events SET allow_resignation = $1 WHERE series = $2 AND event = $3")
+                .bind(value.allow_resignation)
+                .bind(data.series)
+                .bind(&data.event)
+                .execute(&mut *transaction)
+                .await?;
             if let MatchSource::StartGG(_) = data.match_source() {
                 sqlx::query!(
                     "UPDATE events SET auto_import = $1 WHERE series = $2 AND event = $3",

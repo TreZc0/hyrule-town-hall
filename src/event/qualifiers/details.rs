@@ -11,11 +11,13 @@ pub(super) fn placeholder(url: rocket::http::uri::Origin<'_>) -> RawHtml<String>
 fn results(
     event: &Data<'_>,
     csrf: Option<&CsrfToken>,
+    config: &pooled_qualifiers::Config,
     attempts: &[pools::AttemptRow],
 ) -> RawHtml<String> {
+    let par = pools::population(config, &attempts.iter().collect_vec()).par;
     html! {
         table {
-            thead { tr { th : "Entrant"; th : "Mode"; th : "Source"; th : "State"; th : "Outcome"; th : "Counted"; th : "Retry of"; th : "Re-attempt declaration"; th : "Review / history"; th : "VOD"; } }
+            thead { tr { th : "Entrant"; th : "Mode"; th : "Source"; th : "State"; th : "Outcome"; th : "Par time"; th : "Points"; th : "Counted"; th : "Retry of"; th : "Re-attempt declaration"; th : "Review / history"; th : "VOD"; } }
             tbody {
                 @for attempt in attempts {
                     tr(id = format!("attempt-{}", attempt.id)) {
@@ -27,6 +29,19 @@ fn results(
                             : attempt.official_outcome.as_deref().unwrap_or("");
                             @if let Some(ref time) = attempt.official_time {
                                 : format!(" — {}", English.format_duration(Duration::from_micros(u64::try_from(time.microseconds.max(0)).unwrap_or_default()), false));
+                            }
+                        }
+                        td : par.map(|seconds| English.format_duration(Duration::from_secs_f64(seconds), false)).unwrap_or_else(|| "Pending".into());
+                        td {
+                            @if attempt.state == "void" || !attempt.signup_eligible {
+                                : "Excluded";
+                            } else if let Some(outcome) = attempt.outcome() {
+                                @match pooled_qualifiers::performance_score(config, outcome, par) {
+                                    pooled_qualifiers::ModeScore::Pending => { : "Pending"; }
+                                    pooled_qualifiers::ModeScore::Score(points) => { : format!("{points:.3}"); }
+                                }
+                            } else {
+                                : "Pending";
                             }
                         }
                         td : if attempt.counts_for_entrant { "yes" } else { "no" };
@@ -138,11 +153,14 @@ pub(crate) async fn get_results(
     let mut transaction = pool.begin().await?;
     require_organizer(&mut transaction, &me, series, &event).await?;
     require_seed(&mut transaction, series, &event, seed_id).await?;
+    let config = pooled_qualifiers::Config::load(&mut transaction, series, &event)
+        .await?
+        .ok_or(StatusOrError::Status(Status::NotFound))?;
     let data = Data::new(&mut transaction, series, &event)
         .await?
         .ok_or(StatusOrError::Status(Status::NotFound))?;
     let attempts = pools::load_attempts(&mut transaction, series, &event, Some(seed_id)).await?;
-    Ok(results(&data, csrf.as_ref(), &attempts))
+    Ok(results(&data, csrf.as_ref(), &config, &attempts))
 }
 
 async fn require_seed(
