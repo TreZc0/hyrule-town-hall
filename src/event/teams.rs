@@ -2542,7 +2542,7 @@ pub(crate) async fn list(
                                             : format!(" ({})", num_forfeited);
                                         }
                                     }
-                                    td(style = "text-align: right;") : format!("{score:.2}");
+                                    td(style = "text-align: right;") : format!("{score:.3}");
                                 }
                                 (QualifierKind::Score(score_kind @ (QualifierScoreKind::TwwrMiniblins26 | QualifierScoreKind::TwwrMain | QualifierScoreKind::TimeRelative(_))), Qualification::Multiple { num_entered, num_finished, num_forfeited, score, round_scores }) => {
                                     @let hide_counts = !is_organizer && matches!(data.qualifier_score_hiding, QualifierScoreHiding::FullPointsCounts | QualifierScoreHiding::FullComplete) && !all_qualifiers_ended;
@@ -2565,12 +2565,12 @@ pub(crate) async fn list(
                                         @if hide_points {
                                             : "—";
                                         } else if round_scores.is_empty() {
-                                            : format!("{score:.2}");
+                                            : format!("{score:.3}");
                                         } else {
                                             @let has_pending = round_scores.iter().take(score_kind.max_qualifiers_that_count()).any(|rs| rs.score < r64(0.0));
                                             details(class = "round-breakdown") {
                                                 summary {
-                                                    : format!("{score:.2}");
+                                                    : format!("{score:.3}");
                                                     @if has_pending {
                                                         : "*";
                                                     }
@@ -2584,7 +2584,7 @@ pub(crate) async fn list(
                                                             } else if round_score.score == r64(0.0) {
                                                                 : "DNF";
                                                             } else {
-                                                                : format!("{:.0}", round_score.score);
+                                                                : format!("{:.3}", round_score.score);
                                                             }
                                                         }
                                                     }
@@ -2595,7 +2595,7 @@ pub(crate) async fn list(
                                 }
                                 (QualifierKind::Score(QualifierScoreKind::Sgl2023Online | QualifierScoreKind::Sgl2024Online), Qualification::Multiple { num_entered, num_finished: _, score, .. }) => {
                                     td(style = "text-align: right;") : num_entered;
-                                    td(style = "text-align: right;") : format!("{score:.2}");
+                                    td(style = "text-align: right;") : format!("{score:.3}");
                                 }
                                 (_, _) => @unreachable
                             }
