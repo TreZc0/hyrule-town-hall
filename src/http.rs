@@ -325,7 +325,7 @@ async fn home_events(
                         WHERE t.series = e.series
                           AND t.event = e.event
                           AND NOT t.resigned
-                          AND at.kind = 'qualifier'
+                          AND at.async_id = a.id
                           AND at.submitted IS NOT NULL
                     ) AS num_qualified,
                     (
@@ -335,13 +335,14 @@ async fn home_events(
                         WHERE t.series = e.series
                           AND t.event = e.event
                           AND NOT t.resigned
-                          AND at.kind = 'qualifier'
+                          AND at.async_id = a.id
                           AND at.submitted IS NOT NULL
                     ) AS last_submission
                 FROM asyncs a
                 WHERE a.series = e.series
                   AND a.event = e.event
                   AND a.kind = 'qualifier'
+                ORDER BY a.id LIMIT 1
             ) qualifier_async ON TRUE
             WHERE (e.end_time IS NULL OR e.end_time > NOW())
               AND (
@@ -1048,7 +1049,7 @@ pub(crate) async fn rocket(
             event::asyncs::get,
             event::asyncs::post,
             event::asyncs::delete,
-            event::asyncs::generate_mmr,
+            event::asyncs::generate,
             event::qualifiers::get,
             event::qualifiers::details::get_results,
             event::qualifiers::details::get_pool,

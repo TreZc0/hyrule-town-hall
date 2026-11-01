@@ -1,0 +1,35 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT requested AS \"requested!\", submitted, discord_thread FROM async_teams WHERE team = $1 AND async_id = $2 AND requested IS NOT NULL",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "requested!",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 1,
+        "name": "submitted",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 2,
+        "name": "discord_thread",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "f5e2bcdec01f20583e36d32ae901def44e13025d2c0caf1907ad2a8494181f85"
+}

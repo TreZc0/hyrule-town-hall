@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT team AS \"team: Id<Teams>\", async_id\n           FROM async_teams\n           WHERE discord_thread = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "team: Id<Teams>",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "async_id",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "35287771bab30b292122e44da3e2359fa3c260029f93d82686dabd917f393ab3"
+}

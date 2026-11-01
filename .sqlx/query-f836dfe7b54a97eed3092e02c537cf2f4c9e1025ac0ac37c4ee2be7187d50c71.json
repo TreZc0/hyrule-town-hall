@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE async_teams SET submitted = NOW(), finish_time = NULL WHERE team = $1 AND async_id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "f836dfe7b54a97eed3092e02c537cf2f4c9e1025ac0ac37c4ee2be7187d50c71"
+}

@@ -1,0 +1,53 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                    SELECT\n                        ap.player AS \"player: Id<Users>\",\n                        ap.time,\n                        ap.async_id, a.name,\n                        at.start_time,\n                        a.end_time AS async_end_time\n                    FROM async_players ap\n                    INNER JOIN team_members tm ON tm.member = ap.player\n                    INNER JOIN teams t ON t.id = tm.team AND t.series = $1 AND t.event = $2 AND NOT t.resigned\n                    INNER JOIN async_teams at ON at.team = t.id AND at.async_id = ap.async_id\n                    INNER JOIN asyncs a ON a.series = $1 AND a.event = $2 AND a.id = ap.async_id\n                    WHERE ap.series = $1 AND ap.event = $2\n                    AND a.kind = 'qualifier'\n                    AND at.submitted IS NOT NULL\n                ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "player: Id<Users>",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "time",
+        "type_info": "Interval"
+      },
+      {
+        "ordinal": 2,
+        "name": "async_id",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 3,
+        "name": "name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "start_time",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 5,
+        "name": "async_end_time",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      false,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "013b5e8df994f24b44757da0abc7379b720e04d4210654f4bb7d36292bc5538f"
+}

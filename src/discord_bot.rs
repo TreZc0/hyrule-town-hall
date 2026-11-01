@@ -4518,13 +4518,14 @@ pub(crate) fn configure_builder(
                         if let Some((result_params, nonce_str)) = params.rsplit_once('_') {
                             if let Some((team_kind_str, seconds_str)) = result_params.rsplit_once('_') {
                                 if let Some((team_id_str, kind_str)) = team_kind_str.rsplit_once('_') {
-                                    if let (Ok(team_id), Ok(kind_int), Ok(total_seconds), Ok(nonce)) = (
+                                    if let (Ok(team_id), Ok(total_seconds), Ok(nonce)) = (
                                         team_id_str.parse::<u64>(),
-                                        kind_str.parse::<i32>(),
                                         seconds_str.parse::<i64>(),
                                         nonce_str.parse::<u64>(),
                                     ) {
-                                    if let Some(async_kind) = AsyncKind::from_i32(kind_int) {
+                                    let control_pool = ctx.data.read().await.get::<DbPool>().expect("database pool").clone();
+                                    if let Some(async_id) = event::asyncs::resolve_control(&control_pool, team_id as i64, kind_str).await? {
+                                        async_race::authorize_qualifier_result(&control_pool, interaction.user.id, interaction.channel_id, team_id as i64, async_id).await?;
                                         interaction.create_response(ctx, CreateInteractionResponse::Defer(
                                             CreateInteractionResponseMessage::new()
                                         )).await?;
@@ -4538,21 +4539,21 @@ pub(crate) fn configure_builder(
                                         let pg_interval = PgInterval { months: 0, days: 0, microseconds: total_seconds * 1_000_000 };
                                         let link = pending_async_vods(ctx).await.lock().await.remove(&nonce).flatten();
                                         sqlx::query!(
-                                            "UPDATE async_teams SET submitted = NOW(), finish_time = $1 WHERE team = $2 AND kind = $3",
+                                            "UPDATE async_teams SET submitted = NOW(), finish_time = $1 WHERE team = $2 AND async_id = $3",
                                             pg_interval,
                                             team_id as i64,
-                                            async_kind as _,
+                                            async_id as _,
                                         ).execute(&mut *transaction).await?;
 
                                         let team = Team::from_id(&mut transaction, Id::from(team_id)).await?.ok_or(sqlx::Error::RowNotFound)?;
                                         let members = team.members(&mut transaction).await?;
                                         for member in &members {
                                             sqlx::query!(
-                                                "INSERT INTO async_players (series, event, player, kind, time, vod) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (series, event, player, kind) DO UPDATE SET time = EXCLUDED.time, vod = COALESCE(EXCLUDED.vod, async_players.vod)",
+                                                "INSERT INTO async_players (series, event, player, async_id, time, vod) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (series, event, player, async_id) DO UPDATE SET time = EXCLUDED.time, vod = COALESCE(EXCLUDED.vod, async_players.vod)",
                                                 team.series as _,
                                                 team.event,
                                                 member.id as _,
-                                                async_kind as _,
+                                                async_id as _,
                                                 pg_interval,
                                                 link,
                                             ).execute(&mut *transaction).await?;
@@ -4578,8 +4579,10 @@ pub(crate) fn configure_builder(
                         // Confirm override of existing qualifier result with a forfeit: params = {team_id}_{kind_int}_{nonce}
                         if let Some((team_kind_str, nonce_str)) = params.rsplit_once('_') {
                             if let Some((team_id_str, kind_str)) = team_kind_str.rsplit_once('_') {
-                                if let (Ok(team_id), Ok(kind_int), Ok(nonce)) = (team_id_str.parse::<u64>(), kind_str.parse::<i32>(), nonce_str.parse::<u64>()) {
-                                    if let Some(async_kind) = AsyncKind::from_i32(kind_int) {
+                                if let (Ok(team_id), Ok(nonce)) = (team_id_str.parse::<u64>(), nonce_str.parse::<u64>()) {
+                                    let control_pool = ctx.data.read().await.get::<DbPool>().expect("database pool").clone();
+                                    if let Some(async_id) = event::asyncs::resolve_control(&control_pool, team_id as i64, kind_str).await? {
+                                        async_race::authorize_qualifier_result(&control_pool, interaction.user.id, interaction.channel_id, team_id as i64, async_id).await?;
                                     interaction.create_response(ctx, CreateInteractionResponse::Defer(
                                         CreateInteractionResponseMessage::new()
                                     )).await?;
@@ -4594,20 +4597,20 @@ pub(crate) fn configure_builder(
                                     pending_async_vods(ctx).await.lock().await.remove(&nonce);
 
                                     sqlx::query!(
-                                        "UPDATE async_teams SET submitted = NOW(), finish_time = NULL WHERE team = $1 AND kind = $2",
+                                        "UPDATE async_teams SET submitted = NOW(), finish_time = NULL WHERE team = $1 AND async_id = $2",
                                         team_id as i64,
-                                        async_kind as _,
+                                        async_id as _,
                                     ).execute(&mut *transaction).await?;
 
                                     let team = Team::from_id(&mut transaction, Id::from(team_id)).await?.ok_or(sqlx::Error::RowNotFound)?;
                                     let members = team.members(&mut transaction).await?;
                                     for member in &members {
                                         sqlx::query!(
-                                            "INSERT INTO async_players (series, event, player, kind, time, vod) VALUES ($1, $2, $3, $4, NULL, NULL) ON CONFLICT (series, event, player, kind) DO UPDATE SET time = EXCLUDED.time, vod = COALESCE(EXCLUDED.vod, async_players.vod)",
+                                            "INSERT INTO async_players (series, event, player, async_id, time, vod) VALUES ($1, $2, $3, $4, NULL, NULL) ON CONFLICT (series, event, player, async_id) DO UPDATE SET time = EXCLUDED.time, vod = COALESCE(EXCLUDED.vod, async_players.vod)",
                                             team.series as _,
                                             team.event,
                                             member.id as _,
-                                            async_kind as _,
+                                            async_id as _,
                                         ).execute(&mut *transaction).await?;
                                     }
 
@@ -5539,9 +5542,10 @@ pub(crate) fn configure_builder(
                             }
                         } else if let Some(qual_params) = params.strip_prefix("qual_") {
                             let mut parts = qual_params.rsplitn(2, '_');
-                            let kind_int: i32 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(-1);
+                            let control_ref = parts.next().unwrap_or("");
                             let team_id: i64 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(-1);
-                            let Some(async_kind) = AsyncKind::from_i32(kind_int) else {
+                            let control_pool = ctx.data.read().await.get::<DbPool>().expect("database pool").clone();
+                            let Some(async_id) = event::asyncs::resolve_control(&control_pool, team_id, control_ref).await? else {
                                 interaction.edit_response(ctx, EditInteractionResponse::new()
                                     .content("Error: invalid async kind in modal ID.")
                                 ).await?;
@@ -5550,17 +5554,8 @@ pub(crate) fn configure_builder(
 
                             let result: Result<(), Box<dyn std::error::Error + Send + Sync>> = async {
                                 let pool = ctx.data.read().await.get::<DbPool>().expect("db pool missing").clone();
+                                async_race::authorize_qualifier_result(&pool, interaction.user.id, interaction.channel_id, team_id, async_id).await?;
                                 let mut transaction = pool.begin().await?;
-
-                                let is_organizer = sqlx::query!(
-                                    r#"SELECT EXISTS(SELECT 1 FROM organizers eo JOIN users u ON eo.organizer = u.id WHERE u.discord_id = $1) AS "exists!""#,
-                                    interaction.user.id.get() as i64
-                                ).fetch_one(&mut *transaction).await?.exists;
-
-                                if !is_organizer {
-                                    transaction.rollback().await?;
-                                    return Err("You must be an event organizer to use this.".into());
-                                }
 
                                 let team = Team::from_id(&mut transaction, Id::from(team_id)).await?
                                     .ok_or("Team not found.")?;
@@ -5568,9 +5563,9 @@ pub(crate) fn configure_builder(
                                     .unwrap_or_else(|| "Unknown Team".to_string().into());
 
                                 let already_submitted = sqlx::query_scalar!(
-                                    "SELECT submitted FROM async_teams WHERE team = $1 AND kind = $2",
+                                    "SELECT submitted FROM async_teams WHERE team = $1 AND async_id = $2",
                                     team_id as _,
-                                    async_kind as _,
+                                    async_id as _,
                                 ).fetch_optional(&mut *transaction).await?
                                     .flatten()
                                     .is_some();
@@ -5584,20 +5579,20 @@ pub(crate) fn configure_builder(
                                 }
 
                                 sqlx::query!(
-                                    "UPDATE async_teams SET submitted = NOW(), finish_time = $1 WHERE team = $2 AND kind = $3",
+                                    "UPDATE async_teams SET submitted = NOW(), finish_time = $1 WHERE team = $2 AND async_id = $3",
                                     pg_interval,
                                     team_id as _,
-                                    async_kind as _
+                                    async_id as _
                                 ).execute(&mut *transaction).await?;
 
                                 let members = team.members(&mut transaction).await?;
                                 for member in members {
                                     sqlx::query!(
-                                        "INSERT INTO async_players (series, event, player, kind, time, vod) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (series, event, player, kind) DO UPDATE SET time = EXCLUDED.time, vod = COALESCE(EXCLUDED.vod, async_players.vod)",
+                                        "INSERT INTO async_players (series, event, player, async_id, time, vod) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (series, event, player, async_id) DO UPDATE SET time = EXCLUDED.time, vod = COALESCE(EXCLUDED.vod, async_players.vod)",
                                         team.series as _,
                                         team.event,
                                         member.id as _,
-                                        async_kind as _,
+                                        async_id as _,
                                         pg_interval,
                                         link_str.as_deref()
                                     ).execute(&mut *transaction).await?;
@@ -5609,7 +5604,7 @@ pub(crate) fn configure_builder(
 
                             match result {
                                 Ok(()) => {
-                                    let run = async_race::AsyncRun::Qualifier { team_id, async_kind };
+                                    let run = async_race::AsyncRun::Qualifier { team_id, async_id };
                                     async_race::clear_message_with_button(ctx, interaction.channel_id, &run.button_id("org_result")).await;
                                     interaction.edit_response(ctx, EditInteractionResponse::new()
                                         .content(format!("Time recorded: {}", time_str))
@@ -6431,16 +6426,16 @@ async fn find_race_from_thread(
 async fn find_qualifier_from_thread(
     transaction: &mut Transaction<'_, Postgres>,
     thread_id: i64,
-) -> Result<Option<(Id<Teams>, AsyncKind)>, sqlx::Error> {
+) -> Result<Option<(Id<Teams>, i64)>, sqlx::Error> {
     sqlx::query!(
-        r#"SELECT team AS "team: Id<Teams>", kind AS "kind: event::AsyncKind"
+        r#"SELECT team AS "team: Id<Teams>", async_id
            FROM async_teams
            WHERE discord_thread = $1"#,
         thread_id
     )
     .fetch_optional(&mut **transaction)
     .await
-    .map(|row| row.map(|r| (r.team, r.kind)))
+    .map(|row| row.map(|r| (r.team, r.async_id)))
 }
 
 pub(crate) async fn result_async_command(
@@ -6632,7 +6627,7 @@ async fn handle_async_command(
             Some((race_id, async_part)) => (race_id, async_part as i64),
             None => {
                 // Check if it's a qualifier thread
-                if let Some((team_id, async_kind)) =
+                if let Some((team_id, async_id)) =
                     find_qualifier_from_thread(&mut transaction, thread_id).await?
                 {
                     // Check if request has link parameter
@@ -6682,9 +6677,9 @@ async fn handle_async_command(
 
                     // Check if a result already exists
                     let already_submitted = sqlx::query_scalar!(
-                        "SELECT submitted FROM async_teams WHERE team = $1 AND kind = $2",
+                        "SELECT submitted FROM async_teams WHERE team = $1 AND async_id = $2",
                         team_id as _,
-                        async_kind as _,
+                        async_id as _,
                     )
                     .fetch_optional(&mut *transaction)
                     .await?
@@ -6701,14 +6696,14 @@ async fn handle_async_command(
 
                         let confirm_id = if is_forfeit {
                             format!(
-                                "async_override_qualifier_forfeit_{}_{}_{}",
-                                team_id, async_kind as i32, nonce
+                                "async_override_qualifier_forfeit_{}_a{}_{}",
+                                team_id, async_id, nonce
                             )
                         } else {
                             format!(
-                                "async_override_qualifier_result_{}_{}_{}_{}",
+                                "async_override_qualifier_result_{}_a{}_{}_{}",
                                 team_id,
-                                async_kind as i32,
+                                async_id,
                                 qual_total_seconds.unwrap(),
                                 nonce
                             )
@@ -6740,19 +6735,19 @@ async fn handle_async_command(
                     // No existing result — proceed with write
                     let qual_run = async_race::AsyncRun::Qualifier {
                         team_id: i64::from(team_id),
-                        async_kind,
+                        async_id,
                     };
                     if is_forfeit {
-                        sqlx::query!("UPDATE async_teams SET submitted = NOW(), finish_time = NULL WHERE team = $1 AND kind = $2", team_id as _, async_kind as _).execute(&mut *transaction).await?;
+                        sqlx::query!("UPDATE async_teams SET submitted = NOW(), finish_time = NULL WHERE team = $1 AND async_id = $2", team_id as _, async_id as _).execute(&mut *transaction).await?;
 
                         let members = team.members(&mut transaction).await?;
                         for member in members {
                             sqlx::query!(
-                                "INSERT INTO async_players (series, event, player, kind, time, vod) VALUES ($1, $2, $3, $4, NULL, NULL) ON CONFLICT (series, event, player, kind) DO UPDATE SET time = EXCLUDED.time, vod = COALESCE(EXCLUDED.vod, async_players.vod)",
+                                "INSERT INTO async_players (series, event, player, async_id, time, vod) VALUES ($1, $2, $3, $4, NULL, NULL) ON CONFLICT (series, event, player, async_id) DO UPDATE SET time = EXCLUDED.time, vod = COALESCE(EXCLUDED.vod, async_players.vod)",
                                 team.series as _,
                                 team.event,
                                 member.id as _,
-                                async_kind as _
+                                async_id as _
                             ).execute(&mut *transaction).await?;
                         }
 
@@ -6777,16 +6772,16 @@ async fn handle_async_command(
                         .await;
                     } else {
                         let pg_interval = qual_pg_interval.unwrap();
-                        sqlx::query!("UPDATE async_teams SET submitted = NOW(), finish_time = $1 WHERE team = $2 AND kind = $3", pg_interval, team_id as _, async_kind as _).execute(&mut *transaction).await?;
+                        sqlx::query!("UPDATE async_teams SET submitted = NOW(), finish_time = $1 WHERE team = $2 AND async_id = $3", pg_interval, team_id as _, async_id as _).execute(&mut *transaction).await?;
 
                         let members = team.members(&mut transaction).await?;
                         for member in members {
                             sqlx::query!(
-                                "INSERT INTO async_players (series, event, player, kind, time, vod) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (series, event, player, kind) DO UPDATE SET time = EXCLUDED.time, vod = COALESCE(EXCLUDED.vod, async_players.vod)",
+                                "INSERT INTO async_players (series, event, player, async_id, time, vod) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (series, event, player, async_id) DO UPDATE SET time = EXCLUDED.time, vod = COALESCE(EXCLUDED.vod, async_players.vod)",
                                 team.series as _,
                                 team.event,
                                 member.id as _,
-                                async_kind as _,
+                                async_id as _,
                                 pg_interval,
                                 link
                             ).execute(&mut *transaction).await?;

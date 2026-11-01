@@ -1,0 +1,122 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT kind AS \"kind: AsyncKind\", name, is_tfb_dev, tfb_uuid, xkeys_uuid, web_id, web_gen_time, file_stem, hash1, hash2, hash3, hash4, hash5, seed_password, seed_data FROM asyncs WHERE series = $1 AND event = $2 AND id = $3",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "kind: AsyncKind",
+        "type_info": {
+          "Custom": {
+            "name": "async_kind",
+            "kind": {
+              "Enum": [
+                "qualifier",
+                "qualifier2",
+                "qualifier3",
+                "tiebreaker1",
+                "tiebreaker2",
+                "seeding"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "is_tfb_dev",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 3,
+        "name": "tfb_uuid",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 4,
+        "name": "xkeys_uuid",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 5,
+        "name": "web_id",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 6,
+        "name": "web_gen_time",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 7,
+        "name": "file_stem",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 8,
+        "name": "hash1",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 9,
+        "name": "hash2",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 10,
+        "name": "hash3",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 11,
+        "name": "hash4",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 12,
+        "name": "hash5",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 13,
+        "name": "seed_password",
+        "type_info": "Bpchar"
+      },
+      {
+        "ordinal": 14,
+        "name": "seed_data",
+        "type_info": "Jsonb"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "11bdc07fe874867093d4f1d4bc9bf61d8cb23813087e3a3da31e38faf48e4c33"
+}

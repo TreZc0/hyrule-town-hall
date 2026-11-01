@@ -296,7 +296,7 @@ impl ApiClient {
                 UNION ALL
                 SELECT a.seed_data->>'id', e.spoiler_unlock='after' AND a.end_time IS NOT NULL AND a.end_time <= NOW()
                     AND NOT EXISTS (SELECT 1 FROM async_teams at JOIN teams t ON t.id=at.team
-                        WHERE t.series=a.series AND t.event=a.event AND at.kind=a.kind AND at.requested IS NOT NULL AND at.submitted IS NULL),
+                        WHERE t.series=a.series AND t.event=a.event AND at.async_id=a.id AND at.requested IS NOT NULL AND at.submitted IS NULL),
                     a.seed_data->>'locked' IS DISTINCT FROM 'false'
                 FROM asyncs a JOIN events e ON e.series=a.series AND e.event=a.event
                 WHERE a.seed_data->>'type'='mmr'
@@ -589,9 +589,9 @@ mod tests {
                 async_end1 TIMESTAMPTZ, async_end2 TIMESTAMPTZ, async_end3 TIMESTAMPTZ,
                 team3 BIGINT, p3 TEXT
             );
-            CREATE TEMP TABLE asyncs (series TEXT DEFAULT 'test', event TEXT DEFAULT 'after', kind TEXT, seed_data JSONB, end_time TIMESTAMPTZ);
+            CREATE TEMP TABLE asyncs (series TEXT DEFAULT 'test', event TEXT DEFAULT 'after', id BIGINT, seed_data JSONB, end_time TIMESTAMPTZ);
             CREATE TEMP TABLE teams (id BIGINT, series TEXT DEFAULT 'test', event TEXT DEFAULT 'after');
-            CREATE TEMP TABLE async_teams (team BIGINT, kind TEXT, requested TIMESTAMPTZ, submitted TIMESTAMPTZ);
+            CREATE TEMP TABLE async_teams (team BIGINT, async_id BIGINT, requested TIMESTAMPTZ, submitted TIMESTAMPTZ);
             CREATE TEMP TABLE qualifier_seeds (seed_data JSONB);
             INSERT INTO events VALUES ('test','after','after'), ('test','never','never');
             INSERT INTO races (seed_data)
@@ -605,9 +605,9 @@ mod tests {
             UPDATE races SET event='never' WHERE seed_data->>'id'='8';
             INSERT INTO races (seed_data) SELECT seed_data FROM races WHERE seed_data->>'id'='9';
             INSERT INTO qualifier_seeds SELECT seed_data FROM races WHERE seed_data->>'id'='10';
-            INSERT INTO asyncs (kind,seed_data,end_time)
-                SELECT id::text, jsonb_build_object('type','mmr','id',id::text,'locked',true), NOW()-INTERVAL '1 minute' FROM generate_series(11,13) id;
-            UPDATE asyncs SET end_time=NOW()+INTERVAL '1 hour' WHERE kind='13';
+            INSERT INTO asyncs (id,seed_data,end_time)
+                SELECT id, jsonb_build_object('type','mmr','id',id::text,'locked',true), NOW()-INTERVAL '1 minute' FROM generate_series(11,13) id;
+            UPDATE asyncs SET end_time=NOW()+INTERVAL '1 hour' WHERE id=13;
             INSERT INTO teams (id) VALUES (1), (2);
             INSERT INTO async_teams VALUES (1,'11',NOW(),NULL), (2,'12',NOW(),NOW());
         "#).execute(&pool).await.unwrap();
@@ -620,7 +620,7 @@ mod tests {
         sqlx::raw_sql(r#"
             UPDATE races SET end_time=NOW() WHERE seed_data->>'id' IN ('2','9');
             UPDATE races SET async_end2=NOW(), async_end3=NOW() WHERE seed_data->>'id' IN ('3','4','5');
-            UPDATE async_teams SET submitted=NOW() WHERE kind='11';
+            UPDATE async_teams SET submitted=NOW() WHERE async_id=11;
         "#).execute(&pool).await.unwrap();
         client.unlock_finished(&pool).await.unwrap();
         let mut unlocked = requests

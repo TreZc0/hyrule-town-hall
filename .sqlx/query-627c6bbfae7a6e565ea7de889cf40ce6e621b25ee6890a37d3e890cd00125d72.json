@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT EXISTS(SELECT 1 FROM async_players ap JOIN asyncs a ON a.id=ap.async_id WHERE ap.series = $1 AND ap.event = $2 AND a.kind = 'qualifier' AND ap.time IS NOT NULL) AS \"exists!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "exists!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "627c6bbfae7a6e565ea7de889cf40ce6e621b25ee6890a37d3e890cd00125d72"
+}

@@ -749,6 +749,59 @@ impl TypeMapKey for GlobalState {
 }
 
 impl GlobalState {
+    pub(crate) async fn roll_async_qualifier(
+        self: Arc<Self>,
+        event: &event::Data<'_>,
+    ) -> mpsc::Receiver<SeedRollUpdate> {
+        use seed_gen_type::{AlttprDrSource, SeedGenType};
+        let unlock = match event.spoiler_unlock.as_str() {
+            "after" => UnlockSpoilerLog::After,
+            "immediately" => UnlockSpoilerLog::Now,
+            _ => UnlockSpoilerLog::Never,
+        };
+        let fail = |message: String| alttpr_dr_error_receiver(RollError::AlttprDe(message));
+        match event.seed_gen_type.as_ref() {
+            Some(SeedGenType::Mmr { config }) => self.roll_mmr_seed(config.clone(), crate::mmr_web::Purpose::Competition, None, None, unlock),
+            Some(SeedGenType::TWWR { permalink }) => self.roll_twwr_seed(event.rando_version.clone(), permalink.clone(), unlock),
+            Some(SeedGenType::AlttprAvianart { default_preset, .. }) => {
+                match event.single_settings.as_ref().and_then(|settings| settings.get("preset")).and_then(|preset| preset.as_str()).map(str::to_owned).or_else(|| default_preset.clone()) {
+                    Some(preset) => self.roll_avianart_seed(preset),
+                    None => fail("Configure the event's Avianart preset before generating a seed.".into()),
+                }
+            }
+            Some(SeedGenType::Owr { config, build }) => {
+                match config.select(None) {
+                    Ok(config) => {
+                        let resolved = resolve_all_choices(&HashMap::new(), &config);
+                        self.roll_owr_seed(resolved, config, None, *build)
+                    }
+                    Err(error) => fail(error),
+                }
+            }
+            Some(SeedGenType::AlttprDoorRando { source: AlttprDrSource::MutualChoices { config }, build, .. }) => {
+                match config.select(None) {
+                    Ok(config) => {
+                        let resolved = resolve_all_choices(&HashMap::new(), &config);
+                        self.roll_mutual_choices_dr_seed(config, resolved, None, *build)
+                    }
+                    Err(error) => fail(error),
+                }
+            }
+            Some(SeedGenType::AlttprDoorRando { source: AlttprDrSource::MysteryPool { weights_url }, build, .. }) => self.roll_mystery_pool_seed(weights_url.clone(), *build),
+            Some(SeedGenType::AlttprDoorRando { source: AlttprDrSource::Boothisman, build, .. }) => {
+                let mode = event.round_modes.as_ref().and_then(|modes| modes.get("Qualifier")).cloned();
+                if mode.is_none() { return fail("Configure a Qualifier mode in Round Modes before generating this seed.".into()); }
+                self.roll_boothisman_dr_seed(AlttprDeRaceOptions { mode, custom_choices: HashMap::new(), choices: Vec::new() }, *build)
+            }
+            Some(SeedGenType::OoTR | SeedGenType::OotrRsl) => match (&event.rando_version, &event.single_settings) {
+                (Some(version), Some(settings)) => self.roll_seed(PrerollMode::Long, true, None, version.clone(), settings.clone(), unlock),
+                _ => fail("Configure the event's randomizer version and fixed settings before generating an async seed.".into()),
+            },
+            Some(SeedGenType::OotrTriforceBlitz) => self.roll_tfb_dev_seed(None, true, None, unlock),
+            None => fail("Configure a seed generator for this event first.".into()),
+        }
+    }
+
     pub(crate) async fn new(
         new_room_lock: Arc<Mutex<()>>,
         race_import_lock: Arc<Mutex<()>>,

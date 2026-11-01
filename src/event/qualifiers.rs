@@ -113,11 +113,14 @@ async fn qualifiers_form(
     };
     let rank_editor = ranks::editor(&mut transaction, &event, csrf, &ctx).await?;
 
+    let async_editor = if event.asyncs_active {
+        super::asyncs::editor(&mut transaction, csrf, &event, None, Context::default()).await?
+    } else { html! {} };
     let current_role_str = event
         .qualifier_notification_role_id
         .map(|id| id.get().to_string())
         .unwrap_or_default();
-    Ok(page(transaction, &Some(me), &uri, PageStyle { chests: event.chests().await?, ..PageStyle::default() }, &format!("Qualifiers — {}", event.display_name), html! {
+    Ok(page(transaction, &Some(me), &uri, PageStyle { chests: event.chests().await?, ..PageStyle::default() }, &format!("Qualifiers & Asyncs — {}", event.display_name), html! {
         : header;
         script(src = static_url!("setting-help.js")) {}
         script(defer, src = static_url!("qualifier-race-edit.js")) {}
@@ -127,6 +130,7 @@ async fn qualifiers_form(
                 p(class = "error", role = "alert") : error;
             }
             : rank_editor;
+            : async_editor;
             @if let Some(ref config) = pooled_config {
                 nav(class = "qualifier-jump", aria_label = "Qualifier management sections") {
                     a(href = "#pooled-standings") : "Standings";
@@ -426,7 +430,7 @@ pub(crate) async fn get(
         return Err(StatusOrError::Status(Status::Forbidden));
     }
     let is_started = event_data.is_started(&mut transaction).await?;
-    let result_error = flash.filter(|message| message.kind() == "pooled-result-error")
+    let result_error = flash.filter(|message| matches!(message.kind(), "pooled-result-error" | "async-seed-error"))
         .map(|message| message.message().to_owned());
     Ok(qualifiers_form(
         transaction,

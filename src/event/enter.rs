@@ -1501,9 +1501,10 @@ impl Requirement {
         me: &User,
         data: &Data<'_>,
         config: &Config,
-    ) -> Result<Option<AsyncKind>, Error> {
+    ) -> Result<Option<i64>, Error> {
         Ok(match self {
-            Requirement::Qualifier { .. } => Some(AsyncKind::Qualifier1),
+            Requirement::Qualifier { .. } => sqlx::query_scalar("SELECT id FROM asyncs WHERE series=$1 AND event=$2 AND kind='qualifier' ORDER BY id LIMIT 1")
+                .bind(data.series).bind(&*data.event).fetch_optional(&mut **transaction).await?,
             Requirement::TripleQualifier {
                 async_starts,
                 async_ends,
@@ -1517,21 +1518,12 @@ impl Requirement {
                 {
                     None
                 } else {
-                    (*async_starts)
-                        .into_iter()
-                        .zip_eq(*async_ends)
-                        .enumerate()
-                        .find(|&(_, (async_start, async_end))| {
-                            now >= async_start && now < async_end
-                        })
-                        .map(|(idx, _)| match idx {
-                            0 => AsyncKind::Qualifier1,
-                            1 => AsyncKind::Qualifier2,
-                            2 => AsyncKind::Qualifier3,
-                            _ => unreachable!(
-                                "more than 3 qualifiers in Requirement::TripleQualifier"
-                            ),
-                        })
+                    let idx = (*async_starts).into_iter().zip_eq(*async_ends)
+                        .position(|(start, end)| now >= start && now < end);
+                    if let Some(idx) = idx {
+                        sqlx::query_scalar("SELECT id FROM asyncs WHERE series=$1 AND event=$2 AND kind='qualifier' ORDER BY id LIMIT 1 OFFSET $3")
+                            .bind(data.series).bind(&*data.event).bind(idx as i64).fetch_optional(&mut **transaction).await?
+                    } else { None }
                 }
             }
             _ => None,
@@ -2113,7 +2105,7 @@ pub(crate) async fn post(
                                     config,
                                 )
                                 .await?;
-                            if let Some(async_kind) = requirement
+                            if let Some(async_id) = requirement
                                 .request_qualifier(
                                     &mut transaction,
                                     http_client,
@@ -2124,7 +2116,7 @@ pub(crate) async fn post(
                                 )
                                 .await?
                             {
-                                request_qualifier = Some(async_kind);
+                                request_qualifier = Some(async_id);
                             }
                         }
                     }
@@ -2258,9 +2250,19 @@ pub(crate) async fn post(
                         sqlx::query!("INSERT INTO team_members (team, member, status, role) VALUES ($1, $2, 'created', 'none')", id as _, me.id as _).execute(&mut *transaction).await?;
                         id
                     };
-                    if let Some(async_kind) = request_qualifier {
-                        // Only insert if not already requested for this team
-                        sqlx::query!("INSERT INTO async_teams (team, kind, requested) VALUES ($1, $2, NOW()) ON CONFLICT DO NOTHING", id as _, async_kind as _).execute(&mut *transaction).await?;
+                    if let Some(async_id) = request_qualifier {
+                        match super::asyncs::request(&mut transaction, id, async_id).await {
+                            Ok(_) => (), // Preserve an existing request when rejoining.
+                            Err(super::asyncs::RequestError::Sql(error)) => return Err(error.into()),
+                            Err(error) => {
+                                form.context.push_error(form::Error::validation(error.to_string()));
+                                transaction.rollback().await?;
+                                return Ok(RedirectOrContent::Content(enter_form(
+                                    pool.begin().await?, http_client, discord_ctx, Some(me), uri,
+                                    csrf.as_ref(), data, pic::EnterFormDefaults::Context(form.context), config,
+                                ).await?));
+                            }
+                        }
                     }
                     if let (Some(discord_user), Some(discord_guild)) =
                         (me.discord.as_ref(), data.discord_guild)

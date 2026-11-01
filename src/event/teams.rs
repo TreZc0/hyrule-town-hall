@@ -1,7 +1,7 @@
 use {
     crate::{
         event::{
-            AsyncKind, Data, DataError, QualifierScoreHiding, Role, SignupStatus, Tab, enter,
+            Data, DataError, QualifierScoreHiding, Role, SignupStatus, Tab, enter,
             pooled_qualifiers,
         },
         prelude::*,
@@ -229,8 +229,8 @@ pub(crate) struct SignupsMember {
 pub(crate) enum RoundSource {
     /// Live qualifier race, with the race number (1-indexed).
     Live(i64),
-    /// Async qualifier, with the async kind.
-    Async(AsyncKind),
+    /// Async qualifier display name; results are grouped by stable async ID.
+    Async(String),
     PooledMode(String),
 }
 
@@ -238,14 +238,7 @@ impl fmt::Display for RoundSource {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             RoundSource::Live(n) => write!(f, "Live {n}"),
-            RoundSource::Async(kind) => match kind {
-                AsyncKind::Qualifier1 => write!(f, "Async 1"),
-                AsyncKind::Qualifier2 => write!(f, "Async 2"),
-                AsyncKind::Qualifier3 => write!(f, "Async 3"),
-                AsyncKind::Seeding => write!(f, "Seeding"),
-                AsyncKind::Tiebreaker1 => write!(f, "Tiebreaker 1"),
-                AsyncKind::Tiebreaker2 => write!(f, "Tiebreaker 2"),
-            },
+            RoundSource::Async(name) => f.write_str(name),
             RoundSource::PooledMode(name) => f.write_str(name),
         }
     }
@@ -731,22 +724,22 @@ pub(crate) async fn signups_sorted(
                     SELECT
                         ap.player AS "player: Id<Users>",
                         ap.time,
-                        ap.kind AS "kind: AsyncKind",
+                        ap.async_id, a.name,
                         at.start_time,
                         a.end_time AS async_end_time
                     FROM async_players ap
                     INNER JOIN team_members tm ON tm.member = ap.player
                     INNER JOIN teams t ON t.id = tm.team AND t.series = $1 AND t.event = $2 AND NOT t.resigned
-                    INNER JOIN async_teams at ON at.team = t.id AND at.kind = ap.kind
-                    INNER JOIN asyncs a ON a.series = $1 AND a.event = $2 AND a.kind = ap.kind
+                    INNER JOIN async_teams at ON at.team = t.id AND at.async_id = ap.async_id
+                    INNER JOIN asyncs a ON a.series = $1 AND a.event = $2 AND a.id = ap.async_id
                     WHERE ap.series = $1 AND ap.event = $2
-                    AND ap.kind IN ('qualifier', 'qualifier2', 'qualifier3')
+                    AND a.kind = 'qualifier'
                     AND at.submitted IS NOT NULL
                 "#, data.series as _, &data.event).fetch_all(&mut **transaction).await?;
 
-                // Group by kind to calculate per-qualifier par times
-                let mut async_by_kind =
-                    HashMap::<AsyncKind, Vec<(Id<Users>, Duration, DateTime<Utc>)>>::new();
+                // Calculate par separately for each async, regardless of its name.
+                let mut async_by_id =
+                    HashMap::<i64, Vec<(Id<Users>, Duration, DateTime<Utc>)>>::new();
                 for row in &async_results {
                     // For async_only visibility, skip results from async windows that haven't closed yet (organizers see all)
                     if !is_organizer
@@ -759,15 +752,16 @@ pub(crate) async fn signups_sorted(
                     if let Some(ref time_interval) = row.time {
                         if let Ok(time) = decode_pginterval(time_interval.clone()) {
                             let start_time = row.start_time.unwrap_or(now);
-                            async_by_kind
-                                .entry(row.kind)
+                            async_by_id
+                                .entry(row.async_id)
                                 .or_default()
                                 .push((row.player, time, start_time));
                         }
                     }
                 }
 
-                for (async_kind, mut results) in async_by_kind {
+                for (async_id, mut results) in async_by_id {
+                    let name = &async_results.iter().find(|row| row.async_id == async_id).expect("async result group exists").name;
                     results.sort_by_key(|(_, time, _)| *time);
                     let finish_times: Vec<Duration> = results.iter().map(|(_, t, _)| *t).collect();
                     let num_entrants = results.len();
@@ -802,7 +796,7 @@ pub(crate) async fn signups_sorted(
                                 scores
                                     .entry(MemberUser::MidosHouse(user))
                                     .or_default()
-                                    .push((*start_time, r64(-1.0), RoundSource::Async(async_kind)));
+                                    .push((*start_time, r64(-1.0), RoundSource::Async(name.clone())));
                             }
                         }
                         continue;
@@ -908,7 +902,7 @@ pub(crate) async fn signups_sorted(
                         scores
                             .entry(MemberUser::MidosHouse(user))
                             .or_default()
-                            .push((*start_time, r64(score), RoundSource::Async(async_kind)));
+                            .push((*start_time, r64(score), RoundSource::Async(name.clone())));
                     }
                 }
                 // Count forfeits/DNFs as entered (score 0) even though they have no time
@@ -931,7 +925,7 @@ pub(crate) async fn signups_sorted(
                     scores
                         .entry(MemberUser::MidosHouse(user))
                         .or_default()
-                        .push((start_time, r64(0.0), RoundSource::Async(row.kind)));
+                        .push((start_time, r64(0.0), RoundSource::Async(row.name.clone())));
                 }
             }
             let teams = Team::for_event(&mut *transaction, data.series, &data.event).await?;
@@ -1467,7 +1461,7 @@ pub(crate) async fn signups_sorted(
             }
 
             let teams = if let QualifierKind::Single { .. } = qualifier_kind {
-                sqlx::query!(r#"SELECT id AS "id: Id<Teams>", name, racetime_slug, challonge_id, startgg_id AS "startgg_id: startgg::ID", plural_name, submitted IS NOT NULL AS "qualified!", pieces, custom_choices AS "custom_choices: Json<HashMap<String, String>>", restream_consent, mw_impl AS "mw_impl: mw::Impl", qualifier_rank FROM teams LEFT OUTER JOIN async_teams ON (id = team) WHERE
+                sqlx::query!(r#"SELECT id AS "id: Id<Teams>", name, racetime_slug, challonge_id, startgg_id AS "startgg_id: startgg::ID", plural_name, submitted IS NOT NULL AS "qualified!", pieces, custom_choices AS "custom_choices: Json<HashMap<String, String>>", restream_consent, mw_impl AS "mw_impl: mw::Impl", qualifier_rank FROM teams LEFT OUTER JOIN async_teams ON (id = team AND async_id = (SELECT id FROM asyncs WHERE series = $1 AND event = $2 AND kind = 'qualifier' ORDER BY id LIMIT 1)) WHERE
                     series = $1
                     AND event = $2
                     AND NOT resigned
@@ -1476,7 +1470,7 @@ pub(crate) async fn signups_sorted(
                         OR EXISTS (SELECT 1 FROM team_members WHERE team = id AND member = $4)
                         OR NOT EXISTS (SELECT 1 FROM team_members WHERE team = id AND status = 'unconfirmed')
                     )
-                    AND (kind = 'qualifier' OR kind IS NULL)
+
                 "#, data.series as _, &data.event, is_organizer && !data.is_started(&mut *transaction).await?, me.as_ref().map(|me| PgSnowflake(me.id)) as _).fetch(&mut **transaction)
                     .map_ok(|row| TeamRow {
                         team: Team {
@@ -1536,7 +1530,7 @@ pub(crate) async fn signups_sorted(
                 for &(role, _) in roles {
                     let row = sqlx::query!(r#"
                         SELECT member AS "id: Id<Users>", status AS "status: SignupStatus", time, vod
-                        FROM team_members LEFT OUTER JOIN async_players ON (member = player AND series = $1 AND event = $2 AND kind = 'qualifier')
+                        FROM team_members LEFT OUTER JOIN async_players ON (member = player AND series = $1 AND event = $2 AND async_id = (SELECT id FROM asyncs WHERE series = $1 AND event = $2 AND kind = 'qualifier' ORDER BY id LIMIT 1))
                         WHERE team = $3 AND role = $4
                     "#, data.series as _, &data.event, team.team.id as _, role as _).fetch_one(&mut **transaction).await?;
                     let is_confirmed = row.status.is_confirmed();
@@ -1934,7 +1928,7 @@ pub(crate) async fn list(
             SELECT NOT EXISTS(
                 SELECT 1 FROM asyncs
                 WHERE series = $1 AND event = $2
-                AND kind IN ('qualifier', 'qualifier2', 'qualifier3')
+                AND kind = 'qualifier'
                 AND (end_time IS NULL OR end_time > NOW())
             ) AS "all_ended!"
         "#,
@@ -2042,7 +2036,7 @@ pub(crate) async fn list(
 
     let async_results_exist = if let QualifierKind::Score(_) = qualifier_kind {
         sqlx::query_scalar!(
-            r#"SELECT EXISTS(SELECT 1 FROM async_players ap WHERE ap.series = $1 AND ap.event = $2 AND ap.kind IN ('qualifier', 'qualifier2', 'qualifier3') AND ap.time IS NOT NULL) AS "exists!""#,
+            r#"SELECT EXISTS(SELECT 1 FROM async_players ap JOIN asyncs a ON a.id=ap.async_id WHERE ap.series = $1 AND ap.event = $2 AND a.kind = 'qualifier' AND ap.time IS NOT NULL) AS "exists!""#,
             data.series as _,
             &data.event
         )

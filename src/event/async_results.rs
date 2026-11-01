@@ -1,6 +1,6 @@
 use crate::{
     event::{
-        AsyncKind, Data, Series, Tab,
+        Data, Series, Tab,
         teams::{QualifierKind, QualifierScoreKind},
     },
     prelude::*,
@@ -16,7 +16,7 @@ struct AsyncResultRow {
 }
 
 struct AsyncResultSection {
-    title: &'static str,
+    title: String,
     rows: Vec<AsyncResultRow>,
     has_vod: bool,
 }
@@ -53,8 +53,8 @@ pub(crate) async fn get(
         .await?;
 
     // Find which qualifier asyncs exist for this event
-    let async_kinds = sqlx::query_scalar!(
-        r#"SELECT kind AS "kind: AsyncKind" FROM asyncs WHERE series = $1 AND event = $2 AND kind IN ('qualifier', 'qualifier2', 'qualifier3') ORDER BY kind"#,
+    let asyncs = sqlx::query!(
+        r#"SELECT id, name FROM asyncs WHERE series = $1 AND event = $2 AND kind = 'qualifier' ORDER BY id"#,
         data.series as _,
         &data.event
     )
@@ -63,7 +63,7 @@ pub(crate) async fn get(
 
     let mut sections = Vec::new();
 
-    for async_kind in async_kinds {
+    for definition in asyncs {
         struct PlayerRow {
             player: Id<Users>,
             time: sqlx::postgres::types::PgInterval,
@@ -72,10 +72,10 @@ pub(crate) async fn get(
 
         let rows = sqlx::query_as!(
             PlayerRow,
-            r#"SELECT ap.player AS "player: Id<Users>", ap.time AS "time!", ap.vod FROM async_players ap WHERE ap.series = $1 AND ap.event = $2 AND ap.kind = $3 AND ap.time IS NOT NULL ORDER BY ap.time ASC"#,
+            r#"SELECT ap.player AS "player: Id<Users>", ap.time AS "time!", ap.vod FROM async_players ap WHERE ap.series = $1 AND ap.event = $2 AND ap.async_id = $3 AND ap.time IS NOT NULL ORDER BY ap.time ASC"#,
             data.series as _,
             &data.event,
-            async_kind as _
+            definition.id
         )
         .fetch_all(&mut *transaction)
         .await?;
@@ -112,12 +112,7 @@ pub(crate) async fn get(
             None
         };
 
-        let title = match async_kind {
-            AsyncKind::Qualifier1 => "Qualifier 1",
-            AsyncKind::Qualifier2 => "Qualifier 2",
-            AsyncKind::Qualifier3 => "Qualifier 3",
-            _ => continue,
-        };
+        let title = definition.name;
 
         let mut result_rows = Vec::new();
         let mut has_vod = false;

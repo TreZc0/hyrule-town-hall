@@ -1,0 +1,36 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT ap.player AS \"player: Id<Users>\", ap.time AS \"time!\", ap.vod FROM async_players ap WHERE ap.series = $1 AND ap.event = $2 AND ap.async_id = $3 AND ap.time IS NOT NULL ORDER BY ap.time ASC",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "player: Id<Users>",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "time!",
+        "type_info": "Interval"
+      },
+      {
+        "ordinal": 2,
+        "name": "vod",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "3f0d44a8afa865064ccfc39d518c1fbbffa6395d83f3433352400359ea2e6bab"
+}

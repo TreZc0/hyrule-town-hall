@@ -13,7 +13,7 @@ fn mmr_async_delivery_uses_remote_seed_and_complete_hash() {
 fn runs() -> [AsyncRun; 3] {
     [
         AsyncRun::BracketRace { race_id: 42, async_part: 1 },
-        AsyncRun::Qualifier { team_id: 42, async_kind: AsyncKind::Qualifier1 },
+        AsyncRun::Qualifier { team_id: 42, async_id: 1 },
         AsyncRun::PooledQualifier { attempt_id: 42, control_version: 3 },
     ]
 }

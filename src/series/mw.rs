@@ -2471,11 +2471,11 @@ pub(crate) fn async_rules(data: &Data<'_>, async_kind: AsyncKind) -> RawHtml<Str
         ol {
             @match async_kind {
                 AsyncKind::Seeding => @unimplemented
-                AsyncKind::Qualifier1 | AsyncKind::Qualifier2 | AsyncKind::Qualifier3 => li : "In order to play in the tournament, your team must make a reasonable attempt at completing this seed. In the event of a forfeit, you can still participate, but will be considered the bottom seed for settings draft purposes.";
+                AsyncKind::Qualifier => li : "In order to play in the tournament, your team must make a reasonable attempt at completing this seed. In the event of a forfeit, you can still participate, but will be considered the bottom seed for settings draft purposes.";
                 AsyncKind::Tiebreaker1 => li : "In order to play in the top 8 bracket, your team must make a reasonable attempt at completing this seed. In the event of a forfeit, you can still participate, but will be placed at the bottom of your Swiss point group for matchup and settings draft purposes.";
                 AsyncKind::Tiebreaker2 => li : "In order to play in the top 8 bracket, your team must race the other teams of your Swiss point group on this seed.";
             }
-            @if let AsyncKind::Qualifier1 | AsyncKind::Qualifier2 | AsyncKind::Qualifier3 = async_kind {
+            @if let AsyncKind::Qualifier = async_kind {
                 li {
                     @if let Some(base_start) = data.base_start {
                         : "The time must be submitted by ";
@@ -2489,7 +2489,7 @@ pub(crate) fn async_rules(data: &Data<'_>, async_kind: AsyncKind) -> RawHtml<Str
                 //TODO give deadline of tiebreaker async
             }
             li : "You must start the seed within 30 minutes of obtaining it and submit your time within 30 minutes of the last finish. Any additional time taken will be added to your final time. If anything prevents you from obtaining the seed/submitting your time, please DM an admin (or ping the Discord role) to get it sorted out.";
-            @if let AsyncKind::Qualifier1 | AsyncKind::Qualifier2 | AsyncKind::Qualifier3 = async_kind {
+            @if let AsyncKind::Qualifier = async_kind {
                 li : "While required for the tournament, the results from the qualifier seed will only determine which team chooses who goes first in the settings draft. Swiss pairings will be seeded randomly.";
                 li : "While you are not strictly required to stream, you must have video proof of your run. Feel free to simply record your run and upload it to YouTube and provide a link. If you do stream or make your upload public, please make sure it is clearly marked so people can avoid spoilers. If you're a big streamer, be extra sure to note what is happening, as several of your viewers are likely going to want to participate as well.";
             } else {
@@ -2499,7 +2499,7 @@ pub(crate) fn async_rules(data: &Data<'_>, async_kind: AsyncKind) -> RawHtml<Str
             li : "Do not spoil yourself on this seed by watching another playthrough. If you do stream, you are responsible for what your chat says, so either do not read chat, set it to emote only, or take the risk at your own discretion. If you do get spoiled, please report it to the admins, we will try to work out something equitable.";
             li {
                 : "You must use the world numbers with which you entered the tournament for this seed.";
-                @if let AsyncKind::Qualifier1 | AsyncKind::Qualifier2 | AsyncKind::Qualifier3 = async_kind {
+                @if let AsyncKind::Qualifier = async_kind {
                     : " Once you request the seed, the world numbers you selected are the world numbers you play with for the rest of the tournament. If you wish to change your player order, do not request the qualifier and contact an admin."; //TODO allow changing player order in options below
                 }
             }

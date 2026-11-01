@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO async_players (series, event, player, async_id, time, vod) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (series, event, player, async_id) DO UPDATE SET time = EXCLUDED.time, vod = COALESCE(EXCLUDED.vod, async_players.vod)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Varchar",
+        "Varchar",
+        "Int8",
+        "Int8",
+        "Interval",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a253f5647992f262d6739a5270f7886c12ca48000f8c9dad3a5596c09e1d2f8e"
+}

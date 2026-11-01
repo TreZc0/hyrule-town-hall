@@ -2,9 +2,97 @@ use crate::{
     event::{AsyncKind, Data, Series, Tab},
     hash_icon_db::HashIconData,
     prelude::*,
-    racetime_bot::seed_gen_type::SeedGenType,
+    racetime_bot::{GlobalState, SeedRollUpdate, seed_gen_type::SeedGenType},
     seed,
 };
+
+use rocket::response::Flash;
+
+pub(crate) async fn resolve_control(
+    pool: &PgPool,
+    team: i64,
+    value: &str,
+) -> Result<Option<i64>, sqlx::Error> {
+    let Some(id) = value
+        .strip_prefix('a')
+        .and_then(|id| id.parse::<i64>().ok())
+        .filter(|id| *id > 0)
+    else {
+        return Ok(None);
+    };
+    sqlx::query_scalar("SELECT a.id FROM asyncs a JOIN teams t ON t.series=a.series AND t.event=a.event WHERE t.id=$1 AND a.id=$2")
+        .bind(team).bind(id).fetch_optional(pool).await
+}
+
+pub(crate) async fn next(
+    transaction: &mut Transaction<'_, Postgres>,
+    data: &Data<'_>,
+    team: Option<Id<Teams>>,
+) -> Result<Option<i64>, event::DataError> {
+    // Always keep an unfinished request visible, including after its window
+    // closes and while its result is awaiting submission or verification.
+    if let Some(team) = team {
+        if let Some(id) = sqlx::query_scalar("SELECT a.id FROM async_teams entry JOIN asyncs a ON a.id=entry.async_id WHERE entry.team=$1 AND a.series=$2 AND a.event=$3 AND entry.requested IS NOT NULL AND entry.submitted IS NULL ORDER BY entry.requested, a.id LIMIT 1")
+            .bind(team).bind(data.series).bind(&*data.event).fetch_optional(&mut **transaction).await? {
+            return Ok(Some(id));
+        }
+    }
+    let started = data.is_started(transaction).await?;
+    Ok(sqlx::query_scalar("SELECT a.id FROM asyncs a WHERE a.series=$1 AND a.event=$2 AND (a.start IS NULL OR a.start<=NOW()) AND (a.end_time IS NULL OR a.end_time>NOW()) AND (a.seed_data IS NOT NULL OR a.file_stem IS NOT NULL OR a.web_id IS NOT NULL OR a.tfb_uuid IS NOT NULL OR a.xkeys_uuid IS NOT NULL) AND (a.kind='seeding' OR (a.kind='qualifier' AND NOT $4) OR (a.kind IN ('tiebreaker1','tiebreaker2') AND EXISTS (SELECT 1 FROM async_teams WHERE team=$3 AND async_id=a.id))) AND NOT EXISTS (SELECT 1 FROM async_teams WHERE team=$3 AND async_id=a.id AND submitted IS NOT NULL) ORDER BY a.id LIMIT 1")
+        .bind(data.series).bind(&*data.event).bind(team).bind(started).fetch_optional(&mut **transaction).await?)
+}
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum RequestError {
+    #[error(transparent)]
+    Sql(#[from] sqlx::Error),
+    #[error("This async does not belong to your event.")]
+    WrongEvent,
+    #[error("Finish your current async before requesting another.")]
+    Unfinished,
+}
+
+/// Request an async within the caller's transaction. Availability and signup
+/// requirements are checked by the caller. Returns false for an existing
+/// request, allowing a returning entrant to retain their original run.
+pub(crate) async fn request(
+    tx: &mut Transaction<'_, Postgres>,
+    team: Id<Teams>,
+    async_id: i64,
+) -> Result<bool, RequestError> {
+    // Serialize requests for this team, including requests from signup.
+    let (series, event): (String, String) =
+        sqlx::query_as("SELECT series,event FROM teams WHERE id=$1 FOR UPDATE")
+            .bind(team)
+            .fetch_one(&mut **tx)
+            .await?;
+    // Seed edits and generation take this same definition lock. Check ownership
+    // here because async_teams references the team and async independently.
+    let definition: Option<i64> = sqlx::query_scalar(
+        "SELECT id FROM asyncs WHERE id=$1 AND series=$2 AND event=$3 FOR UPDATE",
+    )
+    .bind(async_id)
+    .bind(series)
+    .bind(event)
+    .fetch_optional(&mut **tx)
+    .await?;
+    definition.ok_or(RequestError::WrongEvent)?;
+    let already_requested: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM async_teams WHERE team=$1 AND async_id=$2 AND (requested IS NOT NULL OR submitted IS NOT NULL))",
+    ).bind(team).bind(async_id).fetch_one(&mut **tx).await?;
+    if already_requested {
+        return Ok(false);
+    }
+    let unfinished: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM async_teams WHERE team=$1 AND requested IS NOT NULL AND submitted IS NULL)",
+    ).bind(team).fetch_one(&mut **tx).await?;
+    if unfinished {
+        return Err(RequestError::Unfinished);
+    }
+    sqlx::query("INSERT INTO async_teams(team,async_id,requested) VALUES($1,$2,NOW()) ON CONFLICT(team,async_id) DO UPDATE SET requested=EXCLUDED.requested")
+        .bind(team).bind(async_id).execute(&mut **tx).await?;
+    Ok(true)
+}
 
 #[derive(Clone, Copy)]
 enum AsyncSeedFormKind {
@@ -34,8 +122,12 @@ fn async_seed_form_kind(event: &Data<'_>) -> AsyncSeedFormKind {
     }
 }
 
-fn parse_async_kind(value: &str) -> Option<AsyncKind> {
-    all::<AsyncKind>().find(|kind| format!("{:?}", kind) == value)
+async fn resolve_edit(transaction: &mut Transaction<'_, Postgres>, series: Series, event: &str, value: &str) -> Result<Option<i64>, sqlx::Error> {
+    if let Ok(id) = value.parse::<i64>() {
+        return sqlx::query_scalar("SELECT id FROM asyncs WHERE series=$1 AND event=$2 AND id=$3")
+            .bind(series).bind(event).bind(id).fetch_optional(&mut **transaction).await;
+    }
+    Ok(None)
 }
 
 fn avianart_seed_fields(seed_data: &serde_json::Value) -> (String, String) {
@@ -69,19 +161,23 @@ fn avianart_seed_fields(seed_data: &serde_json::Value) -> (String, String) {
 }
 
 async fn asyncs_form(
-    mut transaction: Transaction<'_, Postgres>,
-    me: User,
-    uri: Origin<'_>,
-    csrf: Option<&CsrfToken>,
-    event: Data<'_>,
-    edit_kind: Option<AsyncKind>,
-    ctx: Context<'_>,
+    mut transaction: Transaction<'_, Postgres>, me: User, uri: Origin<'_>,
+    csrf: Option<&CsrfToken>, event: Data<'_>, edit_id: Option<i64>, ctx: Context<'_>,
 ) -> Result<RawHtml<String>, event::Error> {
-    let header = event
-        .header(&mut transaction, Some(&me), Tab::Asyncs, false)
-        .await?;
+    let header = event.header(&mut transaction, Some(&me), Tab::Asyncs, true).await?;
+    let content = editor(&mut transaction, csrf, &event, edit_id, ctx).await?;
+    Ok(page(transaction, &Some(me), &uri, PageStyle { chests: event.chests().await?, ..PageStyle::default() },
+        &format!("Qualifiers & Asyncs — {}", event.display_name), html! { : header; article { : content; } }).await?)
+}
 
+pub(super) async fn editor(
+    mut transaction: &mut Transaction<'_, Postgres>, csrf: Option<&CsrfToken>,
+    event: &Data<'_>, edit_id: Option<i64>, ctx: Context<'_>,
+) -> Result<RawHtml<String>, event::Error> {
     struct AsyncRow {
+        id: i64,
+        name: String,
+        requested: bool,
         kind: AsyncKind,
         file_stem: Option<String>,
         web_id: Option<i64>,
@@ -99,19 +195,20 @@ async fn asyncs_form(
 
     let asyncs = sqlx::query_as!(
         AsyncRow,
-        r#"SELECT kind AS "kind: AsyncKind", file_stem, web_id, tfb_uuid, xkeys_uuid, seed_data,
+        r#"SELECT id, name, EXISTS(SELECT 1 FROM async_teams WHERE async_id=asyncs.id AND requested IS NOT NULL) AS "requested!", kind AS "kind: AsyncKind", file_stem, web_id, tfb_uuid, xkeys_uuid, seed_data,
                hash1::text as hash1, hash2::text as hash2, hash3::text as hash3, hash4::text as hash4, hash5::text as hash5,
-               start, end_time FROM asyncs WHERE series = $1 AND event = $2 ORDER BY kind"#,
+               start, end_time FROM asyncs WHERE series = $1 AND event = $2 ORDER BY id"#,
         event.series as _,
         &event.event
     )
-    .fetch_all(&mut *transaction)
+    .fetch_all(&mut **transaction)
     .await?;
 
-    let editing_async = edit_kind.and_then(|kind| asyncs.iter().find(|row| row.kind == kind));
+    let editing_async = edit_id.and_then(|id| asyncs.iter().find(|row| row.id == id));
     let default_kind = editing_async
         .map(|row| format!("{:?}", row.kind))
-        .unwrap_or_else(|| format!("{:?}", AsyncKind::Qualifier1));
+        .unwrap_or_else(|| format!("{:?}", AsyncKind::Qualifier));
+    let default_name = editing_async.map(|row| row.name.clone()).unwrap_or_else(|| format!("Async {}", asyncs.iter().filter(|row| row.kind == AsyncKind::Qualifier).count() + 1));
     let default_file_stem = editing_async
         .and_then(|row| row.file_stem.as_ref())
         .cloned()
@@ -184,27 +281,17 @@ async fn asyncs_form(
         Vec::new()
     };
 
-    Ok(
-        page(
-            transaction,
-            &Some(me),
-            &uri,
-            PageStyle {
-                chests: event.chests().await?,
-                ..PageStyle::default()
-            },
-            &format!("Asyncs — {}", event.display_name),
-            html! {
-                : header;
-                article {
-                    h2 : "Async Qualifiers";
+    Ok(html! {
+                section(id = "async-qualifiers") {
+                    h2 : "Async qualifiers & other asyncs";
+                    p : "Qualifiers are offered in creation order during their availability windows. Each qualifier has one shared seed.";
                     @if asyncs.is_empty() {
                         p : "No asyncs defined.";
                     } else {
                         table {
                             thead {
                                 tr {
-                                    th : "Kind";
+                                    th : "Name"; th : "Kind"; th : "Seed status";
                                     @match seed_form_kind {
                                         AsyncSeedFormKind::Mmr => { th : "MMR seed"; }
                                         AsyncSeedFormKind::Twwr => {
@@ -231,8 +318,14 @@ async fn asyncs_form(
                             }
                             tbody {
                                 @for row in asyncs {
+                                    @let has_seed = row.seed_data.is_some() || row.file_stem.is_some() || row.web_id.is_some() || row.tfb_uuid.is_some() || row.xkeys_uuid.is_some();
                                     tr {
+                                        td : &row.name;
                                         td : format!("{:?}", row.kind);
+                                        td {
+                                            : if has_seed { "Ready" } else { "No seed" };
+                                            @if row.requested { br; : "Seed locked: already requested"; }
+                                        }
                                         @match seed_form_kind {
                                             AsyncSeedFormKind::Mmr => {
                                                 td {
@@ -268,7 +361,11 @@ async fn asyncs_form(
                                                 }
                                             }
                                             AsyncSeedFormKind::TriforceBlitz => {
-                                                td : row.tfb_uuid.map(|u| u.to_string()).unwrap_or_default();
+                                                td {
+                                                    @if let Some(seed::Files::TriforceBlitz { uuid, .. }) = row.seed_data.as_ref().and_then(seed::Files::from_seed_data) {
+                                                        a(href = format!("https://tfb.midos.house/seed/{uuid}")) : "View seed";
+                                                    } else { : row.tfb_uuid.map(|u| u.to_string()).unwrap_or_default(); }
+                                                }
                                             }
                                             AsyncSeedFormKind::AlttprDoorRando => {
                                                 td {
@@ -308,25 +405,30 @@ async fn asyncs_form(
                                                 }
                                             }
                                             AsyncSeedFormKind::FileStemWebId => {
-                                                td : row.file_stem.unwrap_or_default();
-                                                td : row.web_id.map(|id| id.to_string()).unwrap_or_default();
+                                                td(colspan = "2") {
+                                                    @match row.seed_data.as_ref().and_then(seed::Files::from_seed_data) {
+                                                        Some(seed::Files::OotrWeb { id, .. }) => a(href = format!("https://ootrandomizer.com/seed/get?id={id}")) : "View seed";
+                                                        Some(seed::Files::MidosHouse { file_stem, .. }) => a(href = format!("{}/seed/{file_stem}.zpfz", base_uri())) : "Download seed";
+                                                        _ => { : row.file_stem.as_deref().unwrap_or_default(); : " "; : row.web_id.map(|id| id.to_string()).unwrap_or_default(); }
+                                                    }
+                                                }
                                             }
                                         }
                                         td : row.start.map(|dt| dt.format("%Y-%m-%d %H:%M UTC").to_string()).unwrap_or_default();
                                         td : row.end_time.map(|dt| dt.format("%Y-%m-%d %H:%M UTC").to_string()).unwrap_or_default();
                                         td {
-                                            @let kind_name = format!("{:?}", row.kind);
+                                            @let kind_name = row.id.to_string();
                                             a(class = "button", href = uri!(get(event.series, &*event.event, Some(kind_name.clone())))) : "Edit";
-                                            @if matches!(seed_form_kind, AsyncSeedFormKind::Mmr) {
-                                                form(action = uri!(generate_mmr(event.series, &*event.event, kind_name.clone())).to_string(), method = "post", style = "display: inline;") {
+                                            @if event.seed_gen_type.is_some() && !row.requested {
+                                                form(action = uri!(generate(event.series, &*event.event, row.id)).to_string(), method = "post", style = "display: inline;") {
                                                     input(type = "hidden", name = "csrf", value? = csrf.map(|token| token.authenticity_token()));
-                                                    button(type = "submit") : if row.seed_data.is_some() { "Regenerate seed" } else { "Generate seed" };
+                                                    button(type = "submit") : if has_seed { "Regenerate seed" } else { "Generate seed" };
                                                 }
                                             }
                                             : " | ";
                                             form(action = uri!(delete(event.series, &*event.event, kind_name)).to_string(), method = "post", style = "display: inline;") {
                                                 input(type = "hidden", name = "csrf", value? = csrf.map(|token| token.authenticity_token()));
-                                                button(type = "submit", onclick = "return confirm('Are you sure you want to delete this async?')") : "Delete";
+                                                button(type = "submit", disabled? = row.requested, onclick = "return confirm('Are you sure you want to delete this async?')") : "Delete";
                                             }
                                         }
                                     }
@@ -335,15 +437,15 @@ async fn asyncs_form(
                         }
                     }
 
-                    @if let Some(edit_kind) = edit_kind {
+                    @if edit_id.is_some() {
                         p {
                             : "Editing ";
-                            b : format!("{:?}", edit_kind);
+                            b : &default_name;
                             : ". ";
                             a(href = uri!(get(event.series, &*event.event, None::<String>)).to_string()) : "Cancel edit";
                         }
                     }
-                    h3 : if edit_kind.is_some() { "Edit Async" } else { "Add/Update Async" };
+                    h3 : if edit_id.is_some() { "Edit Async" } else { "Add async" };
                     @let hidden_fields = match seed_form_kind {
                         AsyncSeedFormKind::Mmr => ["file_stem", "web_id", "tfb_uuid", "xkeys_uuid", "avianart_hash", "avianart_seed_hash", "hash1", "hash2", "hash3", "hash4", "hash5", "permalink", "seed_hash"].as_slice(),
                         AsyncSeedFormKind::Twwr => ["file_stem", "web_id", "tfb_uuid", "xkeys_uuid", "avianart_hash", "avianart_seed_hash", "hash1", "hash2", "hash3", "hash4", "hash5"].as_slice(),
@@ -355,6 +457,11 @@ async fn asyncs_form(
                     @let mut errors = ctx.errors().filter(|e| !hidden_fields.iter().any(|f| e.is_for(f))).collect_vec();
                     : full_form(uri!(post(event.series, &*event.event)), csrf, html! {
                         @let selected_kind = ctx.field_value("kind").unwrap_or(&default_kind);
+                        @if let Some(id) = edit_id { input(type = "hidden", name = "id", value = id); }
+                        : form_field("name", &mut errors, html! {
+                            label(for = "async_name") : "Name";
+                            input(type = "text", id = "async_name", name = "name", required, maxlength = "100", value = ctx.field_value("name").unwrap_or(&default_name));
+                        });
                         // Hidden inputs for fields not used by this series
                         @for field in hidden_fields {
                             input(type = "hidden", name = *field, value = "");
@@ -368,8 +475,12 @@ async fn asyncs_form(
                                 }
                             }
                         });
+                        p : "Save this async, then use Generate seed to roll with the event settings. All players receive the same seed. Manual seed details below are optional.";
+                        @if edit_id.is_some() {
+                            label { input(type = "checkbox", name = "replace_seed", checked? = ctx.field_value("replace_seed") == Some("on")); : "Replace the seed using the manual details below (only before anyone requests it)"; }
+                        }
                         @match seed_form_kind {
-                            AsyncSeedFormKind::Mmr => { p : "Save the async, then use Generate seed. MMR seeds use the event settings and cannot be replaced after an entrant requests this async."; }
+                            AsyncSeedFormKind::Mmr => {}
                             AsyncSeedFormKind::Twwr => {
                                 : form_field("permalink", &mut errors, html! {
                                     label(for = "permalink") : "Permalink";
@@ -443,12 +554,9 @@ async fn asyncs_form(
                             label(for = "end_time") : "End Time (UTC)";
                             input(type = "datetime-local", name = "end_time", id = "end_time", value = ctx.field_value("end_time").unwrap_or(&default_end_time));
                         });
-                    }, errors, if edit_kind.is_some() { "Update Async" } else { "Save Async" });
+                    }, errors, if edit_id.is_some() { "Update Async" } else { "Save Async" });
                 }
-            },
-        )
-        .await?,
-    )
+    })
 }
 
 #[rocket::get("/event/<series>/<event>/asyncs?<edit_kind>")]
@@ -471,7 +579,7 @@ pub(crate) async fn get(
     if !me.is_global_admin() && !event_data.organizers(&mut transaction).await?.contains(&me) {
         return Err(StatusOrError::Status(Status::Forbidden));
     }
-    let edit_kind = edit_kind.as_deref().and_then(parse_async_kind);
+    let edit_kind = if let Some(value) = edit_kind { Some(resolve_edit(&mut transaction, series, &event, &value).await?.ok_or(StatusOrError::Status(Status::NotFound))?) } else { None };
     Ok(asyncs_form(
         transaction,
         me,
@@ -489,35 +597,24 @@ pub(crate) struct AsyncForm {
     #[field(default = String::new())]
     csrf: String,
     kind: AsyncKind,
-    #[field(default = None)]
+    id: Option<i64>,
+    #[field(validate = len(1..=100))]
+    name: String,
+    replace_seed: bool,
     file_stem: Option<String>,
-    #[field(default = None)]
     web_id: Option<i64>,
-    #[field(default = None)]
     tfb_uuid: Option<String>,
-    #[field(default = None)]
     xkeys_uuid: Option<String>,
-    #[field(default = None)]
     permalink: Option<String>,
-    #[field(default = None)]
     seed_hash: Option<String>,
-    #[field(default = None)]
     avianart_hash: Option<String>,
-    #[field(default = None)]
     avianart_seed_hash: Option<String>,
-    #[field(default = None)]
     hash1: Option<String>,
-    #[field(default = None)]
     hash2: Option<String>,
-    #[field(default = None)]
     hash3: Option<String>,
-    #[field(default = None)]
     hash4: Option<String>,
-    #[field(default = None)]
     hash5: Option<String>,
-    #[field(default = None)]
     start: Option<String>,
-    #[field(default = None)]
     end_time: Option<String>,
 }
 
@@ -629,7 +726,7 @@ pub(crate) async fn post(
                     uri,
                     csrf.as_ref(),
                     event_data,
-                    Some(value.kind),
+                    value.id,
                     form.context,
                 )
                 .await?,
@@ -652,7 +749,7 @@ pub(crate) async fn post(
                                     uri,
                                     csrf.as_ref(),
                                     event_data,
-                                    Some(value.kind),
+                                    value.id,
                                     form.context,
                                 )
                                 .await?,
@@ -681,7 +778,7 @@ pub(crate) async fn post(
                                     uri,
                                     csrf.as_ref(),
                                     event_data,
-                                    Some(value.kind),
+                                    value.id,
                                     form.context,
                                 )
                                 .await?,
@@ -720,7 +817,7 @@ pub(crate) async fn post(
                             uri,
                             csrf.as_ref(),
                             event_data,
-                            Some(value.kind),
+                            value.id,
                             form.context,
                         )
                         .await?,
@@ -772,7 +869,7 @@ pub(crate) async fn post(
                                         uri,
                                         csrf.as_ref(),
                                         event_data,
-                                        Some(value.kind),
+                                        value.id,
                                         form.context,
                                     )
                                     .await?,
@@ -836,7 +933,7 @@ pub(crate) async fn post(
                                     uri,
                                     csrf.as_ref(),
                                     event_data,
-                                    Some(value.kind),
+                                    value.id,
                                     form.context,
                                 )
                                 .await?,
@@ -868,7 +965,7 @@ pub(crate) async fn post(
                                     uri,
                                     csrf.as_ref(),
                                     event_data,
-                                    Some(value.kind),
+                                    value.id,
                                     form.context,
                                 )
                                 .await?,
@@ -882,15 +979,6 @@ pub(crate) async fn post(
                 None
             };
 
-            if matches!(seed_form_kind, AsyncSeedFormKind::Mmr) {
-                // Editing dates must not overwrite a seed generated concurrently.
-                sqlx::query("INSERT INTO asyncs (series, event, kind, start, end_time) VALUES ($1,$2,$3,$4,$5) ON CONFLICT (series,event,kind) DO UPDATE SET start=EXCLUDED.start, end_time=EXCLUDED.end_time")
-                    .bind(series).bind(event).bind(value.kind).bind(start).bind(end_time)
-                    .execute(&mut *transaction).await?;
-                transaction.commit().await?;
-                return Ok(RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event, None::<String>)))));
-            }
-
             let (hash1, hash2, hash3, hash4, hash5): (
                 Option<String>,
                 Option<String>,
@@ -901,42 +989,34 @@ pub(crate) async fn post(
                 Some([h1, h2, h3, h4, h5]) => (Some(h1), Some(h2), Some(h3), Some(h4), Some(h5)),
                 None => (None, None, None, None, None),
             };
-            sqlx::query!(
-                r#"INSERT INTO asyncs (series, event, kind, file_stem, web_id, tfb_uuid, xkeys_uuid, seed_data, hash1, hash2, hash3, hash4, hash5, start, end_time)
-                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
-                   ON CONFLICT (series, event, kind) DO UPDATE SET
-                       file_stem = EXCLUDED.file_stem,
-                       web_id = EXCLUDED.web_id,
-                       tfb_uuid = EXCLUDED.tfb_uuid,
-                       xkeys_uuid = EXCLUDED.xkeys_uuid,
-                       seed_data = EXCLUDED.seed_data,
-                       hash1 = EXCLUDED.hash1,
-                       hash2 = EXCLUDED.hash2,
-                       hash3 = EXCLUDED.hash3,
-                       hash4 = EXCLUDED.hash4,
-                       hash5 = EXCLUDED.hash5,
-                       start = EXCLUDED.start,
-                       end_time = EXCLUDED.end_time"#,
-                event_data.series as _,
-                &event_data.event,
-                value.kind as _,
-                file_stem,
-                value.web_id,
-                tfb_uuid,
-                xkeys_uuid,
-                seed_data,
-                hash1 as _,
-                hash2 as _,
-                hash3 as _,
-                hash4 as _,
-                hash5 as _,
-                start,
-                end_time
-            )
-            .execute(&mut *transaction)
-            .await?;
+            if value.name.trim().is_empty() || start.zip(end_time).is_some_and(|(start, end)| start >= end) {
+                form.context.push_error(form::Error::validation("Enter a name and an end time after the start."));
+                return Ok(RedirectOrContent::Content(asyncs_form(transaction, me, uri, csrf.as_ref(), event_data, value.id, form.context).await?));
+            }
+            let id = if let Some(id) = value.id {
+                let existing: Option<AsyncKind> = sqlx::query_scalar("SELECT kind FROM asyncs WHERE id=$1 AND series=$2 AND event=$3 FOR UPDATE")
+                    .bind(id).bind(series).bind(event).fetch_optional(&mut *transaction).await?;
+                let kind = existing.ok_or(StatusOrError::Status(Status::NotFound))?;
+                let requested: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM async_teams WHERE async_id=$1 AND requested IS NOT NULL)")
+                    .bind(id).fetch_one(&mut *transaction).await?;
+                if requested && (value.replace_seed || kind != value.kind) {
+                    form.context.push_error(form::Error::validation("This seed has already been requested. Its name and dates can still be edited."));
+                    return Ok(RedirectOrContent::Content(asyncs_form(transaction, me, uri, csrf.as_ref(), event_data, value.id, form.context).await?));
+                }
+                sqlx::query("UPDATE asyncs SET kind=$2,name=$3,start=$4,end_time=$5 WHERE id=$1")
+                    .bind(id).bind(value.kind).bind(value.name.trim()).bind(start).bind(end_time).execute(&mut *transaction).await?;
+                id
+            } else {
+                sqlx::query_scalar("INSERT INTO asyncs(series,event,kind,name,start,end_time) VALUES($1,$2,$3,$4,$5,$6) RETURNING id")
+                    .bind(series).bind(event).bind(value.kind).bind(value.name.trim()).bind(start).bind(end_time).fetch_one(&mut *transaction).await?
+            };
+            if value.id.is_none() || value.replace_seed {
+                sqlx::query("UPDATE asyncs SET file_stem=$2,web_id=$3,tfb_uuid=$4,xkeys_uuid=$5,seed_data=$6,hash1=$7,hash2=$8,hash3=$9,hash4=$10,hash5=$11,seed_password=NULL,web_gen_time=NULL WHERE id=$1")
+                    .bind(id).bind(file_stem).bind(value.web_id).bind(tfb_uuid).bind(xkeys_uuid).bind(seed_data)
+                    .bind(hash1).bind(hash2).bind(hash3).bind(hash4).bind(hash5).execute(&mut *transaction).await?;
+            }
             transaction.commit().await?;
-            RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event, None::<String>))))
+            RedirectOrContent::Redirect(Redirect::to(format!("{}#async-qualifiers", uri!(super::qualifiers::get(series, event)))))
         }
     } else {
         RedirectOrContent::Content(
@@ -960,79 +1040,6 @@ pub(crate) struct DeleteForm {
     csrf: String,
 }
 
-async fn save_mmr_seed(
-    transaction: &mut Transaction<'_, Postgres>,
-    series: Series,
-    event: &str,
-    kind: AsyncKind,
-    seed_data: serde_json::Value,
-    previous: Option<serde_json::Value>,
-) -> Result<bool, sqlx::Error> {
-    if previous.is_some() {
-        // Briefly block request writes while checking replacement eligibility.
-        // No lock is held during the API call, and request handlers need no MMR logic.
-        sqlx::query("LOCK TABLE async_teams IN SHARE MODE").execute(&mut **transaction).await?;
-    }
-    let changed = sqlx::query("UPDATE asyncs SET seed_data=$4 WHERE series=$1 AND event=$2 AND kind=$3 AND seed_data IS NOT DISTINCT FROM $5 AND (seed_data IS NULL OR NOT EXISTS (SELECT 1 FROM async_teams a JOIN teams t ON t.id=a.team WHERE t.series=$1 AND t.event=$2 AND a.kind=$3 AND a.requested IS NOT NULL))")
-        .bind(series).bind(event).bind(kind).bind(seed_data).bind(previous).execute(&mut **transaction).await?;
-    Ok(changed.rows_affected() == 1)
-}
-
-#[rocket::post("/event/<series>/<event>/asyncs/<kind>/generate-mmr", data = "<form>")]
-pub(crate) async fn generate_mmr(
-    pool: &State<PgPool>,
-    state: &State<Arc<racetime_bot::GlobalState>>,
-    me: User,
-    uri: Origin<'_>,
-    csrf: Option<CsrfToken>,
-    series: Series,
-    event: &str,
-    kind: String,
-    form: Form<Contextual<'_, DeleteForm>>,
-) -> Result<RedirectOrContent, StatusOrError<event::Error>> {
-    let mut form = form.into_inner();
-    form.verify(&csrf);
-    if form.value.is_none() { return Err(StatusOrError::Status(Status::BadRequest)); }
-    let kind = parse_async_kind(&kind).ok_or(StatusOrError::Status(Status::BadRequest))?;
-    let mut transaction = pool.begin().await?;
-    let data = Data::new(&mut transaction, series, event).await?
-        .ok_or(StatusOrError::Status(Status::NotFound))?;
-    if !data.asyncs_active { return Err(StatusOrError::Status(Status::NotFound)); }
-    if !me.is_global_admin() && !data.organizers(&mut transaction).await?.contains(&me) {
-        return Err(StatusOrError::Status(Status::Forbidden));
-    }
-    let Some(SeedGenType::Mmr { config }) = data.seed_gen_type.clone() else {
-        return Err(StatusOrError::Status(Status::BadRequest));
-    };
-    // Serializes generation with scheduled MMR async matches, without a DB job.
-    let _guard = state.mmr_async_lock.lock().await;
-    let previous: Option<serde_json::Value> = sqlx::query_scalar("SELECT seed_data FROM asyncs WHERE series=$1 AND event=$2 AND kind=$3")
-        .bind(series).bind(event).bind(kind).fetch_optional(&mut *transaction).await?
-        .ok_or(StatusOrError::Status(Status::NotFound))?;
-    if previous.is_some() {
-        let requested: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM async_teams a JOIN teams t ON t.id=a.team WHERE t.series=$1 AND t.event=$2 AND a.kind=$3 AND a.requested IS NOT NULL)")
-            .bind(series).bind(event).bind(kind).fetch_one(&mut *transaction).await?;
-        if requested { return Err(StatusOrError::Status(Status::Conflict)); }
-    }
-    transaction.commit().await?;
-    let (updates, _receiver) = mpsc::channel(16);
-    let result = state.mmr_api_client.roll(config, crate::mmr_web::Purpose::Competition, &updates).await;
-    let mut transaction = pool.begin().await?;
-    match result {
-        Ok(seed) => {
-            if !save_mmr_seed(&mut transaction, series, event, kind, seed.to_seed_data().expect("MMR seed has metadata"), previous).await? {
-                return Err(StatusOrError::Status(Status::Conflict));
-            }
-            transaction.commit().await?;
-            Ok(RedirectOrContent::Redirect(Redirect::to(uri!(get(series, event, None::<String>)))))
-        }
-        Err(error) => {
-            form.context.push_error(form::Error::validation(error.to_string()));
-            Ok(RedirectOrContent::Content(asyncs_form(transaction, me, uri, csrf.as_ref(), data, Some(kind), form.context).await?))
-        }
-    }
-}
-
 #[rocket::post("/event/<series>/<event>/asyncs/<kind>/delete", data = "<form>")]
 pub(crate) async fn delete(
     pool: &State<PgPool>,
@@ -1049,7 +1056,7 @@ pub(crate) async fn delete(
         .ok_or(StatusOrError::Status(Status::NotFound))?;
     let mut form = form.into_inner();
     form.verify(&csrf);
-    let kind = parse_async_kind(&kind).ok_or(StatusOrError::Status(Status::BadRequest))?;
+    let id = resolve_edit(&mut transaction, series, event, &kind).await?.ok_or(StatusOrError::Status(Status::NotFound))?;
 
     if !event_data.asyncs_active {
         return Err(StatusOrError::Status(Status::NotFound));
@@ -1058,66 +1065,125 @@ pub(crate) async fn delete(
         return Err(StatusOrError::Status(Status::Forbidden));
     }
 
-    if form.value.is_some() {
-        if matches!(event_data.seed_gen_type, Some(SeedGenType::Mmr { .. })) {
-            sqlx::query("LOCK TABLE async_teams IN SHARE MODE").execute(&mut *transaction).await?;
-            let requested: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM async_teams a JOIN teams t ON t.id=a.team WHERE t.series=$1 AND t.event=$2 AND a.kind=$3 AND a.requested IS NOT NULL)")
-                .bind(series).bind(event).bind(kind).fetch_one(&mut *transaction).await?;
-            if requested { return Err(StatusOrError::Status(Status::Conflict)); }
-        }
-        sqlx::query!(
-            "DELETE FROM asyncs WHERE series = $1 AND event = $2 AND kind = $3",
-            series as _,
-            event,
-            kind as _
-        )
-        .execute(&mut *transaction)
-        .await?;
+    if form.value.is_some() && form.context.errors().next().is_none() {
+        sqlx::query("SELECT id FROM asyncs WHERE id=$1 FOR UPDATE").bind(id).execute(&mut *transaction).await?;
+        let protected: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM async_teams WHERE async_id=$1) OR EXISTS(SELECT 1 FROM async_players WHERE async_id=$1) FROM asyncs WHERE id=$1")
+            .bind(id).fetch_one(&mut *transaction).await?;
+        if protected { return Err(StatusOrError::Status(Status::Conflict)); }
+        sqlx::query("DELETE FROM asyncs WHERE id=$1").bind(id).execute(&mut *transaction).await?;
         transaction.commit().await?;
     }
 
-    Ok(Redirect::to(uri!(get(series, event, None::<String>))))
+    Ok(Redirect::to(format!("{}#async-qualifiers", uri!(super::qualifiers::get(series, event)))))
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    #[ignore = "requires HTH_MMR_TEST_DATABASE_URL; uses connection-local temporary tables"]
-    async fn mmr_shared_async_allows_initial_generation_after_requests_but_not_replacement() {
-        let pool = sqlx::postgres::PgPoolOptions::new().max_connections(1)
-            .connect(&std::env::var("HTH_MMR_TEST_DATABASE_URL").unwrap()).await.unwrap();
-        let mut tx = pool.begin().await.unwrap();
-        sqlx::raw_sql(r#"
-            CREATE TEMP TABLE teams (id BIGINT, series TEXT, event TEXT);
-            CREATE TYPE pg_temp.async_kind AS ENUM ('qualifier', 'qualifier2');
-            CREATE TEMP TABLE asyncs (series TEXT, event TEXT, kind pg_temp.async_kind, seed_data JSONB);
-            CREATE TEMP TABLE async_teams (team BIGINT, kind pg_temp.async_kind, requested TIMESTAMPTZ);
-            INSERT INTO teams VALUES (1,'mmrmain','event'), (2,'mmrmain','other-event');
-            INSERT INTO asyncs VALUES ('mmrmain','event','qualifier',NULL), ('mmrmain','event','qualifier2',NULL);
-            INSERT INTO async_teams VALUES (1,'qualifier',NOW()), (2,'qualifier2',NOW());
-        "#).execute(&mut *tx).await.unwrap();
-        let first = json!({"type":"mmr", "id":"first", "hash":["ITEM_BOW"], "encrypted":true, "locked":true});
-        let second = json!({"type":"mmr", "id":"second", "hash":["ITEM_BOMB"], "encrypted":true, "locked":true});
-
-        // Signup already requested this qualifier before its first seed was generated.
-        assert!(save_mmr_seed(&mut tx, Series::MmrMain, "event", AsyncKind::Qualifier1, first.clone(), None).await.unwrap());
-        assert!(!save_mmr_seed(&mut tx, Series::MmrMain, "event", AsyncKind::Qualifier1, second.clone(), Some(first.clone())).await.unwrap());
-
-        // Requests for other qualifiers/events do not prevent an unused seed's replacement.
-        assert!(save_mmr_seed(&mut tx, Series::MmrMain, "event", AsyncKind::Qualifier2, first.clone(), None).await.unwrap());
-        assert!(save_mmr_seed(&mut tx, Series::MmrMain, "event", AsyncKind::Qualifier2, second.clone(), Some(first.clone())).await.unwrap());
-        // A generation response based on older data cannot overwrite the current seed.
-        assert!(!save_mmr_seed(&mut tx, Series::MmrMain, "event", AsyncKind::Qualifier2, first.clone(), None).await.unwrap());
-
-        // A request arriving during the API call prevents publishing a replacement.
-        sqlx::query("INSERT INTO async_teams VALUES (1,'qualifier2',NOW())").execute(&mut *tx).await.unwrap();
-        assert!(!save_mmr_seed(&mut tx, Series::MmrMain, "event", AsyncKind::Qualifier2, first.clone(), Some(second.clone())).await.unwrap());
-        let saved: Vec<serde_json::Value> = sqlx::query_scalar("SELECT seed_data FROM asyncs ORDER BY kind")
-            .fetch_all(&mut *tx).await.unwrap();
-        assert_eq!(saved, [first, second]);
-        tx.rollback().await.unwrap();
-        pool.close().await;
+#[rocket::post("/event/<series>/<event>/asyncs/<id>/generate", data = "<form>")]
+pub(crate) async fn generate(
+    pool: &State<PgPool>,
+    state: &State<Arc<GlobalState>>,
+    me: User,
+    csrf: Option<CsrfToken>,
+    series: Series,
+    event: &str,
+    id: i64,
+    form: Form<Contextual<'_, DeleteForm>>,
+) -> Result<Flash<Redirect>, StatusOrError<event::Error>> {
+    let mut form = form.into_inner();
+    form.verify(&csrf);
+    if form.value.is_none() || form.context.errors().next().is_some() {
+        return Err(StatusOrError::Status(Status::BadRequest));
     }
+    let mut tx = pool.begin().await?;
+    let data = Data::new(&mut tx, series, event)
+        .await?
+        .ok_or(StatusOrError::Status(Status::NotFound))?;
+    if !data.asyncs_active {
+        return Err(StatusOrError::Status(Status::NotFound));
+    }
+    if !me.is_global_admin() && !data.organizers(&mut tx).await?.contains(&me) {
+        return Err(StatusOrError::Status(Status::Forbidden));
+    }
+    let requested: Option<bool> = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM async_teams WHERE async_id=$1 AND requested IS NOT NULL) FROM asyncs WHERE id=$1 AND series=$2 AND event=$3")
+        .bind(id).bind(series).bind(event).fetch_optional(&mut *tx).await?;
+    match requested {
+        None => return Err(StatusOrError::Status(Status::NotFound)),
+        Some(true) => return Err(StatusOrError::Status(Status::Conflict)),
+        Some(false) => (),
+    }
+    tx.commit().await?;
+
+    let redirect = Redirect::to(format!(
+        "{}#async-qualifiers",
+        uri!(super::qualifiers::get(series, event))
+    ));
+    let result = async {
+        let mut updates = Arc::clone(state.inner()).roll_async_qualifier(&data).await;
+        loop {
+            match updates.recv().await {
+                Some(SeedRollUpdate::Done { mut seed, .. }) => {
+                    let extra = seed
+                        .extra(Utc::now())
+                        .await
+                        .map_err(|error| error.to_string())?;
+                    seed.file_hash = extra.file_hash;
+                    seed.password = extra.password;
+                    return Ok::<_, String>(seed);
+                }
+                Some(SeedRollUpdate::Error(error)) => return Err(error.to_string()),
+                None => return Err("Seed generator stopped before returning a seed.".into()),
+                _ => (),
+            }
+        }
+    }
+    .await;
+    match result {
+        Ok(seed) => {
+            if save_seed(pool, id, seed).await? {
+                Ok(Flash::success(redirect, "Seed generated."))
+            } else {
+                Ok(Flash::new(
+                    redirect,
+                    "async-seed-error",
+                    "This async was requested or deleted before the seed could be saved.",
+                ))
+            }
+        }
+        Err(error) => Ok(Flash::new(redirect, "async-seed-error", error)),
+    }
+}
+
+async fn save_seed(pool: &PgPool, id: i64, seed: seed::Data) -> Result<bool, sqlx::Error> {
+    let Some(data) = seed.to_seed_data() else {
+        return Ok(false);
+    };
+    let mut tx = pool.begin().await?;
+    let exists: Option<i64> = sqlx::query_scalar("SELECT id FROM asyncs WHERE id=$1 FOR UPDATE")
+        .bind(id)
+        .fetch_optional(&mut *tx)
+        .await?;
+    if exists.is_none() {
+        return Ok(false);
+    }
+    let requested: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM async_teams WHERE async_id=$1 AND requested IS NOT NULL)",
+    )
+    .bind(id)
+    .fetch_one(&mut *tx)
+    .await?;
+    if requested {
+        return Ok(false);
+    }
+    let password = seed
+        .password
+        .map(|password| password.into_iter().map(char::from).collect::<String>());
+    let hashes = seed
+        .file_hash
+        .map(|hash| hash.map(Some))
+        .unwrap_or_default();
+    sqlx::query("UPDATE asyncs SET seed_data=$2,seed_password=$3,hash1=$4,hash2=$5,hash3=$6,hash4=$7,hash5=$8,file_stem=NULL,web_id=NULL,web_gen_time=NULL,tfb_uuid=NULL,xkeys_uuid=NULL WHERE id=$1")
+        .bind(id).bind(data).bind(password)
+        .bind(&hashes[0]).bind(&hashes[1]).bind(&hashes[2]).bind(&hashes[3]).bind(&hashes[4])
+        .execute(&mut *tx).await?;
+    tx.commit().await?;
+    Ok(true)
 }

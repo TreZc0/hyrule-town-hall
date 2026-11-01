@@ -1,0 +1,53 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT name, file_stem, tfb_uuid, seed_data, start, end_time\n               FROM asyncs\n               WHERE series = $1 AND event = $2 AND end_time IS NOT NULL AND end_time <= NOW()\n               ORDER BY id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "file_stem",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "tfb_uuid",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 3,
+        "name": "seed_data",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 4,
+        "name": "start",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 5,
+        "name": "end_time",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "7ecfb9a7653d6697114e3fcc27587b138e698e3eb1b46a08f2b6f0ef5cecd814"
+}

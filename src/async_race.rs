@@ -1,7 +1,7 @@
 use {
     crate::{
         cal::{Race, RaceSchedule},
-        event::{self, AsyncKind, Data as EventData, pooled_qualifiers},
+        event::{self, Data as EventData, pooled_qualifiers},
         prelude::*,
         racetime_bot::VersionedBranch,
         seed,
@@ -690,13 +690,13 @@ impl AsyncRaceManager {
             r#"
             SELECT
                 at.team AS "team_id: Id<Teams>",
-                at.kind AS "async_kind: event::AsyncKind",
+                at.async_id AS "async_id: i64",
                 t.series AS "series: Series",
                 t.event
             FROM async_teams at
             JOIN teams t ON at.team = t.id
             JOIN events e ON t.series = e.series AND t.event = e.event
-            JOIN asyncs a ON t.series = a.series AND t.event = a.event AND at.kind = a.kind
+            JOIN asyncs a ON t.series = a.series AND t.event = a.event AND at.async_id = a.id
             WHERE at.requested IS NOT NULL
               AND at.submitted IS NULL
               AND at.start_time IS NULL
@@ -724,13 +724,13 @@ impl AsyncRaceManager {
                     discord_ctx,
                     &event,
                     &team,
-                    row.async_kind,
+                    row.async_id,
                     async_channel,
                     pool,
                 )
                 .await
                 {
-                    let run = AsyncRun::Qualifier { team_id: team.id.into(), async_kind: row.async_kind };
+                    let run = AsyncRun::Qualifier { team_id: team.id.into(), async_id: row.async_id };
                     let label = format!("{} — qualifier async", team.name(transaction).await?.unwrap_or_else(|| "Unknown entrant".into()));
                     setup::notify_failure(&discord_ctx.http, event.discord_organizer_channel, async_channel,
                         &run, &label, &e.to_string()).await;
@@ -746,7 +746,7 @@ impl AsyncRaceManager {
         discord_ctx: &DiscordCtx,
         event: &EventData<'_>,
         team: &Team,
-        async_kind: AsyncKind,
+        async_id: i64,
         async_channel: ChannelId,
         pool: &PgPool,
     ) -> Result<(), Error> {
@@ -755,20 +755,14 @@ impl AsyncRaceManager {
             .await?
             .unwrap_or_else(|| "Unknown Team".to_string().into());
 
-        let kind_str = match async_kind {
-            AsyncKind::Qualifier1 => "Qualifier",
-            AsyncKind::Qualifier2 => "Qualifier 2",
-            AsyncKind::Qualifier3 => "Qualifier 3",
-            AsyncKind::Seeding => "Seeding",
-            AsyncKind::Tiebreaker1 => "Tiebreaker",
-            AsyncKind::Tiebreaker2 => "Tiebreaker 2",
-        };
+        let kind_str: String = sqlx::query_scalar("SELECT name FROM asyncs WHERE id=$1")
+            .bind(async_id).fetch_one(&mut **transaction).await?;
         let thread_name = format!("{}: {}", kind_str, team_name);
 
-        let run = AsyncRun::Qualifier { team_id: team.id.into(), async_kind };
+        let run = AsyncRun::Qualifier { team_id: team.id.into(), async_id };
         let Some(thread) = setup::thread(pool, &discord_ctx.http, async_channel, &run, &thread_name).await? else { return Ok(()) };
         let mut content =
-            Self::build_qualifier_thread_content(transaction, event, team, async_kind).await?;
+            Self::build_qualifier_thread_content(transaction, event, team, async_id).await?;
 
         if !Self::team_has_participant_role(transaction, discord_ctx, event, team).await? {
             return Err(sqlx::Error::Protocol("the entrant is missing the event participant role or Discord server membership".into()).into());
@@ -801,7 +795,7 @@ impl AsyncRaceManager {
         transaction: &mut Transaction<'_, Postgres>,
         event: &EventData<'_>,
         team: &Team,
-        async_kind: AsyncKind,
+        async_id: i64,
     ) -> Result<MessageBuilder, Error> {
         let mut content = MessageBuilder::default();
 
@@ -819,14 +813,9 @@ impl AsyncRaceManager {
         content.push_line("");
 
         content.push("This thread is for your **");
-        content.push(match async_kind {
-            AsyncKind::Qualifier1 => "1st qualifier",
-            AsyncKind::Qualifier2 => "2nd qualifier",
-            AsyncKind::Qualifier3 => "3rd qualifier",
-            AsyncKind::Seeding => "Seeding",
-            AsyncKind::Tiebreaker1 => "Tiebreaker",
-            AsyncKind::Tiebreaker2 => "Tiebreaker 2",
-        });
+        let name: String = sqlx::query_scalar("SELECT name FROM asyncs WHERE id=$1")
+            .bind(async_id).fetch_one(&mut **transaction).await?;
+        content.push_safe(name);
         content.push("** async request for ");
         content.push_safe(event.display_name.clone());
         content.push(".");
@@ -1146,7 +1135,7 @@ pub(crate) enum AsyncRun {
     },
     Qualifier {
         team_id: i64,
-        async_kind: AsyncKind,
+        async_id: i64,
     },
     PooledQualifier {
         attempt_id: i64,
@@ -1177,14 +1166,14 @@ impl AsyncRun {
         } else if let Some(qual_params) = remainder.strip_prefix("qual:") {
             let mut params = qual_params.splitn(3, ':');
             let team_id = params.next()?.parse().ok()?;
-            let kind_int: i32 = params.next()?.parse().ok()?;
-            let async_kind = AsyncKind::from_i32(kind_int)?;
+            let async_id: i64 = params.next()?.strip_prefix('a')?.parse().ok()?;
+            if async_id <= 0 { return None; }
             let nonce = params.next().and_then(|n| n.parse().ok());
             Some((
                 action.to_owned(),
                 AsyncRun::Qualifier {
                     team_id,
-                    async_kind,
+                    async_id,
                 },
                 nonce,
             ))
@@ -1216,9 +1205,9 @@ impl AsyncRun {
             }
             AsyncRun::Qualifier {
                 team_id,
-                async_kind,
+                async_id,
             } => {
-                format!("async:{}:qual:{}:{}", action, team_id, *async_kind as i32)
+                format!("async:{}:qual:{}:a{}", action, team_id, *async_id)
             }
             AsyncRun::PooledQualifier {
                 attempt_id,
@@ -1242,11 +1231,11 @@ impl AsyncRun {
             }
             AsyncRun::Qualifier {
                 team_id,
-                async_kind,
+                async_id,
             } => {
                 format!(
-                    "async:{}:qual:{}:{}:{}",
-                    action, team_id, *async_kind as i32, nonce
+                    "async:{}:qual:{}:a{}:{}",
+                    action, team_id, *async_id, nonce
                 )
             }
             AsyncRun::PooledQualifier {
@@ -1276,9 +1265,9 @@ impl AsyncRun {
             Self::BracketRace { race_id, async_part } => sqlx::query_scalar(
                 "SELECT CASE $2 WHEN 1 THEN async_thread1 WHEN 2 THEN async_thread2 WHEN 3 THEN async_thread3 END FROM races WHERE id=$1",
             ).bind(race_id).bind(i32::from(*async_part)).fetch_optional(pool).await?.flatten(),
-            Self::Qualifier { team_id, async_kind } => sqlx::query_scalar(
-                "SELECT discord_thread FROM async_teams WHERE team=$1 AND kind=$2",
-            ).bind(team_id).bind(*async_kind).fetch_optional(pool).await?.flatten(),
+            Self::Qualifier { team_id, async_id } => sqlx::query_scalar(
+                "SELECT discord_thread FROM async_teams WHERE team=$1 AND async_id=$2",
+            ).bind(team_id).bind(*async_id).fetch_optional(pool).await?.flatten(),
             Self::PooledQualifier { attempt_id, .. } => sqlx::query_scalar(
                 "SELECT discord_thread FROM qualifier_attempts WHERE id=$1",
             ).bind(attempt_id).fetch_optional(pool).await?.flatten(),
@@ -1361,11 +1350,11 @@ impl AsyncRun {
                 ).fetch_optional(pool).await?.unwrap_or(false);
                 Ok(started)
             }
-            AsyncRun::Qualifier { team_id, async_kind } => {
+            AsyncRun::Qualifier { team_id, async_id } => {
                 let started = sqlx::query_scalar!(
-                    r#"SELECT start_time IS NOT NULL AS "started!" FROM async_teams WHERE team = $1 AND kind = $2"#,
+                    r#"SELECT start_time IS NOT NULL AS "started!" FROM async_teams WHERE team = $1 AND async_id = $2"#,
                     *team_id,
-                    *async_kind as _
+                    *async_id as _
                 ).fetch_optional(pool).await?.unwrap_or(false);
                 Ok(started)
             }
@@ -1393,13 +1382,13 @@ impl AsyncRun {
             }
             AsyncRun::Qualifier {
                 team_id,
-                async_kind,
+                async_id,
             } => {
                 sqlx::query!(
-                    "UPDATE async_teams SET start_time = $1 WHERE team = $2 AND kind = $3",
+                    "UPDATE async_teams SET start_time = $1 WHERE team = $2 AND async_id = $3",
                     now,
                     *team_id,
-                    *async_kind as _,
+                    *async_id as _,
                 )
                 .execute(pool)
                 .await?;
@@ -1441,11 +1430,11 @@ impl AsyncRun {
             }
             AsyncRun::Qualifier {
                 team_id,
-                async_kind,
+                async_id,
             } => {
                 let record = sqlx::query!(
-                    r#"SELECT start_time, finish_time, player_finished_at FROM async_teams WHERE team = $1 AND kind = $2"#,
-                    *team_id, *async_kind as _
+                    r#"SELECT start_time, finish_time, player_finished_at FROM async_teams WHERE team = $1 AND async_id = $2"#,
+                    *team_id, *async_id as _
                 ).fetch_optional(pool).await?;
                 match record {
                     Some(r) if r.start_time.is_none() => Err(Error::NotStarted),
@@ -1497,12 +1486,12 @@ impl AsyncRun {
             }
             AsyncRun::Qualifier {
                 team_id,
-                async_kind,
+                async_id,
             } => {
                 sqlx::query_scalar!(
-                    "SELECT start_time FROM async_teams WHERE team = $1 AND kind = $2",
+                    "SELECT start_time FROM async_teams WHERE team = $1 AND async_id = $2",
                     *team_id,
-                    *async_kind as _
+                    *async_id as _
                 )
                 .fetch_one(pool)
                 .await?
@@ -1535,11 +1524,11 @@ impl AsyncRun {
             }
             AsyncRun::Qualifier {
                 team_id,
-                async_kind,
+                async_id,
             } => {
                 sqlx::query!(
-                    "UPDATE async_teams SET player_finished_at = $3 WHERE team = $1 AND kind = $2 AND player_finished_at IS NULL",
-                    *team_id, *async_kind as _, at
+                    "UPDATE async_teams SET player_finished_at = $3 WHERE team = $1 AND async_id = $2 AND player_finished_at IS NULL",
+                    *team_id, *async_id as _, at
                 ).execute(pool).await?;
             }
             AsyncRun::PooledQualifier {
@@ -1973,7 +1962,7 @@ pub(crate) async fn handle_ready_qualifier(
 ) -> Result<(), Error> {
     let AsyncRun::Qualifier {
         team_id,
-        async_kind,
+        async_id,
     } = run
     else {
         return Err(Error::InvalidAsyncPart);
@@ -1991,11 +1980,11 @@ pub(crate) async fn handle_ready_qualifier(
                t.series AS "series: crate::series::Series", t.event
         FROM async_teams at
         JOIN teams t ON at.team = t.id
-        JOIN asyncs a ON t.series = a.series AND t.event = a.event AND at.kind = a.kind
-        WHERE at.team = $1 AND at.kind = $2
+        JOIN asyncs a ON t.series = a.series AND t.event = a.event AND at.async_id = a.id
+        WHERE at.team = $1 AND at.async_id = $2
         "#,
         *team_id,
-        *async_kind as _
+        *async_id as _
     )
     .fetch_optional(&mut *transaction)
     .await?;
@@ -2084,7 +2073,7 @@ pub(crate) async fn handle_ready_qualifier(
 
     let run = AsyncRun::Qualifier {
         team_id: *team_id,
-        async_kind: *async_kind,
+        async_id: *async_id,
     };
     let start_button = start_button(&run);
 
@@ -2624,6 +2613,15 @@ async fn is_run_organizer(
     Ok(allowed)
 }
 
+pub(crate) async fn authorize_qualifier_result(
+    pool: &PgPool, user: UserId, channel: ChannelId, team_id: i64, async_id: i64,
+) -> Result<(), Error> {
+    let run = AsyncRun::Qualifier { team_id, async_id };
+    run.verify_thread(pool, channel).await?;
+    if !is_run_organizer(pool, user, &run).await? { return Err(Error::UnauthorizedUser); }
+    Ok(())
+}
+
 pub(crate) async fn handle_org_result(
     ctx: &DiscordCtx,
     interaction: &ComponentInteraction,
@@ -2649,9 +2647,9 @@ pub(crate) async fn handle_org_result(
     let modal_id = match run {
         AsyncRun::Qualifier {
             team_id,
-            async_kind,
+            async_id,
         } => {
-            format!("async_result_modal_qual_{}_{}", team_id, *async_kind as i32)
+            format!("async_result_modal_qual_{}_a{}", team_id, *async_id)
         }
         AsyncRun::BracketRace {
             race_id,
@@ -2903,7 +2901,7 @@ pub(crate) async fn handle_org_forfeit_yes(
     match run {
         AsyncRun::Qualifier {
             team_id,
-            async_kind,
+            async_id,
         } => {
             interaction
                 .create_response(
@@ -2926,19 +2924,19 @@ pub(crate) async fn handle_org_forfeit_yes(
                 .unwrap_or_else(|| "Unknown Team".to_string().into());
 
             sqlx::query!(
-                "UPDATE async_teams SET submitted = NOW(), finish_time = NULL WHERE team = $1 AND kind = $2",
+                "UPDATE async_teams SET submitted = NOW(), finish_time = NULL WHERE team = $1 AND async_id = $2",
                 *team_id as _,
-                *async_kind as _
+                *async_id as _
             ).execute(&mut *transaction).await?;
 
             let members = team.members(&mut transaction).await?;
             for member in members {
                 sqlx::query!(
-                    "INSERT INTO async_players (series, event, player, kind, time, vod) VALUES ($1, $2, $3, $4, NULL, NULL) ON CONFLICT (series, event, player, kind) DO UPDATE SET time = EXCLUDED.time, vod = COALESCE(EXCLUDED.vod, async_players.vod)",
+                    "INSERT INTO async_players (series, event, player, async_id, time, vod) VALUES ($1, $2, $3, $4, NULL, NULL) ON CONFLICT (series, event, player, async_id) DO UPDATE SET time = EXCLUDED.time, vod = COALESCE(EXCLUDED.vod, async_players.vod)",
                     team.series as _,
                     team.event,
                     member.id as _,
-                    *async_kind as _
+                    *async_id as _
                 ).execute(&mut *transaction).await?;
             }
 
@@ -3069,6 +3067,7 @@ pub(crate) async fn dispatch_button(
         return Ok(false);
     };
 
+    run.verify_thread(pool, interaction.channel_id).await?;
     match action.as_str() {
         "ready" => match &run {
             AsyncRun::BracketRace { .. } => {

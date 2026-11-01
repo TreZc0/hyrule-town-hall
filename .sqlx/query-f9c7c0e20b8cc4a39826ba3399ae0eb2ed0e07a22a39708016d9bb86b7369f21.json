@@ -1,0 +1,36 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT name, discord_role AS \"discord_role: PgSnowflake<RoleId>\", discord_channel AS \"discord_channel: PgSnowflake<ChannelId>\" FROM asyncs WHERE series = $1 AND event = $2 AND id = $3",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "discord_role: PgSnowflake<RoleId>",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 2,
+        "name": "discord_channel: PgSnowflake<ChannelId>",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "f9c7c0e20b8cc4a39826ba3399ae0eb2ed0e07a22a39708016d9bb86b7369f21"
+}

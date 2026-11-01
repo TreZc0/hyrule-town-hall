@@ -14,9 +14,6 @@ Hyrule Town Hall is custom-built in close cooperation with event organizers to a
 
 If you're interested in contributing to the Hyrule Town Hall project, feel free to contact me on Discord (@trezc0_). Here are some ways you could help out:
 
-## Code
-
-The Hyrule Town Hall codebase is currently a side project, but it doesn't have to remain that way! If you're interested in contributing to the codebase but don't know where to start, let me know so we can discuss how you can help.
 
 ## Discord
 

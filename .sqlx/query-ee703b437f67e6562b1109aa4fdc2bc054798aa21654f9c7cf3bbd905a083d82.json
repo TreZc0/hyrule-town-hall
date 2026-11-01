@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT submitted AS \"submitted!\" FROM teams LEFT OUTER JOIN async_teams ON (id = team) WHERE\n                    series = $1\n                    AND event = $2\n                    AND NOT resigned\n                    AND submitted IS NOT NULL\n                    AND async_id = (SELECT id FROM asyncs WHERE series = $1 AND event = $2 AND kind = 'qualifier' ORDER BY id LIMIT 1)\n                ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "submitted!",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "ee703b437f67e6562b1109aa4fdc2bc054798aa21654f9c7cf3bbd905a083d82"
+}

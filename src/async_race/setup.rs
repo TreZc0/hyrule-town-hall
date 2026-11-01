@@ -41,9 +41,9 @@ async fn save_thread(pool: &PgPool, run: &AsyncRun, thread: ChannelId) -> Result
                 return Err(Error::ResetAsyncPart);
             }
         }
-        AsyncRun::Qualifier { team_id, async_kind } => {
-            if sqlx::query("UPDATE async_teams SET discord_thread=$3 WHERE team=$1 AND kind=$2 AND discord_thread IS NULL")
-                .bind(team_id).bind(*async_kind).bind(id).execute(pool).await?.rows_affected() != 1 {
+        AsyncRun::Qualifier { team_id, async_id } => {
+            if sqlx::query("UPDATE async_teams SET discord_thread=$3 WHERE team=$1 AND async_id=$2 AND discord_thread IS NULL")
+                .bind(team_id).bind(*async_id).bind(id).execute(pool).await?.rows_affected() != 1 {
                 return Err(Error::ResetAsyncPart);
             }
         }
@@ -125,7 +125,7 @@ mod tests {
 
     #[test]
     fn ready_recovery_accepts_edited_bot_messages_but_not_other_users_or_runs() {
-        let run = AsyncRun::Qualifier { team_id: 42, async_kind: AsyncKind::Qualifier1 };
+        let run = AsyncRun::Qualifier { team_id: 42, async_id: 1 };
         let bot = UserId::new(1234);
         let mut message: Message = serde_json::from_value(serde_json::json!({
             "id":"123456", "channel_id":"5678",
@@ -136,7 +136,7 @@ mod tests {
         })).unwrap();
         assert!(is_ready_message(&message, bot, &run));
         assert!(!is_ready_message(&message, UserId::new(999), &run));
-        assert!(!is_ready_message(&message, bot, &AsyncRun::Qualifier { team_id: 43, async_kind: AsyncKind::Qualifier1 }));
+        assert!(!is_ready_message(&message, bot, &AsyncRun::Qualifier { team_id: 43, async_id: 1 }));
         message.components.clear();
         assert!(!is_ready_message(&message, bot, &run));
         message.nonce = Some(Nonce::String(ready_nonce(message.channel_id)));
@@ -156,14 +156,14 @@ mod tests {
         let pool = event::configuration::test_pool().await;
         let (race_id, old_thread): (i64, Option<i64>) = sqlx::query_as("SELECT id,async_thread1 FROM races ORDER BY id DESC LIMIT 1")
             .fetch_one(&pool).await.unwrap();
-        let (team_id, kind, old_qualifier_thread): (i64, AsyncKind, Option<i64>) = sqlx::query_as("SELECT team,kind,discord_thread FROM async_teams ORDER BY team DESC,kind LIMIT 1")
+        let (team_id, kind, old_qualifier_thread): (i64, i64, Option<i64>) = sqlx::query_as("SELECT team,async_id,discord_thread FROM async_teams ORDER BY team DESC,async_id LIMIT 1")
             .fetch_one(&pool).await.unwrap();
         let result = std::panic::AssertUnwindSafe(async {
             sqlx::query("UPDATE races SET async_thread1=NULL WHERE id=$1").bind(race_id).execute(&pool).await.unwrap();
-            sqlx::query("UPDATE async_teams SET discord_thread=NULL WHERE team=$1 AND kind=$2").bind(team_id).bind(kind).execute(&pool).await.unwrap();
+            sqlx::query("UPDATE async_teams SET discord_thread=NULL WHERE team=$1 AND async_id=$2").bind(team_id).bind(kind).execute(&pool).await.unwrap();
             for (run, id) in [
                 (AsyncRun::BracketRace { race_id, async_part: 1 }, 5678),
-                (AsyncRun::Qualifier { team_id, async_kind: kind }, 5679),
+                (AsyncRun::Qualifier { team_id, async_id: kind }, 5679),
             ] {
                 let setup_transaction = pool.begin().await.unwrap();
                 assert!(run.thread_id(&pool).await.unwrap().is_none());
@@ -176,7 +176,7 @@ mod tests {
             }
         }).catch_unwind().await;
         sqlx::query("UPDATE races SET async_thread1=$2 WHERE id=$1").bind(race_id).bind(old_thread).execute(&pool).await.unwrap();
-        sqlx::query("UPDATE async_teams SET discord_thread=$3 WHERE team=$1 AND kind=$2").bind(team_id).bind(kind).bind(old_qualifier_thread).execute(&pool).await.unwrap();
+        sqlx::query("UPDATE async_teams SET discord_thread=$3 WHERE team=$1 AND async_id=$2").bind(team_id).bind(kind).bind(old_qualifier_thread).execute(&pool).await.unwrap();
         if let Err(panic) = result { std::panic::resume_unwind(panic); }
     }
 }
