@@ -419,6 +419,29 @@ async fn finish_async_schedule_response(
     Ok(())
 }
 
+async fn schedule_event_start_error(
+    transaction: &mut Transaction<'_, Postgres>,
+    race: &Race,
+    event: &event::Data<'_>,
+    start: DateTime<Utc>,
+) -> Result<Option<String>, event::DataError> {
+    // Qualifiers and seeding races can take place before the main event.
+    if race.is_custom() || race.is_qualifier || race.phase.as_deref() == Some("Seeding") {
+        return Ok(None);
+    }
+    let Some(event_start) = event.start(transaction).await? else {
+        return Ok(None);
+    };
+    if start >= event_start {
+        return Ok(None);
+    }
+    Ok(Some(if let French = event.language {
+        format!("Désolé, les races ne peuvent pas commencer avant le début officiel de l'événement (<t:{}:F>).", event_start.timestamp())
+    } else {
+        format!("Sorry, races cannot start before the official event start (<t:{}:F>).", event_start.timestamp())
+    }))
+}
+
 async fn apply_live_schedule(
     ctx: &DiscordCtx,
     interaction: &impl GenericInteraction,
@@ -429,6 +452,15 @@ async fn apply_live_schedule(
     start: DateTime<Utc>,
     nl_note: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    // Recheck here so game-selection buttons use the current event start too.
+    if let Some(error) = schedule_event_start_error(&mut transaction, &race, &event, start).await? {
+        interaction.edit_response(ctx, EditInteractionResponse::new()
+            .content(error)
+            .components(vec![])
+        ).await?;
+        transaction.rollback().await?;
+        return Ok(());
+    }
     if let Some(error) = race.live_schedule_order_error(&mut transaction, start).await? {
         interaction.edit_response(ctx, EditInteractionResponse::new()
             .content(error)
@@ -3217,6 +3249,11 @@ pub(crate) fn configure_builder(
                                                 })
                                             ).await?;
                                             transaction.rollback().await?;
+                                        } else if let Some(error) = schedule_event_start_error(&mut transaction, &race, &event, start).await? {
+                                            interaction.edit_response(ctx, EditInteractionResponse::new()
+                                                .content(error)
+                                            ).await?;
+                                            transaction.rollback().await?;
                                         } else {
                                             // Check for BO3/5 schedule ambiguity: no game param specified but
                                             // the next game is already scheduled (not just unscheduled)
@@ -3404,6 +3441,11 @@ pub(crate) fn configure_builder(
                                                         format!("Sorry, races must be scheduled at least {} in advance.", English.format_duration(event.min_schedule_notice, true))
                                                     }
                                                 })
+                                            ).await?;
+                                            transaction.rollback().await?;
+                                        } else if let Some(error) = schedule_event_start_error(&mut transaction, &race, &event, start).await? {
+                                            interaction.edit_response(ctx, EditInteractionResponse::new()
+                                                .content(error)
                                             ).await?;
                                             transaction.rollback().await?;
                                         } else {
