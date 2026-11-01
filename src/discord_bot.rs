@@ -1712,6 +1712,7 @@ async fn send_draft_settings_page(
         draft::StepKind::PickPreset {
             available_presets,
             game,
+            can_defer,
             ..
         } => {
             let response_content = format!("Select the preset for Game {}:", game);
@@ -1722,6 +1723,13 @@ async fn send_draft_settings_page(
                 response_msg = response_msg.button(
                     CreateButton::new(format!("preset_pick_{}", preset_opt.preset))
                         .label(&preset_opt.display_name),
+                );
+            }
+            if can_defer {
+                response_msg = response_msg.button(
+                    CreateButton::new("draft_defer")
+                        .label("DEFER")
+                        .style(ButtonStyle::Secondary),
                 );
             }
             interaction
@@ -1764,9 +1772,10 @@ async fn post_button_draft_step(
         draft::StepKind::PickPreset {
             available_presets,
             game,
+            can_defer,
             ..
         } => {
-            let buttons = available_presets
+            let mut buttons = available_presets
                 .iter()
                 .map(|p| {
                     CreateButton::new(format!("draft_pick_preview_{game}_{}", p.preset))
@@ -1774,6 +1783,13 @@ async fn post_button_draft_step(
                         .style(ButtonStyle::Primary)
                 })
                 .collect::<Vec<_>>();
+            if can_defer {
+                buttons.push(
+                    CreateButton::new("draft_defer")
+                        .label("DEFER")
+                        .style(ButtonStyle::Secondary),
+                );
+            }
             let rows = buttons
                 .chunks(5)
                 .map(|chunk| CreateActionRow::Buttons(chunk.to_vec()))
@@ -1800,6 +1816,7 @@ async fn draft_action(
     action: draft::Action,
     step_msg_id: Option<MessageId>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let is_defer = matches!(action, draft::Action::Defer);
     let Some((event, mut race, draft_kind, mut msg_ctx)) =
         check_draft_permissions(ctx, interaction).await?
     else {
@@ -1834,13 +1851,17 @@ async fn draft_action(
             }
             transaction.commit().await?;
             if draft_kind.uses_button_draft() {
-                // Clear the ephemeral confirm dialog.
+                // Clear the confirm dialog or acknowledge a direct defer button.
                 interaction
                     .create_response(
                         ctx,
                         CreateInteractionResponse::UpdateMessage(
                             CreateInteractionResponseMessage::new()
-                                .content("✓")
+                                .content(if is_defer {
+                                    apply_response.as_str()
+                                } else {
+                                    "✓"
+                                })
                                 .components(vec![]),
                         ),
                     )
@@ -2798,13 +2819,9 @@ pub(crate) fn configure_builder(
                                     let new_draft = if_chain! {
                                         if let Some(draft_kind) = event.draft_kind();
                                         if let Some(draft) = races[0].draft.clone();
-                                        if let Entrants::Two(entrants) = &races[0].entrants;
-                                        if let Ok(low_seed) = entrants.iter()
-                                            .filter_map(as_variant!(Entrant::MidosHouseTeam))
-                                            .filter(|team| team.id != draft.high_seed)
-                                            .exactly_one();
+                                        if let Entrants::Two([Entrant::MidosHouseTeam(team1), Entrant::MidosHouseTeam(team2)]) = &races[0].entrants;
                                         then {
-                                            Some(Draft::for_next_game(&mut transaction, &draft_kind, draft.high_seed, low_seed.id).await?)
+                                            Some(draft.reset(&mut transaction, &http_client, &draft_kind, &event, [team1, team2]).await?)
                                         } else {
                                             None
                                         }
@@ -2862,13 +2879,9 @@ pub(crate) fn configure_builder(
                                                 if_chain! {
                                                     if let Some(draft_kind) = event.draft_kind();
                                                     if let Some(draft) = race.draft;
-                                                    if let Entrants::Two(entrants) = &race.entrants;
-                                                    if let Ok(low_seed) = entrants.iter()
-                                                        .filter_map(as_variant!(Entrant::MidosHouseTeam))
-                                                        .filter(|team| team.id != draft.high_seed)
-                                                        .exactly_one();
+                                                    if let Entrants::Two([Entrant::MidosHouseTeam(team1), Entrant::MidosHouseTeam(team2)]) = &race.entrants;
                                                     then {
-                                                        Some(Draft::for_next_game(&mut transaction, &draft_kind, draft.high_seed, low_seed.id).await?)
+                                                        Some(draft.reset(&mut transaction, &http_client, &draft_kind, &event, [team1, team2]).await?)
                                                     } else {
                                                         None
                                                     }
@@ -4371,6 +4384,8 @@ pub(crate) fn configure_builder(
                             transaction.commit().await?;
                             post_button_draft_step(ctx, interaction.channel_id(), step).await?;
                         }
+                    } else if custom_id == "draft_defer" {
+                        draft_action(ctx, interaction, draft::Action::Defer, Some(interaction.message.id)).await?;
                     } else if let Some(preset) = custom_id.strip_prefix("draft_ban_preview_") {
                         let Some((_, _, draft_kind, msg_ctx)) = check_draft_permissions(ctx, interaction).await? else { return Ok(()) };
                         msg_ctx.into_transaction().rollback().await?;
@@ -5271,13 +5286,9 @@ pub(crate) fn configure_builder(
                         let draft = if_chain! {
                             if let Some(draft_kind) = event.draft_kind();
                             if let Some(ref existing_draft) = race.draft;
-                            if let Entrants::Two(entrants) = &race.entrants;
-                            if let Ok(low_seed) = entrants.iter()
-                                .filter_map(as_variant!(Entrant::MidosHouseTeam))
-                                .filter(|team| team.id != existing_draft.high_seed)
-                                .exactly_one();
+                            if let Entrants::Two([Entrant::MidosHouseTeam(team1), Entrant::MidosHouseTeam(team2)]) = &race.entrants;
                             then {
-                                Some(Draft::for_next_game(&mut transaction, &draft_kind, existing_draft.high_seed, low_seed.id).await?)
+                                Some(existing_draft.reset(&mut transaction, &http_client, &draft_kind, &event, [team1, team2]).await?)
                             } else {
                                 None
                             }

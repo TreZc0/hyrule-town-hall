@@ -21,6 +21,7 @@ query EventSetsQuery($event_slug: String!, $page: Int!) {
         slots {
           entrant {
             id
+            initialSeedNum
           }
         }
         setGamesType

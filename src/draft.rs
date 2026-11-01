@@ -1,10 +1,10 @@
-use {
-    crate::{
-        event::teams::{self, SignupsTeam},
-        prelude::*,
-    },
-    std::cmp::{max_by_key, min_by_key},
+use crate::{
+    event::teams::{self, SignupsTeam},
+    prelude::*,
 };
+
+#[cfg(test)]
+mod seeding_tests;
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum Error {
@@ -90,6 +90,7 @@ pub(crate) enum Kind {
     BanPick {
         options: Vec<PresetOption>,
         order: Vec<DraftPhase>,
+        can_defer: bool,
         label: String,
     },
     BanOnly {
@@ -146,11 +147,26 @@ impl Kind {
             Self::PickOnly { unique, .. } if *unique && options.len() < games => {
                 return Err("Not enough unique options for the configured picks.".into());
             }
-            Self::BanPick { order, .. } => {
+            Self::BanPick {
+                order, can_defer, ..
+            } => {
                 if !matches!(order.last(), Some(DraftPhase::Pick(_)))
                     || options.len() != order.len() + 1
                 {
                     return Err("Ban/pick drafts must end with a pick and leave exactly one unselected decider preset.".into());
+                }
+                if *can_defer {
+                    let mut picks = order.iter().filter_map(|phase| match phase {
+                        DraftPhase::Pick(team) => Some(team),
+                        DraftPhase::Ban(_) => None,
+                    });
+                    if !matches!((picks.next(), picks.next()), (Some(first), Some(second)) if first != second)
+                    {
+                        return Err(
+                            "Deferring requires the first two picks to belong to different teams."
+                                .into(),
+                        );
+                    }
                 }
             }
             Self::BanOnly { order, .. } => {
@@ -234,6 +250,10 @@ impl Kind {
             "ban_pick" => Some(Self::BanPick {
                 options: parse_preset_options(config)?,
                 order: parse_draft_order(config)?,
+                can_defer: match config.get("can_defer") {
+                    Some(value) => value.as_bool()?,
+                    None => false,
+                },
                 label: parse_label(config)?,
             }),
             _ => None,
@@ -361,6 +381,7 @@ mod configured_draft_tests {
             let kind = Kind::BanPick {
                 options: options(picks + 3),
                 order,
+                can_defer: false,
                 label: "preset".into(),
             };
             let draft = complete(&kind).await;
@@ -418,6 +439,7 @@ mod configured_draft_tests {
         assert!(
             Kind::BanPick {
                 options: options(2),
+                can_defer: false,
                 order: vec![
                     DraftPhase::Pick(Team::HighSeed),
                     DraftPhase::Pick(Team::LowSeed)
@@ -547,6 +569,8 @@ pub(crate) enum StepKind {
         team: Team,
         available_presets: Vec<PresetOption>,
         game: u8,
+        /// Whether this picker can let the opponent take the first pick instead.
+        can_defer: bool,
     },
 }
 
@@ -583,6 +607,7 @@ impl<'a> MessageContext<'a> {
 
 pub(crate) enum Action {
     GoFirst(bool),
+    Defer,
     Ban { setting: String },
     Pick { setting: String, value: String },
     Skip,
@@ -599,6 +624,29 @@ pub(crate) struct Draft {
     pub(crate) settings: Picks,
 }
 
+fn seeded_team_order(
+    [team1, team2]: [&team::Team; 2],
+    fallback_ranks: Option<[i64; 2]>,
+) -> [Id<Teams>; 2] {
+    let local_ranks = [team1.qualifier_rank, team2.qualifier_rank].map(|rank| rank.map(i64::from));
+    // Compare both entrants using one source. Mixing a qualifier placing with a
+    // bracket seed can reverse their order when the bracket was reseeded.
+    let ranks = match (
+        local_ranks,
+        fallback_ranks.filter(|ranks| ranks.iter().all(|rank| *rank > 0)),
+    ) {
+        ([Some(_), Some(_)], _) => local_ranks,
+        (_, Some(ranks)) => ranks.map(Some),
+        _ => local_ranks,
+    };
+    // Missing ranks sort after known ranks. Equal/missing pairs retain slot order.
+    if (ranks[1].is_none(), ranks[1]) < (ranks[0].is_none(), ranks[0]) {
+        [team2.id, team1.id]
+    } else {
+        [team1.id, team2.id]
+    }
+}
+
 impl Draft {
     pub(crate) async fn for_game1(
         transaction: &mut Transaction<'_, Postgres>,
@@ -606,17 +654,66 @@ impl Draft {
         kind: &Kind,
         event: &event::Data<'_>,
         phase: Option<&str>,
+        teams: [&team::Team; 2],
+    ) -> Result<Self, cal::Error> {
+        Self::for_game1_with_seed_fallback(
+            transaction, http_client, kind, event, phase, teams, None,
+        )
+        .await
+    }
+
+    pub(crate) async fn for_game1_with_seed_fallback(
+        transaction: &mut Transaction<'_, Postgres>,
+        http_client: &reqwest::Client,
+        kind: &Kind,
+        event: &event::Data<'_>,
+        phase: Option<&str>,
         [team1, team2]: [&team::Team; 2],
+        fallback_ranks: Option<[i64; 2]>,
     ) -> Result<Self, cal::Error> {
         let [high_seed, low_seed] = match kind {
             Kind::S7
             | Kind::RslS7
             | Kind::PickOnly { .. }
             | Kind::BanPick { .. }
-            | Kind::BanOnly { .. } => [
-                min_by_key(team1, team2, |team| team.qualifier_rank).id,
-                max_by_key(team1, team2, |team| team.qualifier_rank).id,
-            ],
+            | Kind::BanOnly { .. } => {
+                if event.qualifier_mode == "pooled_by_mode" {
+                    // Pooled standings are calculated from attempts, not stored in
+                    // teams.qualifier_rank. Use the entrant list's ordering with
+                    // organizer visibility so hidden results still seed correctly.
+                    let qualifier_kind = event.qualifier_kind(transaction, None).await?;
+                    let signups = teams::signups_sorted(
+                        transaction,
+                        &mut teams::Cache::new(http_client.clone()),
+                        None,
+                        event,
+                        true,
+                        qualifier_kind,
+                        None,
+                        true,
+                        false,
+                    )
+                    .await?;
+                    let rank = |team: &team::Team| {
+                        signups
+                            .iter()
+                            .position(|signup| signup.team.as_ref().is_some_and(|t| t.id == team.id))
+                            .ok_or_else(|| {
+                                sqlx::Error::Protocol(format!(
+                                    "Cannot seed draft: team {} is missing from pooled qualifier standings",
+                                    team.id,
+                                ))
+                            })
+                    };
+                    if rank(team1)? < rank(team2)? {
+                        [team1.id, team2.id]
+                    } else {
+                        [team2.id, team1.id]
+                    }
+                } else {
+                    seeded_team_order([team1, team2], fallback_ranks)
+                }
+            }
             Kind::MultiworldS3 | Kind::MultiworldS4 | Kind::MultiworldS5 => {
                 if phase.is_some_and(|phase| phase == "Top 8") {
                     let seeding = match kind {
@@ -724,6 +821,28 @@ impl Draft {
             }
         };
         Ok(Self::for_next_game(transaction, kind, high_seed, low_seed).await?)
+    }
+
+    pub(crate) async fn reset(
+        &self,
+        transaction: &mut Transaction<'_, Postgres>,
+        http_client: &reqwest::Client,
+        kind: &Kind,
+        event: &event::Data<'_>,
+        teams: [&team::Team; 2],
+    ) -> Result<Self, cal::Error> {
+        if kind.uses_button_draft() && event.qualifier_mode == "pooled_by_mode" {
+            // A series-wide reset also repairs drafts imported before pooled
+            // standings were used for seeding. Other draft formats may give the
+            // previous game's loser priority, which a reset must preserve.
+            Self::for_game1(transaction, http_client, kind, event, None, teams).await
+        } else {
+            let low_seed = teams
+                .into_iter()
+                .find(|team| team.id != self.high_seed)
+                .ok_or(sqlx::Error::RowNotFound)?;
+            Ok(Self::for_next_game(transaction, kind, self.high_seed, low_seed.id).await?)
+        }
     }
 
     pub(crate) async fn for_next_game(
@@ -3171,6 +3290,7 @@ impl Draft {
                     team,
                     available_presets,
                     game: next_game,
+                    can_defer: false,
                 },
                 message: match msg_ctx {
                     MessageContext::None => String::default(),
@@ -3224,6 +3344,7 @@ impl Draft {
         &self,
         options: &[PresetOption],
         order: &[DraftPhase],
+        can_defer: bool,
         label: &str,
         game: Option<i16>,
         msg_ctx: &mut MessageContext<'_>,
@@ -3389,6 +3510,17 @@ impl Draft {
                     DraftPhase::Pick(team) => {
                         pick_count += 1;
                         if !self.settings.contains_key(&*format!("pick{pick_count}")) {
+                            let deferred = self
+                                .settings
+                                .get("deferred_pick")
+                                .is_some_and(|value| value == "yes");
+                            // Only swap the first two pick slots; bans and later picks keep their teams.
+                            let team = if deferred && pick_count <= 2 {
+                                team.choose(Team::LowSeed, Team::HighSeed)
+                            } else {
+                                *team
+                            };
+                            let can_defer = can_defer && pick_count == 1 && !deferred;
                             // Current step: team picks for game pick_count
                             let banned: Vec<&str> = (1..=ban_count)
                                 .filter_map(|n| {
@@ -3417,9 +3549,10 @@ impl Draft {
                             let current_pick = pick_count as u8;
                             return Ok(Step {
                                 kind: StepKind::PickPreset {
-                                    team: *team,
+                                    team,
                                     available_presets,
                                     game: current_pick,
+                                    can_defer,
                                 },
                                 message: match msg_ctx {
                                     MessageContext::None => String::default(),
@@ -3436,12 +3569,18 @@ impl Draft {
                                         if let Some(prev) = &prev_action {
                                             builder.push(format!("{prev}\n"));
                                         }
+                                        if deferred && pick_count == 1 {
+                                            builder.push("The first picker deferred their pick.\n");
+                                        }
                                         builder
                                             .mention_team(transaction, Some(*guild_id), active)
                                             .await?;
                                         builder.push(format!(
                                             ": Pick the {label} for Game {current_pick}."
                                         ));
+                                        if can_defer {
+                                            builder.push(" You may DEFER to let your opponent pick first, then pick second.");
+                                        }
                                         builder.build()
                                     }
                                     MessageContext::RaceTime {
@@ -3659,9 +3798,10 @@ impl Draft {
             Kind::BanPick {
                 options,
                 order,
+                can_defer,
                 label,
             } => {
-                self.next_step_ban_pick(options, order, label, game, msg_ctx)
+                self.next_step_ban_pick(options, order, *can_defer, label, game, msg_ctx)
                     .await
             }
             Kind::BanOnly {
@@ -3764,6 +3904,7 @@ impl Draft {
                 _ => action,
             };
             match resolved_action {
+                Action::Defer => unreachable!("handled by apply"),
                 Action::GoFirst(first) => match self
                     .next_step_s7(game, &mut MessageContext::None)
                     .await?
@@ -4207,6 +4348,7 @@ impl Draft {
                 _ => action,
             };
             match resolved_action {
+                Action::Defer => unreachable!("handled by apply"),
                 Action::GoFirst(first) => match self
                     .next_step_multiworld_s3(game, &mut MessageContext::None)
                     .await?
@@ -4663,6 +4805,7 @@ impl Draft {
                 _ => action,
             };
             match resolved_action {
+                Action::Defer => unreachable!("handled by apply"),
                 Action::GoFirst(first) => match self
                     .next_step_multiworld_s4(game, &mut MessageContext::None)
                     .await?
@@ -5109,6 +5252,7 @@ impl Draft {
                 _ => action,
             };
             match resolved_action {
+                Action::Defer => unreachable!("handled by apply"),
                 Action::GoFirst(first) => match self
                     .next_step_multiworld_s5(game, &mut MessageContext::None)
                     .await?
@@ -5524,6 +5668,7 @@ impl Draft {
                 _ => action,
             };
             match resolved_action {
+                Action::Defer => unreachable!("handled by apply"),
                 Action::GoFirst(first) => match self
                     .next_step_rsl_s7(game, &mut MessageContext::None)
                     .await?
@@ -5984,6 +6129,7 @@ impl Draft {
                 _ => action,
             };
             match resolved_action {
+                Action::Defer => unreachable!("handled by apply"),
                 Action::GoFirst(first) => match self
                     .next_step_tournoi_franco(kind, game, &mut MessageContext::None)
                     .await?
@@ -6727,6 +6873,7 @@ impl Draft {
                 team: _team,
                 available_presets,
                 game: next_game,
+                ..
             } => {
                 let preset_name = match action {
                     Action::Pick { setting, .. } => setting,
@@ -6797,13 +6944,21 @@ impl Draft {
         &mut self,
         options: &[PresetOption],
         order: &[DraftPhase],
+        can_defer: bool,
         label: &str,
         game: Option<i16>,
         msg_ctx: &mut MessageContext<'_>,
         action: Action,
     ) -> Result<Result<String, String>, Error> {
         let step = self
-            .next_step_ban_pick(options, order, label, game, &mut MessageContext::None)
+            .next_step_ban_pick(
+                options,
+                order,
+                can_defer,
+                label,
+                game,
+                &mut MessageContext::None,
+            )
             .await?;
         Ok(match step.kind {
             StepKind::Done(_) => Err(match msg_ctx {
@@ -6892,6 +7047,7 @@ impl Draft {
                 team: _team,
                 available_presets,
                 game: current_pick,
+                ..
             } => {
                 let preset_name = match action {
                     Action::Pick { setting, .. } => setting,
@@ -7136,6 +7292,21 @@ impl Draft {
         msg_ctx: &mut MessageContext<'_>,
         action: Action,
     ) -> Result<Result<String, String>, Error> {
+        if matches!(action, Action::Defer) {
+            let step = self.next_step(kind, game, &mut MessageContext::None).await?;
+            return Ok(if matches!(
+                step.kind,
+                StepKind::PickPreset {
+                    can_defer: true,
+                    ..
+                }
+            ) {
+                self.settings.insert("deferred_pick".into(), "yes".into());
+                Ok("Pick deferred. Your opponent will pick first, then you will pick second.".into())
+            } else {
+                Err("Deferring is not available at this step.".into())
+            });
+        }
         match kind {
             Kind::S7 => self.apply_s7(game, msg_ctx, action).await,
             Kind::RslS7 => self.apply_rsl_s7(game, msg_ctx, action).await,
@@ -7167,9 +7338,10 @@ impl Draft {
             Kind::BanPick {
                 options,
                 order,
+                can_defer,
                 label,
             } => {
-                self.apply_ban_pick(options, order, label, game, msg_ctx, action)
+                self.apply_ban_pick(options, order, *can_defer, label, game, msg_ctx, action)
                     .await
             }
             Kind::BanOnly {

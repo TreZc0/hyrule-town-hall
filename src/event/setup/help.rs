@@ -168,6 +168,7 @@ pub(super) fn label(field: &str, title: &str) -> RawHtml<String> {
         ],
         "draft_config" => &[
             "Parameters for the selected generic draft: the available options, display names and preset identifiers, plus the turn order or starting side required by that workflow. A ban_pick draft with three options and two pick steps (high_seed, then low_seed) assigns the remaining option to game 3. Use the same draft for two-game RR and BO3: an RR match simply has no third game. Use valid JSON, with double-quoted property names and no comments.",
+            "For ban_pick, add \"can_defer\": true to offer the first picker a one-time DEFER button. Deferring swaps the first two picks, so the opponent picks first and the original picker picks second. The first two picks must belong to different teams. Bans and later picks keep their configured order. Omit can_defer or set it to false to disable this option.",
             "For example, a pick_only draft can use options [{\"display_name\":\"Open\",\"preset\":\"open\"}], who_starts \"high_seed\", picks_per_player 1 and unique true. Add enough distinct options for every pick when unique is true. Preset identifiers must be understood by your seed generator; display names are only labels.",
         ],
         "qualifier_mode" => &[
@@ -276,6 +277,7 @@ pub(super) fn seed_choice_help() -> RawHtml<String> {
                 "order": [{"phase": "pick", "team": "high_seed"}, {"phase": "pick", "team": "low_seed"}]
             })).expect("example JSON serializes");
             p : "Put this object in Draft Config JSON and select Generic Ban/Pick. It uses stored qualifier ranks: higher seed picks game 1, lower seed picks game 2, and the remaining mode is the possible game 3. Create two games for double RR, or three for BO3. Keep round_modes unset, since fixed round modes disable drafting.";
+            p : "Add \"can_defer\": true to this object to let the higher seed choose DEFER instead of picking immediately. The lower seed then picks game 1, the higher seed picks game 2, and the remaining mode is still game 3. Deferring is optional and can only happen once, before the first pick.";
             p : "The selected baseline and final choice outcomes are saved with each generated seed and shown in Racetime and async delivery. Later edits do not change the description of an existing seed. Always + Random and Random + Random both remain one 50/50 decision for each game; both async participants receive the same saved result.";
         }
         details {

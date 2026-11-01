@@ -536,6 +536,7 @@ pub(crate) async fn races_to_import(
         pool: Option<String>,
         team1: Team,
         team2: Team,
+        seed_fallback: Option<[i64; 2]>,
         set_games_type: Option<i64>,
         total_games: Option<i64>,
         best_of: Option<i64>,
@@ -635,7 +636,7 @@ pub(crate) async fn races_to_import(
             fpa_invoked: false,
             breaks_used: false,
             draft: if let Some(draft_kind) = event.draft_kind() {
-                Some(Draft::for_game1(&mut *transaction, http_client, &draft_kind, event, phase.as_deref(), [&team1, &team2]).await?)
+                Some(Draft::for_game1_with_seed_fallback(&mut *transaction, http_client, &draft_kind, event, phase.as_deref(), [&team1, &team2], seed_fallback).await?)
             } else {
                 None
             },
@@ -738,12 +739,14 @@ pub(crate) async fn races_to_import(
                     entrant:
                         Some(event_sets_query::EventSetsQueryEventSetsNodesSlotsEntrant {
                             id: Some(ref team1),
+                            initial_seed_num: seed1,
                         }),
                 }),
                 Some(event_sets_query::EventSetsQueryEventSetsNodesSlots {
                     entrant:
                         Some(event_sets_query::EventSetsQueryEventSetsNodesSlotsEntrant {
                             id: Some(ref team2),
+                            initial_seed_num: seed2,
                         }),
                 }),
             ] = *slots
@@ -827,6 +830,7 @@ pub(crate) async fn races_to_import(
                     pool,
                     team1,
                     team2,
+                    seed1.zip(seed2).map(|(seed1, seed2)| [seed1, seed2]),
                     set_games_type,
                     total_games,
                     best_of,
