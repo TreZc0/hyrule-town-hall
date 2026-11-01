@@ -1414,9 +1414,35 @@ async fn check_scheduling_thread_permissions<'a>(
     })
 }
 
+async fn draft_response(
+    ctx: &DiscordCtx,
+    interaction: &impl GenericInteraction,
+    content: impl Into<String>,
+    already_deferred: bool,
+) -> serenity::Result<()> {
+    if already_deferred {
+        interaction
+            .edit_response(ctx, EditInteractionResponse::new().content(content))
+            .await?;
+    } else {
+        interaction
+            .create_response(
+                ctx,
+                CreateInteractionResponse::Message(
+                    CreateInteractionResponseMessage::new()
+                        .ephemeral(true)
+                        .content(content),
+                ),
+            )
+            .await?;
+    }
+    Ok(())
+}
+
 async fn check_draft_permissions<'a>(
     ctx: &'a DiscordCtx,
     interaction: &impl GenericInteraction,
+    already_deferred: bool,
 ) -> Result<
     Option<(
         event::Data<'static>,
@@ -1432,7 +1458,7 @@ async fn check_draft_permissions<'a>(
         None,
         false,
         Some("You can continue the draft in the race room"),
-        false,
+        already_deferred,
         true,
         SchedulingRaceFilter::Upcoming,
     )
@@ -1479,38 +1505,23 @@ async fn check_draft_permissions<'a>(
                             }
                         )
                     };
-                    interaction
-                        .create_response(
-                            ctx,
-                            CreateInteractionResponse::Message(
-                                CreateInteractionResponseMessage::new()
-                                    .ephemeral(true)
-                                    .content(response_content),
-                            ),
-                        )
-                        .await?;
+                    draft_response(ctx, interaction, response_content, already_deferred).await?;
                     transaction.rollback().await?;
                     None
                 }
             } else {
-                interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
-                    .ephemeral(true)
-                    .content("Sorry, this race's settings draft has not been initialized. Please contact a tournament organizer to fix this.")
-                )).await?;
+                draft_response(ctx, interaction, "Sorry, this race's settings draft has not been initialized. Please contact a tournament organizer to fix this.", already_deferred).await?;
                 transaction.rollback().await?;
                 None
             }
         } else {
-            interaction
-                .create_response(
-                    ctx,
-                    CreateInteractionResponse::Message(
-                        CreateInteractionResponseMessage::new()
-                            .ephemeral(true)
-                            .content("Sorry, there is no settings draft for this event."),
-                    ),
-                )
-                .await?;
+            draft_response(
+                ctx,
+                interaction,
+                "Sorry, there is no settings draft for this event.",
+                already_deferred,
+            )
+            .await?;
             transaction.rollback().await?;
             None
         }
@@ -1520,16 +1531,7 @@ async fn check_draft_permissions<'a>(
         } else {
             "Sorry, only participants in this race can use this command."
         };
-        interaction
-            .create_response(
-                ctx,
-                CreateInteractionResponse::Message(
-                    CreateInteractionResponseMessage::new()
-                        .ephemeral(true)
-                        .content(response_content),
-                ),
-            )
-            .await?;
+        draft_response(ctx, interaction, response_content, already_deferred).await?;
         transaction.rollback().await?;
         None
     })
@@ -1542,7 +1544,7 @@ async fn send_draft_settings_page(
     page: usize,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let Some((event, mut race, draft_kind, mut msg_ctx)) =
-        check_draft_permissions(ctx, interaction).await?
+        check_draft_permissions(ctx, interaction, false).await?
     else {
         return Ok(());
     };
@@ -1817,8 +1819,20 @@ async fn draft_action(
     step_msg_id: Option<MessageId>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let is_defer = matches!(action, draft::Action::Defer);
+    if is_defer {
+        // Acknowledge before database work and constructing the next team's prompt.
+        // Otherwise Discord can expire the interaction after the turn change is saved.
+        interaction
+            .create_response(
+                ctx,
+                CreateInteractionResponse::Defer(
+                    CreateInteractionResponseMessage::new().ephemeral(true),
+                ),
+            )
+            .await?;
+    }
     let Some((event, mut race, draft_kind, mut msg_ctx)) =
-        check_draft_permissions(ctx, interaction).await?
+        check_draft_permissions(ctx, interaction, is_defer).await?
     else {
         return Ok(());
     };
@@ -1837,7 +1851,8 @@ async fn draft_action(
                 .next_step(&draft_kind, race.game, &mut msg_ctx)
                 .await?;
             let mut transaction = msg_ctx.into_transaction();
-            racetime_bot::baselines::format_draft_step(&event, &race, &mut step, &mut transaction).await?;
+            racetime_bot::baselines::format_draft_step(&event, &race, &mut step, &mut transaction)
+                .await?;
             sqlx::query!(
                 "UPDATE races SET draft_state = $1 WHERE id = $2",
                 Json(race.draft.as_ref().unwrap()) as _,
@@ -1851,21 +1866,9 @@ async fn draft_action(
             }
             transaction.commit().await?;
             if draft_kind.uses_button_draft() {
-                // Clear the confirm dialog or acknowledge a direct defer button.
-                interaction
-                    .create_response(
-                        ctx,
-                        CreateInteractionResponse::UpdateMessage(
-                            CreateInteractionResponseMessage::new()
-                                .content(if is_defer {
-                                    apply_response.as_str()
-                                } else {
-                                    "✓"
-                                })
-                                .components(vec![]),
-                        ),
-                    )
-                    .await?;
+                // Publish the committed turn before editing the interaction response:
+                // a failed private confirmation must not hide the next team's prompt.
+                post_button_draft_step(ctx, interaction.channel_id(), step).await?;
                 // Remove buttons from the step message so old choices can't be clicked again.
                 if let Some(msg_id) = step_msg_id {
                     interaction
@@ -1874,7 +1877,21 @@ async fn draft_action(
                         .await
                         .ok();
                 }
-                post_button_draft_step(ctx, interaction.channel_id(), step).await?;
+                if is_defer {
+                    draft_response(ctx, interaction, apply_response, true).await?;
+                } else {
+                    // Clear the ephemeral confirm dialog.
+                    interaction
+                        .create_response(
+                            ctx,
+                            CreateInteractionResponse::UpdateMessage(
+                                CreateInteractionResponseMessage::new()
+                                    .content("✓")
+                                    .components(vec![]),
+                            ),
+                        )
+                        .await?;
+                }
             } else {
                 interaction
                     .create_response(
@@ -1890,16 +1907,7 @@ async fn draft_action(
             }
         }
         Err(error_msg) => {
-            interaction
-                .create_response(
-                    ctx,
-                    CreateInteractionResponse::Message(
-                        CreateInteractionResponseMessage::new()
-                            .ephemeral(true)
-                            .content(error_msg),
-                    ),
-                )
-                .await?;
+            draft_response(ctx, interaction, error_msg, is_defer).await?;
             msg_ctx.into_transaction().rollback().await?;
         }
     }
@@ -2580,7 +2588,7 @@ pub(crate) fn configure_builder(
                         } else if Some(interaction.data.id) == command_ids.draft || Some(interaction.data.id) == command_ids.pick {
                             send_draft_settings_page(ctx, interaction, "draft", 0).await?;
                         } else if Some(interaction.data.id) == command_ids.first {
-                              if let Some((_, mut race, draft_kind, msg_ctx)) = check_draft_permissions(ctx, interaction).await? {
+                              if let Some((_, mut race, draft_kind, msg_ctx)) = check_draft_permissions(ctx, interaction, false).await? {
                                 match draft_kind {
                                     draft::Kind::RslS7 => {
                                         let settings = &mut race.draft.as_mut().unwrap().settings;
@@ -4017,7 +4025,7 @@ pub(crate) fn configure_builder(
                                 }
                             }
                         } else if Some(interaction.data.id) == command_ids.second {
-                            if let Some((_, mut race, draft_kind, msg_ctx)) = check_draft_permissions(ctx, interaction).await? {
+                            if let Some((_, mut race, draft_kind, msg_ctx)) = check_draft_permissions(ctx, interaction, false).await? {
                                 match draft_kind {
                                     draft::Kind::RslS7 => {
                                         let settings = &mut race.draft.as_mut().unwrap().settings;
@@ -4088,10 +4096,11 @@ pub(crate) fn configure_builder(
                         } else if Some(interaction.data.id) == command_ids.skip {
                             draft_action(ctx, interaction, draft::Action::Skip, None).await?;
                         } else if interaction.data.id == command_ids.status {
-                            if let Some((mut transaction, race, team)) = check_scheduling_thread_permissions(ctx, interaction, None, true, None, false, false, SchedulingRaceFilter::Upcoming).await? {
+                            if let Some((mut transaction, race, team)) = check_scheduling_thread_permissions(ctx, interaction, None, true, None, false, true, SchedulingRaceFilter::Upcoming).await? {
                                 let event = race.event(&mut transaction).await?;
                                 if let Some(draft_kind) = event.draft_kind() {
                                     if let Some(ref draft) = race.draft {
+                                        let participant = team.is_some();
                                         let mut msg_ctx = draft::MessageContext::Discord {
                                             teams: race.teams().cloned().collect(),
                                             team: team.unwrap_or_else(Team::dummy),
@@ -4101,10 +4110,13 @@ pub(crate) fn configure_builder(
                                         let mut transaction = msg_ctx.into_transaction();
                                         racetime_bot::baselines::format_draft_step(&event, &race, &mut step, &mut transaction).await?;
                                         let response_content = MessageBuilder::default().push(step.message).build();
-                                        interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
+                                        let mut response = CreateInteractionResponseMessage::new()
                                             .ephemeral(true)
-                                            .content(response_content)
-                                        )).await?;
+                                            .content(response_content);
+                                        if participant && draft_kind.uses_button_draft() && !matches!(step.kind, draft::StepKind::Done(_)) {
+                                            response = response.button(CreateButton::new("draft_resume").label("Show draft buttons"));
+                                        }
+                                        interaction.create_response(ctx, CreateInteractionResponse::Message(response)).await?;
                                         transaction.commit().await?;
                                     } else {
                                         interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
@@ -4295,7 +4307,7 @@ pub(crate) fn configure_builder(
                     } else if let Some(page) = custom_id.strip_prefix("draft_page_") {
                         send_draft_settings_page(ctx, interaction, "draft", page.parse().unwrap()).await?;
                     } else if let Some(setting) = custom_id.strip_prefix("draft_setting_") {
-                        let Some((event, mut race, draft_kind, mut msg_ctx)) = check_draft_permissions(ctx, interaction).await? else { return Ok(()) };
+                        let Some((event, mut race, draft_kind, mut msg_ctx)) = check_draft_permissions(ctx, interaction, false).await? else { return Ok(()) };
                         match race.draft.as_ref().unwrap().next_step(&draft_kind, race.game, &mut msg_ctx).await?.kind {
                             draft::StepKind::Ban { available_settings, .. } if available_settings.get(setting).is_some() => {
                                 let setting = available_settings.get(setting).unwrap(); // `if let` guards are experimental
@@ -4355,13 +4367,14 @@ pub(crate) fn configure_builder(
                         }
                     } else if let Some((setting, value)) = custom_id.strip_prefix("draft_option_").and_then(|setting_value| setting_value.split_once("__")) {
                         draft_action(ctx, interaction, draft::Action::Pick { setting: setting.to_owned(), value: value.to_owned() }, None).await?;
-                    } else if custom_id == "draft_start" {
-                        let Some((mut transaction, race, team)) = check_scheduling_thread_permissions(ctx, interaction, None, false, None, false, false, SchedulingRaceFilter::Upcoming).await? else { return Ok(()) };
+                    } else if custom_id == "draft_start" || custom_id == "draft_resume" {
+                        let is_resume = custom_id == "draft_resume";
+                        interaction.create_response(ctx, CreateInteractionResponse::Defer(
+                            CreateInteractionResponseMessage::new().ephemeral(true),
+                        )).await?;
+                        let Some((mut transaction, race, team)) = check_scheduling_thread_permissions(ctx, interaction, None, false, None, true, is_resume, SchedulingRaceFilter::Upcoming).await? else { return Ok(()) };
                         if team.is_none() {
-                            interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
-                                .ephemeral(true)
-                                .content("Sorry, only participants in this race can start the draft.")
-                            )).await?;
+                            draft_response(ctx, interaction, "Sorry, only participants in this race can start or resume the draft.", true).await?;
                             transaction.rollback().await?;
                         } else {
                             let event = race.event(&mut transaction).await?;
@@ -4374,20 +4387,21 @@ pub(crate) fn configure_builder(
                                 transaction, guild_id,
                             };
                             let mut step = race.draft.as_ref().expect("draft_start for race without draft state").next_step(&draft_kind, race.game, &mut msg_ctx).await?;
-                            interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
-                                CreateInteractionResponseMessage::new()
-                                    .content("Any participant may click **Start Draft** to start the draft.")
-                                    .components(vec![])
-                            )).await?;
                             let mut transaction = msg_ctx.into_transaction();
                             racetime_bot::baselines::format_draft_step(&event, &race, &mut step, &mut transaction).await?;
                             transaction.commit().await?;
                             post_button_draft_step(ctx, interaction.channel_id(), step).await?;
+                            if !is_resume {
+                                interaction.channel_id().edit_message(ctx, interaction.message.id,
+                                    EditMessage::new().components(vec![]),
+                                ).await?;
+                            }
+                            draft_response(ctx, interaction, "Posted the current draft step in this thread.", true).await?;
                         }
                     } else if custom_id == "draft_defer" {
                         draft_action(ctx, interaction, draft::Action::Defer, Some(interaction.message.id)).await?;
                     } else if let Some(preset) = custom_id.strip_prefix("draft_ban_preview_") {
-                        let Some((_, _, draft_kind, msg_ctx)) = check_draft_permissions(ctx, interaction).await? else { return Ok(()) };
+                        let Some((_, _, draft_kind, msg_ctx)) = check_draft_permissions(ctx, interaction, false).await? else { return Ok(()) };
                         msg_ctx.into_transaction().rollback().await?;
                         let display = draft_kind.preset_display_name(preset).unwrap_or(preset);
                         let step_msg_id = interaction.message.id;
@@ -4399,7 +4413,7 @@ pub(crate) fn configure_builder(
                         )).await?;
                     } else if let Some(params) = custom_id.strip_prefix("draft_pick_preview_") {
                         if let Some((game, preset)) = params.split_once('_') {
-                            let Some((_, _, draft_kind, msg_ctx)) = check_draft_permissions(ctx, interaction).await? else { return Ok(()) };
+                            let Some((_, _, draft_kind, msg_ctx)) = check_draft_permissions(ctx, interaction, false).await? else { return Ok(()) };
                             msg_ctx.into_transaction().rollback().await?;
                             let display = draft_kind.preset_display_name(preset).unwrap_or(preset);
                             let step_msg_id = interaction.message.id;
