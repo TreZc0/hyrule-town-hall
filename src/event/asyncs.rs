@@ -282,8 +282,8 @@ pub(super) async fn editor(
     };
 
     Ok(html! {
-                section(id = "async-qualifiers") {
-                    h2 : "Async qualifiers & other asyncs";
+                details(id = "async-qualifiers", class = "qualifier-disclosure", open? = edit_id.is_some() || ctx.errors().next().is_some()) {
+                    summary : "Async qualifiers & other asyncs";
                     p : "Qualifiers are offered in creation order during their availability windows. Each qualifier has one shared seed.";
                     @if asyncs.is_empty() {
                         p : "No asyncs defined.";

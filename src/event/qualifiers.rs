@@ -130,14 +130,13 @@ async fn qualifiers_form(
                 p(class = "error", role = "alert") : error;
             }
             : rank_editor;
-            : async_editor;
             @if let Some(ref config) = pooled_config {
                 nav(class = "qualifier-jump", aria_label = "Qualifier management sections") {
                     a(href = "#pooled-standings") : "Standings";
                     a(href = "#pooled-attempts") : "Attempts & results";
                     a(href = "#pooled-seeds") : "Seed pools";
                     a(href = "#pooled-live") : "Live eligibility";
-                    a(href = "#qualifier-setup", class = "qualifier-setup-link") : "Setup";
+                    a(href = "#qualifier-setup", class = "qualifier-setup-link") : "General qualifier setup";
                 }
                 : pooled_qualifiers::standings_notice(config);
                 : pooled_standings;
@@ -167,8 +166,8 @@ async fn qualifiers_form(
 
                 section(id = "pooled-seeds", class = "qualifier-section") {
                     h2 : "Qualifier seed pools";
-                    p(class = "qualifier-intro") : "Assignments and results grouped by mode and seed. Reload to see generation progress. Expand Setup below to generate seeds.";
-                    @if pooled_modes.is_empty() { p(class = "qualifier-empty") : "Expand Setup below to add a mode and prepare its seed pool."; }
+                    p(class = "qualifier-intro") : "Assignments and results grouped by mode and seed. Reload to see generation progress. Expand General qualifier setup below to generate seeds.";
+                    @if pooled_modes.is_empty() { p(class = "qualifier-empty") : "Expand General qualifier setup below to add a mode and prepare its seed pool."; }
                     @for mode in &pooled_modes {
                         details(class = "qualifier-pool-card") {
                             summary { : &mode.display_name; span(class = "qualifier-badge") : if mode.enabled { "Enabled" } else { "Disabled" }; }
@@ -207,7 +206,7 @@ async fn qualifiers_form(
             hr(class = "qualifier-seeding-divider");
             details(id = "qualifier-setup", class = "qualifier-disclosure qualifier-setup-panel", open? = ctx.errors().next().is_some()) {
                 summary {
-                    : "Setup";
+                    : "General qualifier setup";
                     span(class = "qualifier-setup-description") : "Settings, modes, seed generation and live races";
                 }
                 @if let Some(ref config) = pooled_config {
@@ -357,6 +356,7 @@ async fn qualifiers_form(
                     }, ctx.errors().collect_vec(), "Create Race");
                 }
             }
+            : async_editor;
             hr(class = "qualifier-seeding-divider");
             details(id = "seeding-race", class = "qualifier-disclosure", open? = ctx.errors().next().is_some() && uri.0.path().as_str().ends_with("/create-seeding-race")) {
                 summary : "Seeding Race";
