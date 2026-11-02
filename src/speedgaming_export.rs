@@ -568,7 +568,7 @@ fn reject_client_error(form: &'static str, status: reqwest::StatusCode) -> Resul
 }
 
 fn speedgaming_form_time(start: DateTime<Utc>) -> (String, String, String) {
-    let start = start.with_timezone(&America::New_York);
+    let start = start.with_timezone(&Tz::get("America/New_York"));
     (
         start.format("%m/%d/%Y").to_string(),
         start.format("%I:%M").to_string(),

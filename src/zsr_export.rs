@@ -17,8 +17,6 @@ use {
         user::User,
     },
     chrono::Utc,
-    chrono_tz::Europe::Berlin,
-    chrono_tz::US::Eastern,
     std::time::Duration,
     tokio::time::sleep,
 };
@@ -702,14 +700,14 @@ pub(crate) fn generate_export_id(race: &Race, export: &ExportConfig) -> String {
 
 /// Check if a datetime is during US Eastern DST
 pub(crate) fn is_us_eastern_dst(dt: DateTime<Utc>) -> bool {
-    let eastern = dt.with_timezone(&Eastern);
+    let eastern = dt.with_timezone(&Tz::get("US/Eastern"));
     // During DST (EDT), UTC offset is -4 hours; during standard time (EST), it's -5 hours
     eastern.offset().fix().local_minus_utc() == -4 * 3600
 }
 
 /// Check if a datetime is during German DST (CEST)
 pub(crate) fn is_german_dst(dt: DateTime<Utc>) -> bool {
-    let berlin = dt.with_timezone(&Berlin);
+    let berlin = dt.with_timezone(&Tz::get("Europe/Berlin"));
     // During DST (CEST), UTC offset is +2 hours; during standard time (CET), it's +1 hour
     berlin.offset().fix().local_minus_utc() == 2 * 3600
 }

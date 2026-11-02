@@ -65,6 +65,7 @@ mod speedgaming_export;
 mod startgg;
 mod team;
 mod time;
+mod timezone;
 #[cfg(unix)]
 mod unix_socket;
 mod user;

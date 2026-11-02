@@ -284,8 +284,8 @@ pub(crate) fn format_datetime<Z: TimeZone>(
     format: DateTimeFormat,
 ) -> RawHtml<String> {
     let utc = datetime.to_utc();
-    let paris = datetime.with_timezone(&Europe::Paris);
-    let new_york = datetime.with_timezone(&America::New_York);
+    let paris = datetime.with_timezone(&Tz::get("Europe/Paris"));
+    let new_york = datetime.with_timezone(&Tz::get("America/New_York"));
     let paris_same_date = paris.date_naive() == utc.date_naive();
     let new_york_same_date = new_york.date_naive() == utc.date_naive();
     let paris = paris
@@ -366,8 +366,8 @@ where
 /// This will be converted to the user's local timezone by JavaScript.
 pub(crate) fn format_recurring_time<Z: TimeZone>(datetime: DateTime<Z>) -> RawHtml<String> {
     let utc = datetime.to_utc();
-    let paris = datetime.with_timezone(&Europe::Paris);
-    let new_york = datetime.with_timezone(&America::New_York);
+    let paris = datetime.with_timezone(&Tz::get("Europe/Paris"));
+    let new_york = datetime.with_timezone(&Tz::get("America/New_York"));
     html! {
         span(class = "recurring-time", data_timestamp = datetime.timestamp_millis()) {
             : utc.format("%A at %H:%M UTC").to_string();

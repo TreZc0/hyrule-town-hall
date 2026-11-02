@@ -1,31 +1,33 @@
+use crate::timezone::Tz;
 use chrono::{
     DateTime, Datelike as _, FixedOffset, NaiveDate, NaiveTime, Offset as _, TimeZone as _, Utc,
     Weekday,
 };
-use chrono_tz::{America, Europe, Tz};
 use lazy_regex::{regex, regex_captures, regex_is_match};
 
 pub(super) fn parse_timestamp(timestamp: &str) -> Option<DateTime<Utc>> {
     regex_captures!("^<t:(-?[0-9]+)(?::[stTdDfFR])?>$", timestamp)
         .and_then(|(_, timestamp)| timestamp.parse().ok())
+        // These instants are later rendered in named zones through Jiff.
+        .filter(|&timestamp| jiff::Timestamp::from_second(timestamp).is_ok())
         .and_then(|timestamp| Utc.timestamp_opt(timestamp, 0).single())
 }
 
 fn tz_from_abbr(abbr: &str) -> Option<Tz> {
     match abbr {
-        "UTC" | "GMT" => Some(chrono_tz::UTC),
-        "ET" | "EST" | "EDT" | "EASTERN" => Some(America::New_York),
-        "CT" | "CST" | "CDT" | "CENTRAL" => Some(America::Chicago),
-        "MT" | "MST" | "MDT" | "MOUNTAIN" => Some(America::Denver),
-        "PT" | "PST" | "PDT" | "PACIFIC" => Some(America::Los_Angeles),
-        "CET" | "CEST" => Some(Europe::Paris),
-        "WET" | "WEST" => Some(Europe::Lisbon),
-        "EET" | "EEST" => Some(Europe::Helsinki),
-        "BST" => Some(Europe::London),
-        "IST" => Some(chrono_tz::Asia::Kolkata),
-        "JST" => Some(chrono_tz::Asia::Tokyo),
-        "AEST" | "AEDT" | "AET" => Some(chrono_tz::Australia::Sydney),
-        "NZST" | "NZDT" | "NZT" => Some(chrono_tz::Pacific::Auckland),
+        "UTC" | "GMT" => Some(Tz::get("UTC")),
+        "ET" | "EST" | "EDT" | "EASTERN" => Some(Tz::get("America/New_York")),
+        "CT" | "CST" | "CDT" | "CENTRAL" => Some(Tz::get("America/Chicago")),
+        "MT" | "MST" | "MDT" | "MOUNTAIN" => Some(Tz::get("America/Denver")),
+        "PT" | "PST" | "PDT" | "PACIFIC" => Some(Tz::get("America/Los_Angeles")),
+        "CET" | "CEST" => Some(Tz::get("Europe/Paris")),
+        "WET" | "WEST" => Some(Tz::get("Europe/Lisbon")),
+        "EET" | "EEST" => Some(Tz::get("Europe/Helsinki")),
+        "BST" => Some(Tz::get("Europe/London")),
+        "IST" => Some(Tz::get("Asia/Kolkata")),
+        "JST" => Some(Tz::get("Asia/Tokyo")),
+        "AEST" | "AEDT" | "AET" => Some(Tz::get("Australia/Sydney")),
+        "NZST" | "NZDT" | "NZT" => Some(Tz::get("Pacific/Auckland")),
         _ => None,
     }
 }
@@ -359,6 +361,12 @@ mod tests {
     }
 
     #[test]
+    fn discord_timestamp_rejects_instants_outside_named_zone_range() {
+        assert!(parse_timestamp("<t:253402300800>").is_none()); // 10000-01-01
+        assert!(parse_timestamp("<t:-400000000000>").is_none());
+    }
+
+    #[test]
     fn discord_timestamp_accepts_hammertime_short_suffix() {
         assert_eq!(
             parse_timestamp("<t:1784005200:s>"),
@@ -371,7 +379,7 @@ mod tests {
         let parsed =
             parse_natural_language_timestamp_at("friday 3pm EST", None, fixed_now()).unwrap();
 
-        assert_eq!(parsed.timezone, Some(America::New_York));
+        assert_eq!(parsed.timezone, Some(Tz::get("America/New_York")));
         assert_eq!(
             parsed.start,
             Utc.with_ymd_and_hms(2026, 7, 10, 19, 0, 0).unwrap()
@@ -391,7 +399,7 @@ mod tests {
         let parsed =
             parse_natural_language_timestamp_at("friday 12pm PST", None, fixed_now()).unwrap();
 
-        assert_eq!(parsed.timezone, Some(America::Los_Angeles));
+        assert_eq!(parsed.timezone, Some(Tz::get("America/Los_Angeles")));
         assert_eq!(
             parsed.start,
             Utc.with_ymd_and_hms(2026, 7, 10, 19, 0, 0).unwrap()
@@ -411,7 +419,7 @@ mod tests {
         let parsed =
             parse_natural_language_timestamp_at("Sunday 12pm EDT", None, fixed_now()).unwrap();
 
-        assert_eq!(parsed.timezone, Some(America::New_York));
+        assert_eq!(parsed.timezone, Some(Tz::get("America/New_York")));
         assert_eq!(
             parsed.start,
             Utc.with_ymd_and_hms(2026, 7, 12, 16, 0, 0).unwrap()
@@ -423,7 +431,7 @@ mod tests {
         let parsed =
             parse_natural_language_timestamp_at("friday 12am PT", None, fixed_now()).unwrap();
 
-        assert_eq!(parsed.timezone, Some(America::Los_Angeles));
+        assert_eq!(parsed.timezone, Some(Tz::get("America/Los_Angeles")));
         assert_eq!(
             parsed.start,
             Utc.with_ymd_and_hms(2026, 7, 10, 7, 0, 0).unwrap()
@@ -434,12 +442,12 @@ mod tests {
     fn natural_language_handles_default_timezone_with_bare_meridiem() {
         let parsed = parse_natural_language_timestamp_at(
             "friday 12 pm",
-            Some(America::Los_Angeles),
+            Some(Tz::get("America/Los_Angeles")),
             fixed_now(),
         )
         .unwrap();
 
-        assert_eq!(parsed.timezone, Some(America::Los_Angeles));
+        assert_eq!(parsed.timezone, Some(Tz::get("America/Los_Angeles")));
         assert!(parsed.used_default_timezone);
         assert_eq!(
             parsed.start,
@@ -456,13 +464,13 @@ mod tests {
         for (input, zone, expected) in [
             (
                 "today 930 PM EDT",
-                Some(America::New_York),
+                Some(Tz::get("America/New_York")),
                 "2026-09-12T01:30:00Z",
             ),
             ("7pm Saturday", None, "2026-09-12T19:00:00Z"),
             (
                 "Saturday 7pm central time",
-                Some(America::Chicago),
+                Some(Tz::get("America/Chicago")),
                 "2026-09-13T00:00:00Z",
             ),
             (
@@ -472,27 +480,27 @@ mod tests {
             ),
             (
                 "Saturday, September 5, 9:00AM MDT",
-                Some(America::Denver),
+                Some(Tz::get("America/Denver")),
                 "2026-09-05T15:00:00Z",
             ),
             (
                 "Saturda 9 am mountain",
-                Some(America::Denver),
+                Some(Tz::get("America/Denver")),
                 "2026-09-12T15:00:00Z",
             ),
             (
                 "sunday 2pm eastern",
-                Some(America::New_York),
+                Some(Tz::get("America/New_York")),
                 "2026-09-13T18:00:00Z",
             ),
             (
                 "thursday at 7pm EDT",
-                Some(America::New_York),
+                Some(Tz::get("America/New_York")),
                 "2026-09-17T23:00:00Z",
             ),
             (
                 "Thursday 7pm Eastern",
-                Some(America::New_York),
+                Some(Tz::get("America/New_York")),
                 "2026-09-17T23:00:00Z",
             ),
         ] {
@@ -568,7 +576,7 @@ mod tests {
             "",
             "   ",
         ] {
-            for default in [None, Some(America::New_York)] {
+            for default in [None, Some(Tz::get("America/New_York"))] {
                 assert!(
                     parse_natural_language_timestamp_at(input, default, september_now()).is_none(),
                     "accepted {input:?}"
@@ -609,17 +617,21 @@ mod tests {
             "today 930 PM America/New_York",
         ] {
             let parsed =
-                parse_natural_language_timestamp_at(input, Some(Europe::Paris), now).unwrap();
+                parse_natural_language_timestamp_at(input, Some(Tz::get("Europe/Paris")), now)
+                    .unwrap();
             assert_eq!(
                 parsed.start,
                 Utc.with_ymd_and_hms(2026, 9, 12, 1, 30, 0).unwrap()
             );
-            assert_eq!(parsed.timezone, Some(America::New_York));
+            assert_eq!(parsed.timezone, Some(Tz::get("America/New_York")));
             assert!(!parsed.used_default_timezone);
         }
-        let parsed =
-            parse_natural_language_timestamp_at("930 PM today", Some(America::New_York), now)
-                .unwrap();
+        let parsed = parse_natural_language_timestamp_at(
+            "930 PM today",
+            Some(Tz::get("America/New_York")),
+            now,
+        )
+        .unwrap();
         assert_eq!(
             parsed.start,
             Utc.with_ymd_and_hms(2026, 9, 12, 1, 30, 0).unwrap()
@@ -636,7 +648,7 @@ mod tests {
             ("2026-09-11T21:30:00+05:30", "2026-09-11T16:00:00Z"),
             ("2026-09-11T21:30:00.123Z", "2026-09-11T21:30:00.123Z"),
         ] {
-            for default in [None, Some(America::Los_Angeles)] {
+            for default in [None, Some(Tz::get("America/Los_Angeles"))] {
                 let parsed = parse_natural_language_timestamp_at(input, default, september_now())
                     .unwrap_or_else(|| panic!("{input}"));
                 assert_eq!(
@@ -689,9 +701,28 @@ mod tests {
             Utc.with_ymd_and_hms(2026, 1, 6, 0, 0, 0).unwrap()
         );
         assert_eq!(
-            timezone_utc_offset(America::New_York, winter.start),
+            timezone_utc_offset(Tz::get("America/New_York"), winter.start),
             "UTC-5"
         );
+    }
+
+    #[test]
+    fn vancouver_profile_and_explicit_zone_use_permanent_daylight_time() {
+        let now = Utc.with_ymd_and_hms(2026, 10, 31, 12, 0, 0).unwrap();
+        let vancouver = Tz::get("America/Vancouver");
+        for (input, profile) in [
+            ("November 2 7pm America/Vancouver", None),
+            ("November 2 7pm", Some(vancouver)),
+        ] {
+            let parsed = parse_natural_language_timestamp_at(input, profile, now).unwrap();
+            assert_eq!(
+                parsed.start,
+                Utc.with_ymd_and_hms(2026, 11, 3, 2, 0, 0).unwrap()
+            );
+            assert_eq!(timezone_utc_offset(vancouver, parsed.start), "UTC-7");
+            assert_eq!(parsed.timezone, Some(vancouver));
+            assert_eq!(parsed.used_default_timezone, profile.is_some());
+        }
     }
 
     #[test]

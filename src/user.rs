@@ -127,11 +127,11 @@ impl User {
                 (None, None) => None,
                 (_, _) => unreachable!("database constraint"),
             },
-            timezone: timezone
-                .as_deref()
-                .map(Tz::from_str)
-                .transpose()
-                .expect("invalid timezone in database"),
+            timezone: timezone.as_deref().map(|name| {
+                name.parse::<Tz>().unwrap_or_else(|error| {
+                    panic!("invalid timezone in database: {name:?}: {error}")
+                })
+            }),
             id,
             display_source,
             challonge_id,
@@ -755,9 +755,8 @@ pub(crate) async fn profile(
     events_participated
         .sort_by_key(|event| (event.base_start.is_some(), Reverse(event.base_start)));
     let timezone_form = if me.as_ref().is_some_and(|me| me.id == user.id) {
-        let timezones = chrono_tz::TZ_VARIANTS
-            .iter()
-            .map(ToString::to_string)
+        let timezones = Tz::all()
+            .map(|timezone| timezone.to_string())
             .sorted()
             .collect_vec();
         html! {

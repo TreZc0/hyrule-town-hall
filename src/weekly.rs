@@ -3,7 +3,6 @@
 use {
     crate::{discord_bot::PgSnowflake, id::Table, prelude::*},
     chrono::{DateTime, Days, NaiveDate, NaiveTime, TimeZone},
-    chrono_tz::Tz,
     serenity::model::id::{ChannelId, MessageId, RoleId},
 };
 
@@ -358,5 +357,49 @@ impl WeeklySchedule {
             .await?;
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn schedule(timezone: &str) -> WeeklySchedule {
+        WeeklySchedule {
+            id: Id::from(1_i64),
+            series: Series::League,
+            event: "test".into(),
+            name: "Weekly race".into(),
+            frequency_days: 7,
+            time_of_day: NaiveTime::from_hms_opt(18, 0, 0).unwrap(),
+            timezone: Tz::get(timezone),
+            anchor_date: NaiveDate::from_ymd_opt(2026, 10, 25).unwrap(),
+            active: true,
+            settings_description: None,
+            notification_channel_id: None,
+            notification_role_id: None,
+            room_open_minutes_before: 15,
+            racetime_goal: None,
+        }
+    }
+
+    #[test]
+    fn weekly_races_follow_each_zones_november_rules() {
+        let now = Utc.with_ymd_and_hms(2026, 10, 30, 12, 0, 0).unwrap();
+        let vancouver = schedule("America/Vancouver");
+        let los_angeles = schedule("America/Los_Angeles");
+        let next = vancouver.next_after(now);
+        assert_eq!(
+            next.to_utc(),
+            Utc.with_ymd_and_hms(2026, 11, 2, 1, 0, 0).unwrap()
+        );
+        assert_eq!(
+            vancouver.next_after(next).to_utc(),
+            Utc.with_ymd_and_hms(2026, 11, 9, 1, 0, 0).unwrap()
+        );
+        assert_eq!(
+            los_angeles.next_after(now).to_utc(),
+            Utc.with_ymd_and_hms(2026, 11, 2, 2, 0, 0).unwrap()
+        );
     }
 }
