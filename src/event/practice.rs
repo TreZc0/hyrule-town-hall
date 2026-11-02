@@ -145,6 +145,7 @@ pub(super) fn validate_form(
     form: &mut PracticeSeedForm,
 ) -> Result<(), Status> {
     let allowed_choices: Vec<String> = match generator {
+        SeedGenType::Mmr { config } => racetime_bot::owr_choice_keys(&config.choices),
         SeedGenType::Owr { config, .. } => {
             let selected = config.select(form.baseline.as_deref()).map_err(|_| Status::UnprocessableEntity)?;
             racetime_bot::owr_choice_keys(&selected)
@@ -303,6 +304,22 @@ mod tests {
         store.jobs.remove(&id);
         store.finish(id, PracticeSeedStatus::Error("late result".into()));
         assert!(store.jobs.is_empty());
+    }
+
+    #[test]
+    fn mmr_practice_accepts_only_configured_choices() {
+        let generator = SeedGenType::from_db(Some("mmr"), Some(&json!({
+            "version": "2.0.0-0", "settings": {"GameplaySettings.DrawHash": true},
+            "choices": {"delay": {"label": "Stream delay", "value_labels": {"always": "Use stream delay"}}},
+        }))).unwrap();
+        let mut form = form();
+        validate_form(&generator, &mut form).unwrap();
+        form.choices = vec!["delay".into()];
+        validate_form(&generator, &mut form).unwrap();
+        assert_eq!(generator.radio_choice_suggestions(), vec![("delay".into(), "Stream delay".into())]);
+        assert!(generator.has_display_settings());
+        form.choices.push("unconfigured".into());
+        assert_eq!(validate_form(&generator, &mut form), Err(Status::UnprocessableEntity));
     }
 
     #[test]

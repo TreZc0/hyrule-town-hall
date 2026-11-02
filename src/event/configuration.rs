@@ -58,7 +58,7 @@ pub(crate) fn validate_seed(kind: Option<&str>, config: Option<&Value>) -> Resul
             Ok(()) // A draft may supply the preset instead of an event default.
         }
         "ootr" | "ootr_web" | "ootr_tfb" | "ootr_rsl" => Ok(()),
-        "mmr" => crate::mmr_web::Settings::parse(config).map(|_| ()),
+        "mmr" => crate::mmr_web::EventConfig::parse(config).map(|_| ()),
         _ => Err(format!("Unknown seed generator: {kind}")),
     }
 }
@@ -71,7 +71,7 @@ fn required_string<'a>(config: &'a Value, field: &str) -> Result<&'a str, String
         .ok_or_else(|| format!("{field} must be a non-empty string."))
 }
 
-fn validate_choices(value: &Value) -> Result<(), String> {
+pub(crate) fn validate_choices(value: &Value) -> Result<(), String> {
     let config = OwrEventConfig::parse(value)?;
     if config.choices.is_null() {
         return Ok(());

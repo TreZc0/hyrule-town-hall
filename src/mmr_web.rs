@@ -2,6 +2,51 @@
 use crate::prelude::*;
 use reqwest::{Method, StatusCode};
 
+/// Event choices stay separate from the settings sent to the MMR API.
+#[derive(Debug, Clone)]
+#[cfg_attr(unix, derive(async_proto::Protocol))]
+pub(crate) struct EventConfig {
+    pub(crate) settings: Settings,
+    pub(crate) choices: racetime_bot::seed_gen_type::OwrEventConfig,
+}
+
+impl EventConfig {
+    pub(crate) fn parse(value: &serde_json::Value) -> Result<Self, String> {
+        let mut fields = value.as_object().ok_or("MMR configuration must be a JSON object.")?.clone();
+        let choices = fields.remove("choices").unwrap_or(json!({}));
+        let timing = fields.remove("choice_resolution").unwrap_or(json!("seed_rolling"));
+        let settings = Settings::parse(&serde_json::Value::Object(fields))?;
+        let choice_config = json!({
+            "base_settings": settings.settings,
+            "choices": choices,
+            "choice_resolution": timing,
+        });
+        event::configuration::validate_choices(&choice_config)?;
+        let choices = racetime_bot::seed_gen_type::OwrEventConfig::parse(&choice_config)?;
+        for (key, entry) in choices.choices.as_object().into_iter().flatten() {
+            for field in entry.as_object().unwrap().keys() {
+                if !matches!(field.as_str(), "label" | "value_labels" | "settings" | "priority" | "supercedes" | "hidden_for_async") {
+                    return Err(format!("MMR choice {key}: unsupported field {field}. Put flat MMR settings in settings."));
+                }
+            }
+            if entry.get("label").is_some_and(|label| !label.is_string())
+                || entry.get("value_labels").and_then(serde_json::Value::as_object)
+                    .is_some_and(|labels| labels.values().any(|label| !label.is_string()))
+            {
+                return Err(format!("MMR choice {key}: labels must be strings."));
+            }
+            // Validate even disabled or superseded patches before accepting the event.
+            settings.with_choices(&choices, &[(key.clone(), true)].into())
+                .map_err(|error| format!("MMR choice {key}: {error}"))?;
+        }
+        Ok(Self { settings, choices })
+    }
+
+    pub(crate) fn settings_for(&self, resolved: &HashMap<String, bool>) -> Result<Settings, String> {
+        self.settings.with_choices(&self.choices, resolved)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(unix, derive(async_proto::Protocol))]
@@ -19,6 +64,17 @@ fn master() -> String {
 impl Settings {
     pub(crate) fn parse(value: &serde_json::Value) -> Result<Self, String> {
         let config: Self = serde_json::from_value(value.clone()).map_err(|e| e.to_string())?;
+        config.validate()?;
+        Ok(config)
+    }
+
+    pub(crate) fn with_choices(
+        &self,
+        choices: &racetime_bot::seed_gen_type::OwrEventConfig,
+        resolved: &HashMap<String, bool>,
+    ) -> Result<Self, String> {
+        let mut config = self.clone();
+        config.settings = racetime_bot::apply_settings_choices(&self.settings, &choices.choices, resolved);
         config.validate()?;
         Ok(config)
     }
@@ -430,6 +486,77 @@ mod tests {
             requests
         });
         (client, task)
+    }
+
+    #[tokio::test]
+    async fn mmr_choices_patch_only_api_settings_and_preserve_spoiler_policy() {
+        let mut value = json!(settings());
+        value["choice_resolution"] = json!("room_opening");
+        value["choices"] = json!({
+            "option": {"settings": {"GameplaySettings.DrawHash": false, "OutputSettings.GenerateSpoilerLog": false}},
+            "delay": {"label": "Stream delay", "value_labels": {"always": "Use delay"}},
+        });
+        let config = EventConfig::parse(&value).unwrap();
+        assert_eq!(config.choices.choice_resolution, racetime_bot::choice_resolution::Timing::RoomOpening);
+        assert_eq!(config.settings_for(&HashMap::new()).unwrap().settings, settings().settings);
+        let patched = config.settings_for(&[("option".into(), true), ("delay".into(), true)].into()).unwrap();
+        assert_eq!(patched.settings["GameplaySettings.DrawHash"], false);
+        let (client, requests) = server(vec![
+            (200, "{\"id\":123}".into()),
+            (200, "{\"status\":1}".into()),
+            (200, details().to_string()),
+        ]).await;
+        let (tx, _rx) = mpsc::channel(16);
+        client.roll(patched, Purpose::Competition, &tx).await.unwrap();
+        let requests = requests.await.unwrap();
+        let body: serde_json::Value = serde_json::from_str(requests[0].split("\r\n\r\n").nth(1).unwrap()).unwrap();
+        assert_eq!(body, json!({"GameplaySettings.DrawHash": false, "OutputSettings.GenerateSpoilerLog": true}));
+        assert!(requests[0].contains("locked=true"));
+        assert!(requests[0].contains("encrypt=true"));
+        assert_eq!(config.settings.settings["GameplaySettings.DrawHash"], true);
+    }
+
+    #[test]
+    fn mmr_choices_preserve_priority_suppression_and_removals() {
+        let mut value = json!(settings());
+        value["choices"] = json!({
+            "first": {"settings": {"GameplaySettings.DrawHash": false}},
+            "later": {"priority": 10, "settings": {"GameplaySettings.DrawHash": true}},
+            "remove": {"supercedes": ["first", "later"], "settings": {"GameplaySettings.DrawHash": null}},
+        });
+        let config = EventConfig::parse(&value).unwrap();
+        let mut resolved = [("first".into(), true), ("later".into(), true)].into();
+        assert_eq!(config.settings_for(&resolved).unwrap().settings["GameplaySettings.DrawHash"], true);
+        resolved.insert("remove".into(), true);
+        assert!(config.settings_for(&resolved).unwrap().settings.get("GameplaySettings.DrawHash").is_none());
+        assert_eq!(config.settings_for(&HashMap::new()).unwrap().settings, settings().settings);
+    }
+
+    #[test]
+    fn mmr_choices_reject_invalid_definitions_and_keep_strict_root_validation() {
+        for entry in [
+            json!(true), json!({"settings": []}), json!({"settings": {"seed": "fixed"}}),
+            json!({"settings": {"GameplaySettings.MultiWorld": true}}),
+            json!({"settings": {"GameplaySettings.WorldCount": 2}}),
+            json!({"settings": {"GameplaySettings": {"DrawHash": true}}}),
+            json!({"placements": {}}), json!({"start_inventory": []}),
+            json!({"baselines": ["default"]}), json!({"label": false}),
+            json!({"value_labels": {"always": true}}), json!({"priority": "high"}),
+            json!({"hidden_for_async": "true"}), json!({"supercedes": ["missing"]}),
+            json!({"GameplaySettings.DrawHash": false}), json!({"typo": true}),
+        ] {
+            let mut config = json!(settings());
+            config["choices"] = json!({"option": entry});
+            assert!(EventConfig::parse(&config).is_err(), "accepted {config}");
+        }
+        let mut config = json!(settings());
+        assert_eq!(EventConfig::parse(&config).unwrap().choices.choice_resolution, racetime_bot::choice_resolution::Timing::SeedRolling);
+        config["choice_resolution"] = json!("typo");
+        assert!(EventConfig::parse(&config).is_err());
+        config["choice_resolution"] = json!("race_creation");
+        assert!(EventConfig::parse(&config).is_ok());
+        config["unknown"] = json!(true);
+        assert!(EventConfig::parse(&config).is_err());
     }
 
     #[tokio::test]

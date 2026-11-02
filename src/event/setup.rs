@@ -33,6 +33,25 @@ async fn can_manage_series(
     Ok(game.is_admin(transaction, user).await?)
 }
 
+fn apply_choice_resolution(
+    seed_gen_type: Option<&str>,
+    seed_config: Option<&mut serde_json::Value>,
+    timing: Option<&str>,
+) {
+    let (Some(config), Some(timing)) = (
+        seed_config.and_then(serde_json::Value::as_object_mut),
+        timing,
+    ) else {
+        return;
+    };
+    if matches!(seed_gen_type, Some("owr" | "owr_tourney" | "mmr"))
+        || matches!(seed_gen_type, Some("alttpr_dr" | "alttpr_dr_latest"))
+            && config.get("source").and_then(serde_json::Value::as_str) == Some("mutual_choices")
+    {
+        config.insert("choice_resolution".into(), json!(timing));
+    }
+}
+
 fn preroll_help() -> RawHtml<String> {
     html! {
         p(class = "help") : "Preroll controls advance seed generation, not when entrants receive the seed. For ALTTPR Door Rando, Avianart, both OWR builds and TWWR, None and Medium use the generator's normal timing; Short and Long are not supported. Pooled qualifier seeds are prepared with Generate on the Qualifiers page, independently of this setting.";
@@ -85,8 +104,10 @@ fn seed_config_help() -> RawHtml<String> {
                 ("TWWR — settings permalink", "Select twwr and paste the settings permalink exported by your randomizer. Replace the placeholder before saving.", json!({
                     "permalink": "PASTE_YOUR_SETTINGS_PERMALINK_HERE"
                 })),
-                ("MMR — pinned version and settings", "Select mmr. Paste the full flat settings map exported by MMR and a version available on the selected branch. All competition seeds are encrypted; practice seeds are not. The application always generates a locked spoiler log.", json!({
-                    "branch": "master", "version": "2.0.0-0", "settings": {"GameplaySettings.DrawHash": true, "OutputSettings.GenerateSpoilerLog": true}
+                ("MMR — pinned version, settings and optional choices", "Select mmr. Paste the full flat settings map exported by MMR and a version available on the selected branch. The optional example choice defines a race rule; add settings inside a choice to patch exported MMR keys. Match choice keys to Enter Flow questions. All competition seeds are encrypted; practice seeds are not. The application always generates a locked spoiler log.", json!({
+                    "branch": "master", "version": "2.0.0-0", "settings": {"GameplaySettings.DrawHash": true, "OutputSettings.GenerateSpoilerLog": true},
+                    "choice_resolution": "seed_rolling",
+                    "choices": {"stream_delay": {"label": "Stream delay", "value_labels": {"always": "Use stream delay", "never": "No stream delay required"}}}
                 })),
                 ("Manual / external seeds", "Select None. Leave Seed Config JSON empty or use an empty object.", json!({})),
             ] {
@@ -96,7 +117,7 @@ fn seed_config_help() -> RawHtml<String> {
                     pre { : serde_json::to_string_pretty(&config).expect("example JSON serializes"); }
                 }
             }
-            p : "MMR uses a pinned version and a flat settings export. All seeds have locked spoilers; competition seeds are encrypted. Multiworld and settings drafts are not supported.";
+            p : "MMR uses a pinned version and a flat settings export, with optional player choices and reveal timing. All seeds have locked spoilers; competition seeds are encrypted. Multiworld and settings drafts are not supported.";
         }
     }
 }
@@ -624,7 +645,7 @@ async fn setup_form(
                                     option(value = value, selected? = ctx.field_value("choice_resolution").unwrap_or(seed_config_json.as_ref().and_then(|config| config.get("choice_resolution")).and_then(|value| value.as_str()).unwrap_or("seed_rolling")) == value) : label;
                                 }
                             }
-                            p(class = "help") : "For OWR and Door Rando mutual choices. Each game's result is saved and reused for all rooms and seed rerolls. Scheduling threads always show agreed settings and rules; only creation/import also reveals random results there. Room opening posts in each race room or private async thread; without a room it falls back to seed reveal. Seed reveal posts settings beside the seed, separately for each async participant. This selector sets choice_resolution in Seed Config JSON; changing it affects only unresolved races.";
+                            p(class = "help") : "For MMR, OWR and Door Rando mutual choices. Each game's result is saved and reused for all rooms and seed rerolls. Scheduling threads always show agreed settings and rules; only creation/import also reveals random results there. Room opening posts in each race room or private async thread; without a room it falls back to seed reveal. Seed reveal posts settings beside the seed, separately for each async participant. This selector sets choice_resolution in Seed Config JSON; changing it affects only unresolved races.";
                         });
 
                         : guides::seed_config();
@@ -1188,11 +1209,11 @@ pub(crate) async fn post(
                 None
             };
 
-            if let Some(timing) = value.choice_resolution.as_deref() {
-                if let Some(config) = seed_config_json.as_mut().and_then(serde_json::Value::as_object_mut) {
-                    config.insert("choice_resolution".into(), json!(timing));
-                }
-            }
+            apply_choice_resolution(
+                seed_gen_type.as_deref(),
+                seed_config_json.as_mut(),
+                value.choice_resolution.as_deref(),
+            );
 
             let start_delay_open: Option<i32> = if let Some(ref sdo_str) = value.start_delay_open {
                 if sdo_str.trim().is_empty() {
@@ -2324,7 +2345,7 @@ fn create_form_content(
                                     option(value = value, selected? = field_value("choice_resolution").unwrap_or("seed_rolling") == value) : label;
                                 }
                             }
-                            p(class = "help") : "For OWR and Door Rando mutual choices. Each game's result is saved and reused for all rooms and seed rerolls. Scheduling threads always show agreed settings and rules; only creation/import also reveals random results there. Room opening posts in each race room or private async thread; without a room it falls back to seed reveal. Seed reveal posts settings beside the seed, separately for each async participant. This selector sets choice_resolution in Seed Config JSON; changing it affects only unresolved races.";
+                            p(class = "help") : "For MMR, OWR and Door Rando mutual choices. Each game's result is saved and reused for all rooms and seed rerolls. Scheduling threads always show agreed settings and rules; only creation/import also reveals random results there. Room opening posts in each race room or private async thread; without a room it falls back to seed reveal. Seed reveal posts settings beside the seed, separately for each async participant. This selector sets choice_resolution in Seed Config JSON; changing it affects only unresolved races.";
                         });
 
                         : guides::seed_config();
@@ -2700,11 +2721,11 @@ pub(crate) async fn create_post(
                 None
             };
 
-        if let Some(timing) = value.choice_resolution.as_deref() {
-            if let Some(config) = seed_config_json.as_mut().and_then(serde_json::Value::as_object_mut) {
-                config.insert("choice_resolution".into(), json!(timing));
-            }
-        }
+        apply_choice_resolution(
+            seed_gen_type.as_deref(),
+            seed_config_json.as_mut(),
+            value.choice_resolution.as_deref(),
+        );
 
         // Parse start_delay_open
         let start_delay_open: Option<i32> = if let Some(ref sdo_str) = value.start_delay_open {
@@ -3158,6 +3179,51 @@ async fn save_score_config(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn choice_resolution_selector_supports_mmr() {
+        let original = json!({
+            "branch": "master",
+            "version": "2.0.0-0",
+            "settings": {"GameplaySettings.DrawHash": true},
+        });
+        for timing in [None, Some("seed_rolling"), Some("race_creation"), Some("room_opening")] {
+            let mut config = original.clone();
+            apply_choice_resolution(Some("mmr"), Some(&mut config), timing);
+            assert_eq!(config["settings"], original["settings"]);
+            assert_eq!(config.get("choice_resolution").and_then(serde_json::Value::as_str), timing);
+            event::configuration::validate_seed(Some("mmr"), Some(&config)).unwrap();
+            assert!(matches!(
+                racetime_bot::seed_gen_type::SeedGenType::from_db(Some("mmr"), Some(&config)),
+                Some(racetime_bot::seed_gen_type::SeedGenType::Mmr { .. }),
+            ));
+        }
+    }
+
+    #[test]
+    fn choice_resolution_selector_updates_only_mutual_choices() {
+        for kind in ["owr", "owr_tourney", "alttpr_dr", "alttpr_dr_latest"] {
+            let mut config = json!({
+                "source": "mutual_choices",
+                "base_settings": {},
+                "choice_resolution": "seed_rolling",
+            });
+            apply_choice_resolution(Some(kind), Some(&mut config), None);
+            assert_eq!(config["choice_resolution"], "seed_rolling");
+            for timing in ["race_creation", "room_opening", "seed_rolling"] {
+                apply_choice_resolution(Some(kind), Some(&mut config), Some(timing));
+                assert_eq!(config["choice_resolution"], timing);
+                event::configuration::validate_seed(Some(kind), Some(&config)).unwrap();
+            }
+        }
+        for kind in [None, Some("twwr"), Some("ootr"), Some("alttpr_avianart"), Some("alttpr_dr"), Some("alttpr_dr_latest")] {
+            for original in [json!({}), json!({"source": "boothisman"}), json!({"source": "mystery_pool"})] {
+                let mut config = original.clone();
+                apply_choice_resolution(kind, Some(&mut config), Some("race_creation"));
+                assert_eq!(config, original);
+            }
+        }
+    }
 
     #[test]
     fn event_copy_source_must_be_in_this_games_dropdown() {

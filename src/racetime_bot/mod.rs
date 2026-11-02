@@ -761,7 +761,7 @@ impl GlobalState {
         };
         let fail = |message: String| alttpr_dr_error_receiver(RollError::AlttprDe(message));
         match event.seed_gen_type.as_ref() {
-            Some(SeedGenType::Mmr { config }) => self.roll_mmr_seed(config.clone(), crate::mmr_web::Purpose::Competition, None, None, unlock),
+            Some(SeedGenType::Mmr { config }) => self.roll_mmr_seed(config.settings.clone(), crate::mmr_web::Purpose::Competition, None, None, unlock, None),
             Some(SeedGenType::TWWR { permalink }) => self.roll_twwr_seed(event.rando_version.clone(), permalink.clone(), unlock),
             Some(SeedGenType::AlttprAvianart { default_preset, .. }) => {
                 match event.single_settings.as_ref().and_then(|settings| settings.get("preset")).and_then(|preset| preset.as_str()).map(str::to_owned).or_else(|| default_preset.clone()) {
@@ -1520,9 +1520,10 @@ impl GlobalState {
         self: Arc<Self>,
         config: crate::mmr_web::Settings,
         purpose: crate::mmr_web::Purpose,
-        race_id: Option<Id<Races>>,
+        race: Option<Race>,
         roll_at: impl Into<SeedRollTiming>,
         unlock_spoiler_log: UnlockSpoilerLog,
+        choice_config: Option<seed_gen_type::OwrEventConfig>,
     ) -> mpsc::Receiver<SeedRollUpdate> {
         let roll_at = roll_at.into();
         let (tx, rx) = mpsc::channel(16);
@@ -1533,19 +1534,39 @@ impl GlobalState {
             }
             let result = async {
                 if let Some(delay) = roll_at.deadline().and_then(|at| (at - Utc::now()).to_std().ok()) { roll_at.wait(delay).await; }
+                let race_id = race.as_ref().map(|race| race.id);
                 let _guard = if race_id.is_some() { Some(self.mmr_async_lock.lock().await) } else { None };
-                if let Some(race_id) = race_id {
-                    let existing: Option<serde_json::Value> = sqlx::query_scalar("SELECT seed_data FROM races WHERE id=$1")
-                        .bind(i64::from(race_id)).fetch_one(&self.db_pool).await?;
-                    if let Some(existing) = existing {
-                        if !matches!(seed::Files::from_seed_data(&existing), Some(seed::Files::MmrWeb { .. }))
-                            || existing["encrypted"] != true || existing["locked"] != true {
-                            return Err(crate::mmr_web::Error::Invalid("The race already has an incompatible or unlocked seed".into()).into());
-                        }
-                        return Ok(seed::Data::from_seed_data_only(Some(existing), None, false));
+                let existing: Option<serde_json::Value> = if let Some(race_id) = race_id {
+                    sqlx::query_scalar("SELECT seed_data FROM races WHERE id=$1")
+                        .bind(i64::from(race_id)).fetch_one(&self.db_pool).await?
+                } else { None };
+                if let Some(existing) = &existing {
+                    if !matches!(seed::Files::from_seed_data(existing), Some(seed::Files::MmrWeb { .. }))
+                        || existing["encrypted"] != true || existing["locked"] != true {
+                        return Err(crate::mmr_web::Error::Invalid("The race already has an incompatible or unlocked seed".into()).into());
                     }
                 }
-                let seed = self.mmr_api_client.roll(config, purpose, &tx).await?;
+                let mut config = config;
+                let mut presentation = None;
+                if let (Some(race), Some(choices)) = (&race, &choice_config) {
+                    let has_choices = choices.choices.as_object().is_some_and(|choices| !choices.is_empty());
+                    if existing.is_some() && has_choices && choice_resolution::read(&self.db_pool, race.id).await?.is_none() {
+                        return Err(crate::mmr_web::Error::Invalid("This race already has a seed without saved choices. Create a replacement race to use player choices.".into()).into());
+                    }
+                    if let Some(snapshot) = choice_resolution::for_seed(&self.db_pool, race, choices).await? {
+                        config = config.with_choices(choices, &snapshot.resolved).map_err(crate::mmr_web::Error::Invalid)?;
+                        presentation = Some(snapshot.seed_presentation(choices));
+                    } else if has_choices {
+                        return Err(crate::mmr_web::Error::Invalid("All participants must be registered before resolving race choices.".into()).into());
+                    }
+                }
+                if let Some(existing) = existing {
+                    return Ok(seed::Data::from_seed_data_only(Some(existing), None, false));
+                }
+                let mut seed = self.mmr_api_client.roll(config, purpose, &tx).await?;
+                if let (Some(data), Some(presentation)) = (&mut seed.seed_data, presentation) {
+                    data["seed_presentation"] = presentation;
+                }
                 if let Some(race_id) = race_id {
                     let saved = sqlx::query("UPDATE races SET seed_data=$2 WHERE id=$1 AND seed_data IS NULL")
                         .bind(i64::from(race_id)).bind(seed.to_seed_data()).execute(&self.db_pool).await?;
@@ -1577,7 +1598,7 @@ impl GlobalState {
             _ => UnlockSpoilerLog::Never,
         };
         match seed_gen_type {
-            SeedGenType::Mmr { config } => self.roll_mmr_seed(config.clone(), crate::mmr_web::Purpose::Competition, Some(cal_event.race.id), None, unlock_spoiler_log),
+            SeedGenType::Mmr { config } => self.roll_mmr_seed(config.settings.clone(), crate::mmr_web::Purpose::Competition, Some(cal_event.race.clone()), None, unlock_spoiler_log, Some(config.choices.clone())),
             SeedGenType::AlttprDoorRando {
                 source: AlttprDrSource::Boothisman,
                 build,
@@ -3516,6 +3537,16 @@ fn resolve_all_choices_with(
             )
         })
         .collect()
+}
+
+pub(crate) fn apply_settings_choices(
+    base: &serde_json::Value,
+    choices: &serde_json::Value,
+    resolved: &HashMap<String, bool>,
+) -> serde_json::Value {
+    let mut settings = base.as_object().cloned().unwrap_or_default();
+    apply_patches_with_supercedes(resolved, choices, &mut settings, &mut serde_json::Map::new(), &mut Vec::new());
+    serde_json::Value::Object(settings)
 }
 
 fn apply_patches_with_supercedes(
@@ -5894,7 +5925,7 @@ impl Handler {
                     PrerollMode::Medium => release_at.map(|at| at - TimeDelta::minutes(15)),
                     PrerollMode::Long => None,
                 };
-                let updates = Arc::clone(&ctx.global_state).roll_mmr_seed(config, crate::mmr_web::Purpose::Competition, Some(cal_event.race.id), SeedRollTiming::new(roll_at, self.force_roll.clone()), unlock_spoiler_log);
+                let updates = Arc::clone(&ctx.global_state).roll_mmr_seed(config.settings, crate::mmr_web::Purpose::Competition, Some(cal_event.race.clone()), SeedRollTiming::new(roll_at, self.force_roll.clone()), unlock_spoiler_log, Some(config.choices));
                 self.roll_seed_inner(ctx, cal_event.start().map(|start| start - DEFAULT_SEED_RELEASE_LEAD), updates,
                     language, article, "Majora's Mask Randomizer seed".into(), false).await;
             }
@@ -8909,7 +8940,7 @@ async fn prepare_seeds(
                     let config = config.clone();
                     let unlock = if event.spoiler_unlock == "after" { UnlockSpoilerLog::After } else { UnlockSpoilerLog::Never };
                     transaction.commit().await?;
-                    let mut updates = Arc::clone(&global_state).roll_mmr_seed(config, crate::mmr_web::Purpose::Competition, Some(race.id), None, unlock);
+                    let mut updates = Arc::clone(&global_state).roll_mmr_seed(config.settings, crate::mmr_web::Purpose::Competition, Some(race.clone()), None, unlock, Some(config.choices));
                     loop {
                         select! {
                             () = &mut shutdown => break 'outer,

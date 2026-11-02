@@ -34,7 +34,7 @@ pub(crate) fn roll(
         return Err(Error::ModeUnavailable);
     }
     Ok(match kind {
-        SeedGenType::Mmr { config } => state.roll_mmr_seed(config.clone(), crate::mmr_web::Purpose::Competition, None, None, UnlockSpoilerLog::Never),
+        SeedGenType::Mmr { config } => state.roll_mmr_seed(config.settings.clone(), crate::mmr_web::Purpose::Competition, None, None, UnlockSpoilerLog::Never, None),
         SeedGenType::Owr { config, build } => state.roll_pooled_owr_seed(config.clone(), *build),
         SeedGenType::AlttprDoorRando {
             source: AlttprDrSource::MutualChoices { config },

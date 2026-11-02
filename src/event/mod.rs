@@ -5133,8 +5133,20 @@ pub(crate) async fn practice_seed(
     let chests = data.chests().await?;
 
     let form_content = match &data.seed_gen_type {
-        Some(SeedGenType::Mmr { .. }) => full_form(form_uri, csrf.as_ref(), html! {
+        Some(generator @ SeedGenType::Mmr { .. }) => full_form(form_uri, csrf.as_ref(), html! {
             p : "Generate a practice seed with this event's settings. Spoilers remain locked.";
+            @if !generator.radio_choice_suggestions().is_empty() {
+                p : "Check any optional choices to include. Leave all unchecked for base settings.";
+                fieldset {
+                    legend : "Options";
+                    @for (key, label) in generator.radio_choice_suggestions() {
+                        div {
+                            input(type = "checkbox", id = &key, name = "choices", value = &key);
+                            label(for = &key) : label;
+                        }
+                    }
+                }
+            }
         }, vec![], "Generate Practice Seed"),
         _ if is_ootr && data.single_settings.is_some() => full_form(
             form_uri,
@@ -5387,8 +5399,18 @@ pub(crate) async fn practice_seed_post(
     match seed_gen_type.ok_or(StatusOrError::Status(Status::NotFound))? {
         SeedGenType::Mmr { config } => {
             transaction.commit().await?;
-            let rx = Arc::clone(global_state.inner()).roll_mmr_seed(config, crate::mmr_web::Purpose::Practice, None, None, UnlockSpoilerLog::Never);
-            racetime_bot::start_practice_seed_roll(Arc::clone(&seeds), job_id, rx, vec![]);
+            let choices = form.choices.iter().map(|key| (key.clone(), true)).collect();
+            let choice_labels = form.choices.iter().map(|key| {
+                config.choices.choices.get(key).and_then(|entry| entry.get("label"))
+                    .and_then(serde_json::Value::as_str).unwrap_or(key).to_owned()
+            }).collect();
+            match config.settings_for(&choices) {
+                Ok(settings) => {
+                    let rx = Arc::clone(global_state.inner()).roll_mmr_seed(settings, crate::mmr_web::Purpose::Practice, None, None, UnlockSpoilerLog::Never, None);
+                    racetime_bot::start_practice_seed_roll(Arc::clone(&seeds), job_id, rx, choice_labels);
+                }
+                Err(error) => seeds.write().await.finish(job_id, PracticeSeedStatus::Error(error)),
+            }
         }
         SeedGenType::TWWR { .. } => {
             let settings_string = data

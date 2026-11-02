@@ -151,7 +151,7 @@ pub(crate) enum SeedGenType {
     },
     OotrTriforceBlitz,
     OotrRsl,
-    Mmr { config: crate::mmr_web::Settings },
+    Mmr { config: crate::mmr_web::EventConfig },
 }
 
 /// Source/method used to produce ALTTPR Door Rando settings.
@@ -261,7 +261,7 @@ impl SeedGenType {
             }
             "ootr_tfb" => Some(Self::OotrTriforceBlitz),
             "ootr_rsl" => Some(Self::OotrRsl),
-            "mmr" => Some(Self::Mmr { config: crate::mmr_web::Settings::parse(seed_config?).ok()? }),
+            "mmr" => Some(Self::Mmr { config: crate::mmr_web::EventConfig::parse(seed_config?).ok()? }),
             other => {
                 eprintln!("unknown seed_gen_type: {other}");
                 None
@@ -319,14 +319,7 @@ impl SeedGenType {
     /// Returns (key, label) pairs for all choice keys defined in the seed config,
     /// sorted alphabetically. Used to suggest radioChoice entries on the enter-flow page.
     pub(crate) fn radio_choice_suggestions(&self) -> Vec<(String, String)> {
-        let config = match self {
-            Self::Owr { config, .. } => config,
-            Self::AlttprDoorRando {
-                source: AlttprDrSource::MutualChoices { config },
-                ..
-            } => config,
-            _ => return vec![],
-        };
+        let Some(config) = super::choice_resolution::config(self) else { return vec![] };
         let Some(obj) = config.choices.as_object() else {
             return vec![];
         };
@@ -344,13 +337,7 @@ impl SeedGenType {
     /// Whether this seed gen type has per-race player-chosen settings that should
     /// be shown as a column in the race table.
     pub(crate) fn has_display_settings(&self) -> bool {
-        matches!(
-            self,
-            Self::AlttprDoorRando {
-                source: AlttprDrSource::MutualChoices { .. },
-                ..
-            } | Self::Owr { .. }
-        )
+        super::choice_resolution::config(self).is_some()
     }
 
     pub(crate) async fn settings_display_str(
@@ -359,14 +346,7 @@ impl SeedGenType {
         race: &Race,
         labels: &[(&str, String)],
     ) -> Option<String> {
-        let config = match self {
-            Self::AlttprDoorRando {
-                source: AlttprDrSource::MutualChoices { config },
-                ..
-            }
-            | Self::Owr { config, .. } => config,
-            _ => return None,
-        };
+        let config = super::choice_resolution::config(self)?;
         let config = config.for_display(race, race.draft.is_some());
         if let Some(snapshot) = super::choice_resolution::read(&mut *executor, race.id).await.ok().flatten() {
             // This table is public, including while another async part is still pending.
@@ -403,7 +383,7 @@ impl SeedGenType {
                     Some(seed_settings)
                 }
             }
-            Self::Owr { .. } => Some(seed_settings),
+            Self::Owr { .. } | Self::Mmr { .. } => Some(seed_settings),
             _ => None,
         }
     }

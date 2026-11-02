@@ -36,6 +36,7 @@ pub(crate) fn config(kind: &SeedGenType) -> Option<&OwrEventConfig> {
             source: AlttprDrSource::MutualChoices { config },
             ..
         } => Some(config),
+        SeedGenType::Mmr { config } => Some(&config.choices),
         _ => None,
     }
 }
