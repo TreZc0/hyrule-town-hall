@@ -55,7 +55,7 @@ interim = { version = "0.2.1", features = ["chrono_0_4"] }
 if_chain = "1"
 image = { version = "0.25", default-features = false, features = ["png"] }
 itertools = "0.14"
-jiff = "0.2.39"
+jiff = { version = "0.2.39", features = ["tzdb-bundle-always"] }
 kuchiki = "0.8"
 lazy-regex = "3"
 log = "0.4"

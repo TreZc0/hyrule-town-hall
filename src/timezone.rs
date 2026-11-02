@@ -1,5 +1,6 @@
 //! Jiff time-zone rules behind the Chrono timestamps used by our integrations.
-//! Named zones are loaded from Jiff's database (system tzdata on Unix). 
+//! Prefer system tzdata, with bundled rules for missing zones and aliases.
+//! The registry is a process-wide snapshot; restart after updating tzdata.
 
 use {
     chrono::{
@@ -8,23 +9,35 @@ use {
     },
     jiff::{
         Timestamp, civil,
-        tz::{AmbiguousOffset, TimeZone as JiffTimeZone},
+        tz::{AmbiguousOffset, TimeZone as JiffTimeZone, TimeZoneDatabase},
     },
     std::{collections::BTreeMap, fmt, str::FromStr, sync::LazyLock},
 };
 
-static ZONES: LazyLock<BTreeMap<String, JiffTimeZone>> = LazyLock::new(|| {
-    let database = jiff::tz::db();
-    database
+static ZONES: LazyLock<BTreeMap<String, JiffTimeZone>> =
+    LazyLock::new(|| load_zones(jiff::tz::db()));
+
+fn load_zones(system: &TimeZoneDatabase) -> BTreeMap<String, JiffTimeZone> {
+    // A service's filesystem may contain no tzdata, or omit backward aliases.
+    // Jiff chooses one database, so enabling its bundle alone does not fill
+    // holes in a nonempty system database. Merge the names explicitly.
+    let bundled = TimeZoneDatabase::bundled();
+    let mut zones: BTreeMap<_, _> = bundled
         .available()
         .map(|name| {
-            let zone = database
+            let zone = bundled
                 .get(name.as_str())
-                .expect("could not load an installed time zone; check tzdata");
+                .expect("invalid bundled time-zone data");
             (name.to_string(), zone)
         })
-        .collect()
-});
+        .collect();
+    for name in system.available() {
+        if let Ok(zone) = system.get(name.as_str()) {
+            zones.insert(name.to_string(), zone);
+        }
+    }
+    zones
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Tz {
@@ -159,6 +172,52 @@ impl TimeZone for Tz {
 mod tests {
     use super::*;
     use chrono::{DateTime, Utc};
+
+    #[test]
+    fn missing_system_tzdata_keeps_stored_zones_and_current_vancouver_rules() {
+        let zones = load_zones(&TimeZoneDatabase::none());
+        let instant: Timestamp = "2026-11-02T12:00:00Z".parse().unwrap();
+        for name in [
+            "UTC",
+            "Etc/UTC",
+            "GMT",
+            "US/Eastern",
+            "Europe/Berlin",
+            "America/Vancouver",
+        ] {
+            assert!(zones.contains_key(name), "missing stored zone {name}");
+        }
+        assert_eq!(zones["Etc/UTC"].to_offset(instant).seconds(), 0);
+        assert_eq!(
+            zones["America/Vancouver"].to_offset(instant).seconds(),
+            -7 * 3600
+        );
+        assert!(!zones.contains_key("not/a/zone"));
+    }
+
+    #[test]
+    fn partial_system_database_overrides_bundle_without_losing_other_zones() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::create_dir(directory.path().join("Europe")).unwrap();
+        // Minimal TZif v1 file: no transitions, one fixed +01:30 offset.
+        let mut tzif = vec![0; 44];
+        tzif[..4].copy_from_slice(b"TZif");
+        tzif[39] = 1; // typecnt
+        tzif[43] = 4; // charcnt
+        tzif.extend_from_slice(&5400_i32.to_be_bytes());
+        tzif.extend_from_slice(b"\0\0TST\0");
+        std::fs::write(directory.path().join("Europe/Berlin"), &tzif).unwrap();
+        let system = TimeZoneDatabase::from_dir(directory.path()).unwrap();
+        let instant: Timestamp = "2026-11-02T12:00:00Z".parse().unwrap();
+        let zones = load_zones(&system);
+        assert_eq!(zones["Europe/Berlin"].to_offset(instant).seconds(), 5400);
+        assert_eq!(zones["Etc/UTC"].to_offset(instant).seconds(), 0);
+        assert_eq!(
+            zones["America/Vancouver"].to_offset(instant).seconds(),
+            -7 * 3600
+        );
+        assert!(zones.contains_key("US/Eastern"));
+    }
 
     #[test]
     fn vancouver_keeps_daylight_offset_from_2026_onward() {

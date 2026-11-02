@@ -127,11 +127,11 @@ impl User {
                 (None, None) => None,
                 (_, _) => unreachable!("database constraint"),
             },
-            timezone: timezone
-                .as_deref()
-                .map(Tz::from_str)
-                .transpose()
-                .expect("invalid timezone in database"),
+            timezone: timezone.as_deref().map(|name| {
+                name.parse::<Tz>().unwrap_or_else(|error| {
+                    panic!("invalid timezone in database: {name:?}: {error}")
+                })
+            }),
             id,
             display_source,
             challonge_id,
