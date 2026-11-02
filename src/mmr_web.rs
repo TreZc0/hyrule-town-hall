@@ -109,7 +109,9 @@ impl Settings {
             {
                 return Err("MMR multiworld is not supported.".into());
             }
-            if !key.contains('.') || value.is_object() {
+            // The API flattens setting names, not their values: exports include
+            // dictionaries (e.g. TrapWeights) and arrays of objects.
+            if !key.contains('.') {
                 return Err(format!(
                     "MMR setting {key} must use the flat API settings format."
                 ));
@@ -662,6 +664,7 @@ mod tests {
             ("GameplaySettings.MultiWorld", json!(true)),
             ("world_count", json!(2)),
             ("seed", json!("fixed")),
+            ("GameplaySettings", json!({"LogicMode": "Casual"})),
         ] {
             let mut config = json!(settings());
             config["settings"][key] = value;
