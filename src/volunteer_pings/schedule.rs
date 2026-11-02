@@ -110,11 +110,7 @@ pub(crate) fn scheduled_fields(prefix: &str) -> RawHtml<String> {
     let time_id = format!("{prefix}_time");
     let day_id = format!("{prefix}_dow");
     let hours_id = format!("{prefix}_cutoff_hours");
-    let mut timezones = chrono_tz::TZ_VARIANTS
-        .iter()
-        .copied()
-        .map(Tz::name)
-        .collect::<Vec<_>>();
+    let mut timezones = Tz::all().map(Tz::name).collect::<Vec<_>>();
     timezones.sort_unstable();
     html! {
         div(data_ping_form_scheduled = &type_id) {
@@ -200,6 +196,14 @@ mod tests {
         assert!(!repeated.should_fire(instant("2026-11-01T06:30:00Z"), None));
         let skipped = settings("02:30", "24");
         assert!(skipped.should_fire(instant("2026-03-08T07:00:00Z"), None));
+    }
+
+    #[test]
+    fn vancouver_daily_ping_does_not_fall_back_in_november() {
+        let schedule =
+            ScheduledSettings::parse("daily", "18:00", "", "America/Vancouver", "24").unwrap();
+        assert!(schedule.should_fire(instant("2026-11-03T01:00:00Z"), None));
+        assert!(!schedule.should_fire(instant("2026-11-03T02:00:00Z"), None));
     }
 
     #[test]

@@ -282,7 +282,7 @@ async fn mutate(
 }
 
 fn crew_time(time: DateTime<Utc>) -> String {
-    time.with_timezone(&America::New_York)
+    time.with_timezone(&Tz::get("America/New_York"))
         .format("%b%d %Y %-I:%M%P")
         .to_string()
         .to_lowercase()
