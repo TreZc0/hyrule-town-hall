@@ -319,9 +319,17 @@ impl TypeMapKey for Element {
 
 #[async_trait]
 trait GenericInteraction {
+    fn interaction_id(&self) -> InteractionId;
+    fn description(&self) -> String;
     fn channel_id(&self) -> ChannelId;
     fn guild_id(&self) -> Option<GuildId>;
     fn user_id(&self) -> UserId;
+    async fn create_followup(
+        &self,
+        cache_http: impl CacheHttp,
+        builder: CreateInteractionResponseFollowup,
+    ) -> serenity::Result<Message>;
+    async fn delete_response(&self, cache_http: impl CacheHttp) -> serenity::Result<()>;
     async fn create_response(
         &self,
         cache_http: impl CacheHttp,
@@ -336,6 +344,12 @@ trait GenericInteraction {
 
 #[async_trait]
 impl GenericInteraction for CommandInteraction {
+    fn interaction_id(&self) -> InteractionId {
+        self.id
+    }
+    fn description(&self) -> String {
+        format!("slash command /{}", self.data.name)
+    }
     fn channel_id(&self) -> ChannelId {
         self.channel_id
     }
@@ -346,6 +360,16 @@ impl GenericInteraction for CommandInteraction {
         self.user.id
     }
 
+    async fn create_followup(
+        &self,
+        cache_http: impl CacheHttp,
+        builder: CreateInteractionResponseFollowup,
+    ) -> serenity::Result<Message> {
+        self.create_followup(cache_http, builder).await
+    }
+    async fn delete_response(&self, cache_http: impl CacheHttp) -> serenity::Result<()> {
+        self.delete_response(cache_http.http()).await
+    }
     async fn create_response(
         &self,
         cache_http: impl CacheHttp,
@@ -364,6 +388,12 @@ impl GenericInteraction for CommandInteraction {
 
 #[async_trait]
 impl GenericInteraction for ComponentInteraction {
+    fn interaction_id(&self) -> InteractionId {
+        self.id
+    }
+    fn description(&self) -> String {
+        format!("component {}", self.data.custom_id)
+    }
     fn channel_id(&self) -> ChannelId {
         self.channel_id
     }
@@ -374,6 +404,16 @@ impl GenericInteraction for ComponentInteraction {
         self.user.id
     }
 
+    async fn create_followup(
+        &self,
+        cache_http: impl CacheHttp,
+        builder: CreateInteractionResponseFollowup,
+    ) -> serenity::Result<Message> {
+        self.create_followup(cache_http, builder).await
+    }
+    async fn delete_response(&self, cache_http: impl CacheHttp) -> serenity::Result<()> {
+        self.delete_response(cache_http.http()).await
+    }
     async fn create_response(
         &self,
         cache_http: impl CacheHttp,
@@ -390,11 +430,49 @@ impl GenericInteraction for ComponentInteraction {
     }
 }
 
+// Acknowledge before any database/API work. Snowflake age includes delivery delays;
+// elapsed time measures how long Discord takes to accept the acknowledgement.
+async fn defer_interaction(
+    ctx: impl CacheHttp + Copy,
+    interaction: &impl GenericInteraction,
+    update_message: bool,
+) -> serenity::Result<()> {
+    let id = interaction.interaction_id();
+    let age_ms = interaction_age_ms(id, Utc::now().timestamp_millis());
+    let started = Instant::now();
+    let response = if update_message {
+        CreateInteractionResponse::Acknowledge
+    } else {
+        CreateInteractionResponse::Defer(CreateInteractionResponseMessage::new().ephemeral(true))
+    };
+    let result = interaction.create_response(ctx, response).await;
+    let elapsed_ms = started.elapsed().as_millis();
+    if result.is_err() || i128::from(age_ms) + elapsed_ms as i128 >= 2_000 {
+        log::warn!(
+            "Interaction acknowledgement: id={id}, {}, guild={:?}, age_at_ack_ms={age_ms}, ack_duration_ms={elapsed_ms}, succeeded={}",
+            interaction.description(),
+            interaction.guild_id(),
+            result.is_ok(),
+        );
+    } else {
+        log::debug!(
+            "Interaction acknowledged: id={id}, {}, age_at_ack_ms={age_ms}, ack_duration_ms={elapsed_ms}",
+            interaction.description(),
+        );
+    }
+    result
+}
+
+fn interaction_age_ms(id: InteractionId, now_ms: i64) -> i64 {
+    // Discord's snowflake epoch is 2015-01-01; retain millisecond precision.
+    now_ms - ((id.get() >> 22) as i64 + 1_420_070_400_000)
+}
+
 // Complete the private defer before posting a public followup: Discord otherwise
 // treats the first followup as the deferred reply and keeps it ephemeral.
-async fn finish_async_schedule_response(
-    ctx: &DiscordCtx,
-    interaction: &CommandInteraction,
+async fn finish_deferred_public_response(
+    ctx: impl CacheHttp + Copy,
+    interaction: &impl GenericInteraction,
     public_content: String,
     private_content: Option<String>,
 ) -> serenity::Result<()> {
@@ -1422,7 +1500,12 @@ async fn draft_response(
 ) -> serenity::Result<()> {
     if already_deferred {
         interaction
-            .edit_response(ctx, EditInteractionResponse::new().content(content))
+            .edit_response(
+                ctx,
+                EditInteractionResponse::new()
+                    .content(content)
+                    .components(vec![]),
+            )
             .await?;
     } else {
         interaction
@@ -1543,8 +1626,9 @@ async fn send_draft_settings_page(
     action: &str,
     page: usize,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    defer_interaction(ctx, interaction, false).await?;
     let Some((event, mut race, draft_kind, mut msg_ctx)) =
-        check_draft_permissions(ctx, interaction, false).await?
+        check_draft_permissions(ctx, interaction, true).await?
     else {
         return Ok(());
     };
@@ -1576,16 +1660,7 @@ async fn send_draft_settings_page(
         {
             Ok(_) => unreachable!(),
             Err(error_msg) => {
-                interaction
-                    .create_response(
-                        ctx,
-                        CreateInteractionResponse::Message(
-                            CreateInteractionResponseMessage::new()
-                                .ephemeral(true)
-                                .content(error_msg),
-                        ),
-                    )
-                    .await?;
+                draft_response(ctx, interaction, error_msg, true).await?;
                 msg_ctx.into_transaction().rollback().await?;
                 return Ok(());
             }
@@ -1608,9 +1683,7 @@ async fn send_draft_settings_page(
                     format!("Select the setting to {}:", if rsl { "block" } else { action })
                 }
             };
-            let mut response_msg = CreateInteractionResponseMessage::new()
-                .ephemeral(true)
-                .content(response_content);
+            let mut response_msg = EditInteractionResponse::new().content(response_content);
             if available_settings.num_settings() <= BUTTONS_PER_PAGE {
                 for draft::BanSetting { name, display, .. } in available_settings.all() {
                     response_msg = response_msg.button(
@@ -1647,9 +1720,7 @@ async fn send_draft_settings_page(
                     );
                 }
             }
-            interaction
-                .create_response(ctx, CreateInteractionResponse::Message(response_msg))
-                .await?;
+            interaction.edit_response(ctx, response_msg).await?;
         }
         draft::StepKind::Pick {
             available_choices,
@@ -1669,9 +1740,7 @@ async fn send_draft_settings_page(
                     format!("Select the setting to {}:", if rsl { "ban" } else { action })
                 }
             };
-            let mut response_msg = CreateInteractionResponseMessage::new()
-                .ephemeral(true)
-                .content(response_content);
+            let mut response_msg = EditInteractionResponse::new().content(response_content);
             if available_choices.num_settings() <= BUTTONS_PER_PAGE {
                 for draft::DraftSetting { name, display, .. } in available_choices.all() {
                     response_msg = response_msg.button(
@@ -1707,9 +1776,7 @@ async fn send_draft_settings_page(
                     );
                 }
             }
-            interaction
-                .create_response(ctx, CreateInteractionResponse::Message(response_msg))
-                .await?;
+            interaction.edit_response(ctx, response_msg).await?;
         }
         draft::StepKind::PickPreset {
             available_presets,
@@ -1718,9 +1785,7 @@ async fn send_draft_settings_page(
             ..
         } => {
             let response_content = format!("Select the preset for Game {}:", game);
-            let mut response_msg = CreateInteractionResponseMessage::new()
-                .ephemeral(true)
-                .content(response_content);
+            let mut response_msg = EditInteractionResponse::new().content(response_content);
             for preset_opt in &available_presets {
                 response_msg = response_msg.button(
                     CreateButton::new(format!("preset_pick_{}", preset_opt.preset))
@@ -1734,9 +1799,7 @@ async fn send_draft_settings_page(
                         .style(ButtonStyle::Secondary),
                 );
             }
-            interaction
-                .create_response(ctx, CreateInteractionResponse::Message(response_msg))
-                .await?;
+            interaction.edit_response(ctx, response_msg).await?;
         }
     }
     msg_ctx.into_transaction().commit().await?;
@@ -1863,22 +1926,16 @@ async fn draft_action(
     interaction: &impl GenericInteraction,
     action: draft::Action,
     step_msg_id: Option<MessageId>,
+    already_deferred: bool,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let is_defer = matches!(action, draft::Action::Defer);
-    if is_defer {
-        // Acknowledge before database work and constructing the next team's prompt.
-        // Otherwise Discord can expire the interaction after the turn change is saved.
-        interaction
-            .create_response(
-                ctx,
-                CreateInteractionResponse::Defer(
-                    CreateInteractionResponseMessage::new().ephemeral(true),
-                ),
-            )
-            .await?;
+    if !already_deferred {
+        // Confirm dialogs are private and can be updated in place. The DEFER
+        // choice lives on the public step, so give it a separate private reply.
+        defer_interaction(ctx, interaction, step_msg_id.is_some() && !is_defer).await?;
     }
     let Some((event, mut race, draft_kind, mut msg_ctx)) =
-        check_draft_permissions(ctx, interaction, is_defer).await?
+        check_draft_permissions(ctx, interaction, true).await?
     else {
         return Ok(());
     };
@@ -1949,34 +2006,23 @@ async fn draft_action(
                 if is_defer {
                     draft_response(ctx, interaction, apply_response, true).await?;
                 } else {
-                    // Clear the ephemeral confirm dialog.
+                    // Clear the ephemeral confirm dialog after its deferred update.
                     interaction
-                        .create_response(
+                        .edit_response(
                             ctx,
-                            CreateInteractionResponse::UpdateMessage(
-                                CreateInteractionResponseMessage::new()
-                                    .content("✓")
-                                    .components(vec![]),
-                            ),
+                            EditInteractionResponse::new()
+                                .content("✓")
+                                .components(vec![]),
                         )
                         .await?;
                 }
             } else {
-                interaction
-                    .create_response(
-                        ctx,
-                        CreateInteractionResponse::Message(
-                            CreateInteractionResponseMessage::new()
-                                .ephemeral(false)
-                                .content(apply_response),
-                        ),
-                    )
-                    .await?;
+                finish_deferred_public_response(ctx, interaction, apply_response, None).await?;
                 interaction.channel_id().say(ctx, step.message).await?;
             }
         }
         Err(error_msg) => {
-            draft_response(ctx, interaction, error_msg, is_defer).await?;
+            draft_response(ctx, interaction, error_msg, true).await?;
             msg_ctx.into_transaction().rollback().await?;
         }
     }
@@ -2584,6 +2630,9 @@ pub(crate) fn configure_builder(
             Ok(())
         }))
         .on_interaction_create(|ctx, interaction| Box::pin(async move {
+            let handler_started = Instant::now();
+            let interaction_id = interaction.id();
+            let age_at_handler_ms = interaction_age_ms(interaction_id, Utc::now().timestamp_millis());
             let interaction_desc = match interaction {
                 Interaction::Command(cmd) => format!("slash command `/{}`{}", cmd.data.name, cmd.guild_id.map_or(String::new(), |g| format!(" in guild {g}"))),
                 Interaction::Component(comp) => format!("component `{}`{}", comp.data.custom_id, comp.guild_id.map_or(String::new(), |g| format!(" in guild {g}"))),
@@ -2657,7 +2706,8 @@ pub(crate) fn configure_builder(
                         } else if Some(interaction.data.id) == command_ids.draft || Some(interaction.data.id) == command_ids.pick {
                             send_draft_settings_page(ctx, interaction, "draft", 0).await?;
                         } else if Some(interaction.data.id) == command_ids.first {
-                              if let Some((_, mut race, draft_kind, msg_ctx)) = check_draft_permissions(ctx, interaction, false).await? {
+                            defer_interaction(ctx, interaction, false).await?;
+                            if let Some((_, mut race, draft_kind, msg_ctx)) = check_draft_permissions(ctx, interaction, true).await? {
                                 match draft_kind {
                                     draft::Kind::RslS7 => {
                                         let settings = &mut race.draft.as_mut().unwrap().settings;
@@ -2672,20 +2722,18 @@ pub(crate) fn configure_builder(
                                                 sqlx::query!("UPDATE races SET draft_state = $1 WHERE id = $2", Json(race.draft.as_ref().unwrap()) as _, race.id as _).execute(&mut *transaction).await?;
                                                 transaction.commit().await?;
                                             } else {
-                                                interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
-                                                    .ephemeral(true)
+                                                interaction.edit_response(ctx, EditInteractionResponse::new()
                                                     .content(MessageBuilder::default().push("Sorry, please specify the ").push_mono("lite").push(" parameter.").build())
-                                                )).await?;
+                                                ).await?;
                                                 transaction.rollback().await?;
                                                 return Ok(())
                                             }
                                         } else {
                                             if lite.is_some_and(identity) {
                                                 //TODO different error messages depending on which player(s) didn't opt into RSL-Lite
-                                                interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
-                                                    .ephemeral(true)
+                                                interaction.edit_response(ctx, EditInteractionResponse::new()
                                                     .content("Sorry, either you or your opponent didn't opt into RSL-Lite.")
-                                                )).await?;
+                                                ).await?;
                                                 return Ok(())
                                             }
                                         }
@@ -2703,30 +2751,28 @@ pub(crate) fn configure_builder(
                                                 sqlx::query!("UPDATE races SET draft_state = $1 WHERE id = $2", Json(race.draft.as_ref().unwrap()) as _, race.id as _).execute(&mut *transaction).await?;
                                                 transaction.commit().await?;
                                             } else {
-                                                interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
-                                                    .ephemeral(true)
+                                                interaction.edit_response(ctx, EditInteractionResponse::new()
                                                     .content("Désolé, veuillez entrer le nombre de donjons MQ d'abord.")
-                                                )).await?;
+                                                ).await?;
                                                 transaction.rollback().await?;
                                                 return Ok(())
                                             }
                                         } else {
                                             if mq.is_some_and(|mq| mq != 0) {
                                                 //TODO different error messages depending on which player(s) didn't opt into MQ
-                                                interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
-                                                    .ephemeral(true)
+                                                interaction.edit_response(ctx, EditInteractionResponse::new()
                                                     .content("Désolé, mais l'un d'entre vous n'a pas choisi les donjons MQ.")
-                                                )).await?;
+                                                ).await?;
                                                 return Ok(())
                                             }
                                         }
                                     }
                                     draft::Kind::S7 | draft::Kind::MultiworldS3 | draft::Kind::MultiworldS4 | draft::Kind::MultiworldS5 | draft::Kind::PickOnly { .. } | draft::Kind::BanPick { .. } | draft::Kind::BanOnly { .. } => {}
                                 }
-                                draft_action(ctx, interaction, draft::Action::GoFirst(true), None).await?;
+                                draft_action(ctx, interaction, draft::Action::GoFirst(true), None, true).await?;
                             }
                         } else if Some(interaction.data.id) == command_ids.no {
-                            draft_action(ctx, interaction, draft::Action::BooleanChoice(false), None).await?;
+                            draft_action(ctx, interaction, draft::Action::BooleanChoice(false), None, false).await?;
                         } else if interaction.data.id == command_ids.post_status {
                             if let Some((mut transaction, race, team)) = check_scheduling_thread_permissions(ctx, interaction, None, true, None, false, false, SchedulingRaceFilter::Upcoming).await? {
                                 let event = race.event(&mut transaction).await?;
@@ -2833,11 +2879,11 @@ pub(crate) fn configure_builder(
                         } else if interaction.data.id == command_ids.reset_async {
                             reset_async_command(ctx, interaction).await?;
                         } else if interaction.data.id == command_ids.reset_race {
+                            defer_interaction(ctx, interaction, false).await?;
                             let Some(_parent_channel) = interaction.channel.as_ref().and_then(|thread| thread.parent_id) else {
-                                interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
-                                    .ephemeral(true)
+                                interaction.edit_response(ctx, EditInteractionResponse::new()
                                     .content("Sorry, this command can only be used inside threads and forum posts.")
-                                )).await?;
+                                ).await?;
                                 return Ok(())
                             };
                             let mut transaction = ctx.data.read().await.get::<DbPool>().as_ref().expect("database connection pool missing from Discord context").begin().await?;
@@ -2864,10 +2910,9 @@ pub(crate) fn configure_builder(
                                 }
                             }
                             let Some(aspects_reset) = NEVec::try_from_vec(reset_draft.then_some("draft").into_iter().chain(reset_schedule.then_some("schedule")).collect_vec()) else {
-                                interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
-                                    .ephemeral(true)
+                                interaction.edit_response(ctx, EditInteractionResponse::new()
                                     .content("Please specify at least one thing to delete using the slash command's options.")
-                                )).await?;
+                                ).await?;
                                 return Ok(())
                             };
 
@@ -2880,10 +2925,9 @@ pub(crate) fn configure_builder(
                             if let Some(first_race) = races.first() {
                                 let event = first_race.event(&mut transaction).await?;
                                 if !event.organizers(&mut transaction).await?.into_iter().any(|organizer| organizer.discord.is_some_and(|discord| discord.id == interaction.user.id)) {
-                                    interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
-                                        .ephemeral(true)
+                                    interaction.edit_response(ctx, EditInteractionResponse::new()
                                         .content("Sorry, only event organizers can use this command.")
-                                    )).await?;
+                                    ).await?;
                                     return Ok(())
                                 }
 
@@ -2913,10 +2957,7 @@ pub(crate) fn configure_builder(
                                         }
 
                                         transaction.commit().await?;
-                                        interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
-                                            .ephemeral(false)
-                                            .content("Draft has been reset.")
-                                        )).await?;
+                                        finish_deferred_public_response(ctx, interaction, "Draft has been reset.".into(), None).await?;
                                         if let Some(thread_id) = scheduling_thread {
                                             thread_id.send_message(ctx, CreateMessage::new()
                                                 .content("Any participant may click **Start Draft** to start the draft.")
@@ -2924,23 +2965,21 @@ pub(crate) fn configure_builder(
                                             ).await?;
                                         }
                                     } else {
-                                        interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
-                                            .ephemeral(true)
+                                        interaction.edit_response(ctx, EditInteractionResponse::new()
                                             .content("Sorry, unable to reset draft for this race.")
-                                        )).await?;
+                                        ).await?;
                                         transaction.rollback().await?;
                                     }
                                 } else {
                                     match races.into_iter().at_most_one() {
                                         Ok(None) => {
-                                            interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
-                                                .ephemeral(true)
+                                            interaction.edit_response(ctx, EditInteractionResponse::new()
                                                 .content(if game.is_some() {
                                                     "Sorry, there don't seem to be any races with that game number associated with this thread."
                                                 } else {
                                                     "Sorry, this thread is not associated with any races."
                                                 })
-                                            )).await?;
+                                            ).await?;
                                             transaction.rollback().await?;
                                         }
                                         Ok(Some(race)) => {
@@ -3064,10 +3103,7 @@ pub(crate) fn configure_builder(
                                             }
                                         }
                                         let response_content = response_builder.build();
-                                        interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
-                                            .ephemeral(false)
-                                            .content(response_content)
-                                        )).await?;
+                                        finish_deferred_public_response(ctx, interaction, response_content, None).await?;
                                         if reset_draft && event.draft_kind().is_some_and(|k| k.uses_button_draft()) {
                                             if let Some(thread_id) = scheduling_thread {
                                                 thread_id.send_message(ctx, CreateMessage::new()
@@ -3078,19 +3114,17 @@ pub(crate) fn configure_builder(
                                         }
                                     }
                                         Err(_) => {
-                                            interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
-                                                .ephemeral(true)
+                                            interaction.edit_response(ctx, EditInteractionResponse::new()
                                                 .content("Sorry, this thread is associated with multiple races. Please specify the game number.")
-                                            )).await?;
+                                            ).await?;
                                             transaction.rollback().await?;
                                         }
                                     }
                                 }
                             } else {
-                                interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
-                                    .ephemeral(true)
+                                interaction.edit_response(ctx, EditInteractionResponse::new()
                                     .content("Sorry, this thread is not associated with any races.")
-                                )).await?;
+                                ).await?;
                                 transaction.rollback().await?;
                             }
                         } else if interaction.data.id == command_ids.restart_room {
@@ -3625,7 +3659,7 @@ pub(crate) fn configure_builder(
                                                             private_room_message = Some(msg);
                                                             true
                                                         } else {
-                                                            finish_async_schedule_response(ctx, interaction, msg, None).await?;
+                                                            finish_deferred_public_response(ctx, interaction, msg, None).await?;
                                                             false
                                                         }
                                                     } else {
@@ -3643,7 +3677,7 @@ pub(crate) fn configure_builder(
                                                         let response_content = response_content
                                                             .push(". The async thread will be opened momentarily.")
                                                             .build();
-                                                        finish_async_schedule_response(ctx, interaction, response_content, private_room_message).await?;
+                                                        finish_deferred_public_response(ctx, interaction, response_content, private_room_message).await?;
                                                     }
                                                     transaction.commit().await?;
                                                 });
@@ -3904,7 +3938,7 @@ pub(crate) fn configure_builder(
                                                 } else {
                                                     response_content
                                                 };
-                                                finish_async_schedule_response(ctx, interaction, response_content, None).await?;
+                                                finish_deferred_public_response(ctx, interaction, response_content, None).await?;
                                             }
                                         }
                                     } else {
@@ -4094,7 +4128,8 @@ pub(crate) fn configure_builder(
                                 }
                             }
                         } else if Some(interaction.data.id) == command_ids.second {
-                            if let Some((_, mut race, draft_kind, msg_ctx)) = check_draft_permissions(ctx, interaction, false).await? {
+                            defer_interaction(ctx, interaction, false).await?;
+                            if let Some((_, mut race, draft_kind, msg_ctx)) = check_draft_permissions(ctx, interaction, true).await? {
                                 match draft_kind {
                                     draft::Kind::RslS7 => {
                                         let settings = &mut race.draft.as_mut().unwrap().settings;
@@ -4109,20 +4144,18 @@ pub(crate) fn configure_builder(
                                                 sqlx::query!("UPDATE races SET draft_state = $1 WHERE id = $2", Json(race.draft.as_ref().unwrap()) as _, race.id as _).execute(&mut *transaction).await?;
                                                 transaction.commit().await?;
                                             } else {
-                                                interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
-                                                    .ephemeral(true)
+                                                interaction.edit_response(ctx, EditInteractionResponse::new()
                                                     .content(MessageBuilder::default().push("Sorry, please specify the ").push_mono("lite").push(" parameter.").build())
-                                                )).await?;
+                                                ).await?;
                                                 transaction.rollback().await?;
                                                 return Ok(())
                                             }
                                         } else {
                                             if lite.is_some_and(identity) {
                                                 //TODO different error messages depending on which player(s) didn't opt into RSL-Lite
-                                                interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
-                                                    .ephemeral(true)
+                                                interaction.edit_response(ctx, EditInteractionResponse::new()
                                                     .content("Sorry, either you or your opponent didn't opt into RSL-Lite.")
-                                                )).await?;
+                                                ).await?;
                                                 return Ok(())
                                             }
                                         }
@@ -4140,30 +4173,28 @@ pub(crate) fn configure_builder(
                                                 sqlx::query!("UPDATE races SET draft_state = $1 WHERE id = $2", Json(race.draft.as_ref().unwrap()) as _, race.id as _).execute(&mut *transaction).await?;
                                                 transaction.commit().await?;
                                             } else {
-                                                interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
-                                                    .ephemeral(true)
+                                                interaction.edit_response(ctx, EditInteractionResponse::new()
                                                     .content("Désolé, veuillez entrer le nombre de donjons MQ d'abord.")
-                                                )).await?;
+                                                ).await?;
                                                 transaction.rollback().await?;
                                                 return Ok(())
                                             }
                                         } else {
                                             if mq.is_some_and(|mq| mq != 0) {
                                                 //TODO different error messages depending on which player(s) didn't opt into MQ
-                                                interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
-                                                    .ephemeral(true)
+                                                interaction.edit_response(ctx, EditInteractionResponse::new()
                                                     .content("Désolé, mais l'un d'entre vous n'a pas choisi les donjons MQ.")
-                                                )).await?;
+                                                ).await?;
                                                 return Ok(())
                                             }
                                         }
                                     }
                                     draft::Kind::S7 | draft::Kind::MultiworldS3 | draft::Kind::MultiworldS4 | draft::Kind::MultiworldS5 | draft::Kind::PickOnly { .. } | draft::Kind::BanPick { .. } | draft::Kind::BanOnly { .. } => {}
                                 }
-                                draft_action(ctx, interaction, draft::Action::GoFirst(false), None).await?;
+                                draft_action(ctx, interaction, draft::Action::GoFirst(false), None, true).await?;
                             }
                         } else if Some(interaction.data.id) == command_ids.skip {
-                            draft_action(ctx, interaction, draft::Action::Skip, None).await?;
+                            draft_action(ctx, interaction, draft::Action::Skip, None, false).await?;
                         } else if interaction.data.id == command_ids.status {
                             if let Some((mut transaction, race, team)) = check_scheduling_thread_permissions(ctx, interaction, None, true, None, false, true, SchedulingRaceFilter::Upcoming).await? {
                                 let event = race.event(&mut transaction).await?;
@@ -4241,7 +4272,7 @@ pub(crate) fn configure_builder(
                                 .button(CreateButton::new("watchrole_party").label("watch party watcher"))
                             )).await?;
                         } else if Some(interaction.data.id) == command_ids.yes {
-                            draft_action(ctx, interaction, draft::Action::BooleanChoice(true), None).await?;
+                            draft_action(ctx, interaction, draft::Action::BooleanChoice(true), None, false).await?;
                         } else {
                             panic!("unexpected slash command")
                         }
@@ -4372,11 +4403,12 @@ pub(crate) fn configure_builder(
                     custom_id => if let Some(page) = custom_id.strip_prefix("ban_page_") {
                         send_draft_settings_page(ctx, interaction, "ban", page.parse().unwrap()).await?;
                     } else if let Some(setting) = custom_id.strip_prefix("ban_setting_") {
-                        draft_action(ctx, interaction, draft::Action::Ban { setting: setting.to_owned() }, None).await?;
+                        draft_action(ctx, interaction, draft::Action::Ban { setting: setting.to_owned() }, None, false).await?;
                     } else if let Some(page) = custom_id.strip_prefix("draft_page_") {
                         send_draft_settings_page(ctx, interaction, "draft", page.parse().unwrap()).await?;
                     } else if let Some(setting) = custom_id.strip_prefix("draft_setting_") {
-                        let Some((event, mut race, draft_kind, mut msg_ctx)) = check_draft_permissions(ctx, interaction, false).await? else { return Ok(()) };
+                        defer_interaction(ctx, interaction, false).await?;
+                        let Some((event, mut race, draft_kind, mut msg_ctx)) = check_draft_permissions(ctx, interaction, true).await? else { return Ok(()) };
                         match race.draft.as_ref().unwrap().next_step(&draft_kind, race.game, &mut msg_ctx).await?.kind {
                             draft::StepKind::Ban { available_settings, .. } if available_settings.get(setting).is_some() => {
                                 let setting = available_settings.get(setting).unwrap(); // `if let` guards are experimental
@@ -4386,19 +4418,18 @@ pub(crate) fn configure_builder(
                                 } else {
                                     format!("Select the value for the {} setting:", setting.display)
                                 };
-                                interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
-                                    .ephemeral(true)
+                                interaction.edit_response(ctx, EditInteractionResponse::new()
                                     .content(response_content)
                                     .button(CreateButton::new(format!("draft_option_{}__{}", setting.name, setting.default)).label(setting.default_display))
                                     .button(CreateButton::new("draft_page_0").label(if let French = event.language { "Retour" } else { "Back" }).style(ButtonStyle::Secondary)) //TODO remember page?
-                                )).await?;
+                                ).await?;
                             }
                             draft::StepKind::Pick { available_choices, .. } if available_choices.get(setting).is_some() => {
                                 let setting = available_choices.get(setting).unwrap(); // `if let` guards are experimental
                                 // For simple mode picks (like AlttprDe9) where there's only one option matching the setting name, skip the "select value" dialog and apply directly
                                 if setting.options.len() == 1 && setting.options[0].name == setting.name {
                                     drop(msg_ctx);
-                                    draft_action(ctx, interaction, draft::Action::Pick { setting: setting.name.to_owned(), value: setting.name.to_owned() }, None).await?;
+                                    draft_action(ctx, interaction, draft::Action::Pick { setting: setting.name.to_owned(), value: setting.name.to_owned() }, None, true).await?;
                                 } else {
                                     msg_ctx.into_transaction().commit().await?;
                                     let response_content = if let French = event.language {
@@ -4406,14 +4437,13 @@ pub(crate) fn configure_builder(
                                     } else {
                                         format!("Select the value for the {} setting:", setting.display)
                                     };
-                                    let mut response_msg = CreateInteractionResponseMessage::new()
-                                        .ephemeral(true)
+                                    let mut response_msg = EditInteractionResponse::new()
                                         .content(response_content);
                                     for option in setting.options {
                                         response_msg = response_msg.button(CreateButton::new(format!("draft_option_{}__{}", setting.name, option.name)).label(option.display));
                                     }
                                     response_msg = response_msg.button(CreateButton::new("draft_page_0").label(if let French = event.language { "Retour" } else { "Back" }).style(ButtonStyle::Secondary)); //TODO remember page?
-                                    interaction.create_response(ctx, CreateInteractionResponse::Message(response_msg)).await?;
+                                    interaction.edit_response(ctx, response_msg).await?;
                                 }
                             }
                             | draft::StepKind::GoFirst
@@ -4426,21 +4456,18 @@ pub(crate) fn configure_builder(
                                 => match race.draft.as_mut().unwrap().apply(&draft_kind, race.game, &mut msg_ctx, draft::Action::Pick { setting: format!("@placeholder"), value: format!("@placeholder") }).await? {
                                     Ok(_) => unreachable!(),
                                     Err(error_msg) => {
-                                        interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
-                                            .ephemeral(true)
+                                        interaction.edit_response(ctx, EditInteractionResponse::new()
                                             .content(error_msg)
-                                        )).await?;
+                                        ).await?;
                                         msg_ctx.into_transaction().rollback().await?;
                                     }
                                 },
                         }
                     } else if let Some((setting, value)) = custom_id.strip_prefix("draft_option_").and_then(|setting_value| setting_value.split_once("__")) {
-                        draft_action(ctx, interaction, draft::Action::Pick { setting: setting.to_owned(), value: value.to_owned() }, None).await?;
+                        draft_action(ctx, interaction, draft::Action::Pick { setting: setting.to_owned(), value: value.to_owned() }, None, false).await?;
                     } else if custom_id == "draft_start" || custom_id == "draft_resume" {
                         let is_resume = custom_id == "draft_resume";
-                        interaction.create_response(ctx, CreateInteractionResponse::Defer(
-                            CreateInteractionResponseMessage::new().ephemeral(true),
-                        )).await?;
+                        defer_interaction(ctx, interaction, false).await?;
                         let Some((mut transaction, race, team)) = check_scheduling_thread_permissions(ctx, interaction, None, false, None, true, is_resume, SchedulingRaceFilter::Upcoming).await? else { return Ok(()) };
                         if team.is_none() {
                             draft_response(ctx, interaction, "Sorry, only participants in this race can start or resume the draft.", true).await?;
@@ -4468,30 +4495,30 @@ pub(crate) fn configure_builder(
                             draft_response(ctx, interaction, "Posted the current draft step in this thread.", true).await?;
                         }
                     } else if custom_id == "draft_defer" {
-                        draft_action(ctx, interaction, draft::Action::Defer, Some(interaction.message.id)).await?;
+                        draft_action(ctx, interaction, draft::Action::Defer, Some(interaction.message.id), false).await?;
                     } else if let Some(preset) = custom_id.strip_prefix("draft_ban_preview_") {
-                        let Some((_, _, draft_kind, msg_ctx)) = check_draft_permissions(ctx, interaction, false).await? else { return Ok(()) };
+                        defer_interaction(ctx, interaction, false).await?;
+                        let Some((_, _, draft_kind, msg_ctx)) = check_draft_permissions(ctx, interaction, true).await? else { return Ok(()) };
                         msg_ctx.into_transaction().rollback().await?;
                         let display = draft_kind.preset_display_name(preset).unwrap_or(preset);
                         let step_msg_id = interaction.message.id;
-                        interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
-                            .ephemeral(true)
+                        interaction.edit_response(ctx, EditInteractionResponse::new()
                             .content(format!("Confirm banning **{}**?", display))
                             .button(CreateButton::new(format!("btn_ban_{step_msg_id}_{preset}")).label("Confirm").style(ButtonStyle::Danger))
                             .button(CreateButton::new("draft_cancel").label("Cancel").style(ButtonStyle::Secondary))
-                        )).await?;
+                        ).await?;
                     } else if let Some(params) = custom_id.strip_prefix("draft_pick_preview_") {
+                        defer_interaction(ctx, interaction, false).await?;
                         if let Some((game, preset)) = params.split_once('_') {
-                            let Some((_, _, draft_kind, msg_ctx)) = check_draft_permissions(ctx, interaction, false).await? else { return Ok(()) };
+                            let Some((_, _, draft_kind, msg_ctx)) = check_draft_permissions(ctx, interaction, true).await? else { return Ok(()) };
                             msg_ctx.into_transaction().rollback().await?;
                             let display = draft_kind.preset_display_name(preset).unwrap_or(preset);
                             let step_msg_id = interaction.message.id;
-                            interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
-                                .ephemeral(true)
+                            interaction.edit_response(ctx, EditInteractionResponse::new()
                                 .content(format!("Confirm picking **{}** for Game {}?", display, game))
                                 .button(CreateButton::new(format!("btn_pick_{step_msg_id}_{preset}")).label("Confirm").style(ButtonStyle::Primary))
                                 .button(CreateButton::new("draft_cancel").label("Cancel").style(ButtonStyle::Secondary))
-                            )).await?;
+                            ).await?;
                         }
                     } else if custom_id == "draft_cancel" {
                         interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
@@ -4500,17 +4527,17 @@ pub(crate) fn configure_builder(
                     } else if let Some(rest) = custom_id.strip_prefix("btn_ban_") {
                         if let Some((msg_id_str, preset)) = rest.split_once('_') {
                             if let Ok(msg_id) = msg_id_str.parse::<u64>().map(MessageId::new) {
-                                draft_action(ctx, interaction, draft::Action::Ban { setting: preset.to_owned() }, Some(msg_id)).await?;
+                                draft_action(ctx, interaction, draft::Action::Ban { setting: preset.to_owned() }, Some(msg_id), false).await?;
                             }
                         }
                     } else if let Some(rest) = custom_id.strip_prefix("btn_pick_") {
                         if let Some((msg_id_str, preset)) = rest.split_once('_') {
                             if let Ok(msg_id) = msg_id_str.parse::<u64>().map(MessageId::new) {
-                                draft_action(ctx, interaction, draft::Action::Pick { setting: preset.to_owned(), value: preset.to_owned() }, Some(msg_id)).await?;
+                                draft_action(ctx, interaction, draft::Action::Pick { setting: preset.to_owned(), value: preset.to_owned() }, Some(msg_id), false).await?;
                             }
                         }
                     } else if let Some(preset) = custom_id.strip_prefix("preset_pick_") {
-                        draft_action(ctx, interaction, draft::Action::Pick { setting: preset.to_owned(), value: preset.to_owned() }, None).await?;
+                        draft_action(ctx, interaction, draft::Action::Pick { setting: preset.to_owned(), value: preset.to_owned() }, None, false).await?;
                     } else if let Some(speedgaming_id) = custom_id.strip_prefix("sgdisambig_") {
                         let (mut transaction, http_client) = {
                             let data = ctx.data.read().await;
@@ -5821,7 +5848,7 @@ pub(crate) fn configure_builder(
             }
             Ok(())
             }.await;
-            result.map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { format!("{interaction_desc}: {e}").into() })
+            result.map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { format!("{interaction_desc}: {e} (interaction_id={interaction_id}, age_at_handler_ms={age_at_handler_ms}, handler_duration_ms={})", handler_started.elapsed().as_millis()).into() })
         }))
         .on_voice_state_update(|ctx, _, new| Box::pin(async move {
             if let Some(source_channel) = new.channel_id {
