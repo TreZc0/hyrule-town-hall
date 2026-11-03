@@ -327,20 +327,21 @@ async fn generate_event_description(
 
 /// The same saved mode is rendered on initial creation and every later update.
 pub(crate) fn event_description(race: &Race, event_config: &EventData<'_>) -> String {
-    let mut desc = String::new();
-
-    // Add event name
-    desc.push_str(&format!("**{}**\n\n", event_config.display_name));
-
-    if let Some(mode) = race.completed_mode(event_config) {
-        desc.push_str(&MessageBuilder::default().push_safe(mode).build());
-        desc.push_str("\n\n");
+    // Keep race details together immediately below the name for Discord's preview.
+    let details = [
+        race.completed_mode(event_config),
+        race.phase.as_ref().map(|phase| format!("Phase: {phase}")),
+        race.round.as_ref().map(|round| format!("Round: {round}")),
+    ]
+    .into_iter()
+    .flatten()
+    .join(" · ");
+    let mut desc = format!("**{}**\n", event_config.display_name);
+    if !details.is_empty() {
+        desc.push_str(&MessageBuilder::default().push_safe(details).build());
+        desc.push('\n');
     }
-
-    // Add phase/round details
-    if let (Some(phase), Some(round)) = (&race.phase, &race.round) {
-        desc.push_str(&format!("Phase: {}\nRound: {}\n\n", phase, round));
-    }
+    desc.push('\n');
 
     // Add restream links if available
     let restream_links: Vec<String> = race

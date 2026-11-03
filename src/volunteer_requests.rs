@@ -1349,9 +1349,10 @@ mod tests {
             race.game = Some(game);
             let mode = ["Cabookey", "Inverted 2.0 with BK Shuffle", "McBoss"][(game - 1) as usize];
             let description = crate::discord_scheduled_events::event_description(&race, &event);
-            assert!(
-                description.contains(&format!("Mode: {mode}\n\nPhase: Groups\nRound: Round 1"))
-            );
+            assert!(description.starts_with(&format!(
+                "**{}**\nMode: {mode} · Phase: Groups · Round: Round 1\n\n",
+                event.display_name,
+            )));
             let need = RaceVolunteerNeed {
                 race: race.clone(),
                 matchup: "Player A vs Player B".into(),
