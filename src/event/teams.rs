@@ -393,7 +393,93 @@ pub(crate) async fn signups_sorted(
     let mut signups = match qualifier_kind {
         QualifierKind::Score(score_kind) => {
             let mut scores = HashMap::<_, Vec<(DateTime<Utc>, R64, RoundSource)>>::default();
-            for race in Race::for_event(transaction, &cache.http_client, data).await? {
+            let qualifier_races = Race::for_event(transaction, &cache.http_client, data).await?;
+            let async_results = sqlx::query!(r#"
+                    SELECT
+                        ap.player AS "player: Id<Users>",
+                        ap.time,
+                        ap.async_id, a.name,
+                        at.start_time,
+                        a.end_time AS async_end_time
+                    FROM async_players ap
+                    INNER JOIN team_members tm ON tm.member = ap.player
+                    INNER JOIN teams t ON t.id = tm.team AND t.series = $1 AND t.event = $2 AND NOT t.resigned
+                    INNER JOIN async_teams at ON at.team = t.id AND at.async_id = ap.async_id
+                    INNER JOIN asyncs a ON a.series = $1 AND a.event = $2 AND a.id = ap.async_id
+                    WHERE ap.series = $1 AND ap.event = $2
+                    AND a.kind = 'qualifier'
+                    AND at.submitted IS NOT NULL
+                "#, data.series as _, &data.event).fetch_all(&mut **transaction).await?;
+            // Eligibility uses live and async attempts together, including hidden results.
+            let eligible_par_times = if let QualifierScoreKind::TimeRelative(config) = score_kind
+                && !config.ineligible_players_count_towards_average
+            {
+                let mut results = Vec::new();
+                for race in &qualifier_races {
+                    if !race.is_qualifier {
+                        continue;
+                    }
+                    let Ok(room) = race.rooms().exactly_one() else {
+                        continue;
+                    };
+                    let room_data = cache.race_data(&room).await?;
+                    if room_data.hide_entrants
+                        || matches!(
+                            room_data.status.value,
+                            RaceStatusValue::Open | RaceStatusValue::Cancelled
+                        )
+                    {
+                        continue;
+                    }
+                    for entrant in &room_data.entrants {
+                        let user = MemberUser::from(
+                            entrant.user.clone().map(racetime::model::UserData::try_from).transpose()?,
+                        );
+                        let finish = match entrant.status.value {
+                            EntrantStatusValue::Requested => continue,
+                            EntrantStatusValue::Invited
+                            | EntrantStatusValue::NotReady
+                            | EntrantStatusValue::Ready
+                            | EntrantStatusValue::InProgress => {
+                                let Some(extrapolate_for) = worst_case_extrapolation else {
+                                    continue;
+                                };
+                                (user != *extrapolate_for).then(|| {
+                                    room_data.started_at
+                                        .and_then(|start| (now - start).to_std().ok())
+                                        .unwrap_or_default()
+                                })
+                            }
+                            EntrantStatusValue::Done => entrant.finish_time,
+                            EntrantStatusValue::Declined
+                            | EntrantStatusValue::Dnf
+                            | EntrantStatusValue::Dq => None,
+                        };
+                        results.push(super::scoring::ParResult {
+                            player: user,
+                            started_at: room_data.started_at.unwrap_or(now),
+                            round: (false, i64::from(race.id)),
+                            finish,
+                        });
+                    }
+                }
+                for row in &async_results {
+                    let user = User::from_id(&mut **transaction, row.player)
+                        .await?
+                        .expect("async player not found");
+                    results.push(super::scoring::ParResult {
+                        player: MemberUser::MidosHouse(user),
+                        started_at: row.start_time.unwrap_or(now),
+                        round: (true, row.async_id),
+                        finish: row.time.as_ref()
+                            .and_then(|time| decode_pginterval(time.clone()).ok()),
+                    });
+                }
+                Some(config.eligible_par_times(&results))
+            } else {
+                None
+            };
+            for race in qualifier_races {
                 if !race.is_qualifier {
                     continue;
                 }
@@ -415,7 +501,7 @@ pub(crate) async fn signups_sorted(
                                         QualifierScoreKind::TwwrMiniblins26 => 5000.0,
                                         QualifierScoreKind::TwwrMain => 2000.0,
                                         QualifierScoreKind::TimeRelative(config) => {
-                                            config.extrapolation_score
+                                            config.maximum.unwrap_or(config.extrapolation_score)
                                         }
                                     }
                                 }),
@@ -444,7 +530,7 @@ pub(crate) async fn signups_sorted(
                                         QualifierScoreKind::TwwrMiniblins26 => 5000.0,
                                         QualifierScoreKind::TwwrMain => 2000.0,
                                         QualifierScoreKind::TimeRelative(config) => {
-                                            config.extrapolation_score
+                                            config.maximum.unwrap_or(config.extrapolation_score)
                                         }
                                     }
                                 }),
@@ -471,7 +557,7 @@ pub(crate) async fn signups_sorted(
                                                 QualifierScoreKind::TwwrMiniblins26 => 5000.0,
                                                 QualifierScoreKind::TwwrMain => 2000.0,
                                                 QualifierScoreKind::TimeRelative(config) => {
-                                                    config.extrapolation_score
+                                                    config.maximum.unwrap_or(config.extrapolation_score)
                                                 }
                                             }
                                         }),
@@ -532,6 +618,11 @@ pub(crate) async fn signups_sorted(
                                 .iter()
                                 .filter_map(|entrant| entrant.finish_time)
                                 .collect_vec();
+                            let finish_times = eligible_par_times.as_ref()
+                                .map_or(finish_times, |times| {
+                                    times.get(&(false, i64::from(race.id)))
+                                        .cloned().unwrap_or_default()
+                                });
                             let num_finishers = finish_times.len();
                             let par_cutoff = match score_kind {
                                 QualifierScoreKind::Standard => 7u8,
@@ -553,6 +644,7 @@ pub(crate) async fn signups_sorted(
                             if worst_case_extrapolation.is_none()
                                 && room_data.status.value != RaceStatusValue::Finished
                                 && num_finishers < usize::from(par_cutoff)
+                                && eligible_par_times.is_none()
                             {
                                 continue; // scores are not yet accurate
                             }
@@ -720,23 +812,6 @@ pub(crate) async fn signups_sorted(
             }
             // Integrate async qualifier scores
             {
-                let async_results = sqlx::query!(r#"
-                    SELECT
-                        ap.player AS "player: Id<Users>",
-                        ap.time,
-                        ap.async_id, a.name,
-                        at.start_time,
-                        a.end_time AS async_end_time
-                    FROM async_players ap
-                    INNER JOIN team_members tm ON tm.member = ap.player
-                    INNER JOIN teams t ON t.id = tm.team AND t.series = $1 AND t.event = $2 AND NOT t.resigned
-                    INNER JOIN async_teams at ON at.team = t.id AND at.async_id = ap.async_id
-                    INNER JOIN asyncs a ON a.series = $1 AND a.event = $2 AND a.id = ap.async_id
-                    WHERE ap.series = $1 AND ap.event = $2
-                    AND a.kind = 'qualifier'
-                    AND at.submitted IS NOT NULL
-                "#, data.series as _, &data.event).fetch_all(&mut **transaction).await?;
-
                 // Calculate par separately for each async, regardless of its name.
                 let mut async_by_id =
                     HashMap::<i64, Vec<(Id<Users>, Duration, DateTime<Utc>)>>::new();
@@ -764,6 +839,9 @@ pub(crate) async fn signups_sorted(
                     let name = &async_results.iter().find(|row| row.async_id == async_id).expect("async result group exists").name;
                     results.sort_by_key(|(_, time, _)| *time);
                     let finish_times: Vec<Duration> = results.iter().map(|(_, t, _)| *t).collect();
+                    let finish_times = eligible_par_times.as_ref().map_or(finish_times, |times| {
+                        times.get(&(true, async_id)).cloned().unwrap_or_default()
+                    });
                     let num_entrants = results.len();
                     let par_cutoff = match score_kind {
                         QualifierScoreKind::Standard => 7usize.min(num_entrants),
@@ -1112,9 +1190,9 @@ pub(crate) async fn signups_sorted(
                             | QualifierScoreKind::TwwrMain
                             | QualifierScoreKind::TimeRelative(_) => {
                                 let max_count = score_kind.max_qualifiers_that_count();
-                                let num_entered = scores.len();
-                                let num_finished =
-                                    scores.iter().filter(|&&score| score != 0.0).count(); // -1 sentinel counts as finished
+                                let num_entered = scores.len().min(max_count);
+                                let num_finished = scores.iter().take(max_count)
+                                    .filter(|&&score| score != 0.0).count(); // -1 sentinel counts as finished
                                 let configured_score =
                                     if let QualifierScoreKind::TimeRelative(config) = score_kind {
                                         Some(r64(config.aggregate(

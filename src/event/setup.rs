@@ -11,6 +11,17 @@ use {
     serenity::model::id::RoleId,
 };
 
+fn score_config_defaults(kind: &str, fresh: bool) -> String {
+    let config = if fresh && kind == "time_relative" {
+        Some(super::scoring::ParScoreConfig::guided_defaults())
+    } else {
+        super::scoring::ParScoreConfig::for_kind(kind, None)
+            .expect("built-in scoring defaults are valid")
+    };
+    config.map(|config| serde_json::to_string_pretty(&config).expect("scoring defaults serialize"))
+        .unwrap_or_else(|| "{}".into())
+}
+
 async fn can_manage_game(
     transaction: &mut Transaction<'_, Postgres>,
     user: &User,
@@ -526,17 +537,19 @@ async fn setup_form(
                                     ("twwr_miniblins26", "TWWR Miniblins 26"),
                                     ("twwr_main", "TWWR Main"),
                                 ] {
-                                    option(value = slug, selected? = ctx.field_value("qualifier_score_kind").map_or(event.qualifier_score_kind_str.as_deref() == Some(slug), |v| v == *slug)) : *label;
+                                    option(value = slug, data_score_defaults = score_config_defaults(slug, false), data_score_new_defaults = score_config_defaults(slug, true), selected? = ctx.field_value("qualifier_score_kind").map_or(event.qualifier_score_kind_str.as_deref() == Some(slug), |v| v == *slug)) : *label;
                                 }
                             }
                         });
 
                         : form_field("qualifier_score_config", &mut errors, html! {
-                            : help::label("qualifier_score_config", "Qualifier scoring parameters (JSON)");
-                            textarea(id = "qualifier_score_config", name = "qualifier_score_config", rows = "6", style = "font-family: monospace; width: 100%; max-width: 800px;") {
-                                : ctx.field_value("qualifier_score_config").map(str::to_owned).unwrap_or_else(|| event.qualifier_score_config.as_ref().map(|v| serde_json::to_string_pretty(v).unwrap_or_default()).unwrap_or_default());
+                            : help::label("qualifier_score_config", "Qualifier scoring parameters");
+                            div(id = "qualifier-score-json") {
+                                textarea(id = "qualifier_score_config", name = "qualifier_score_config", rows = "6", style = "font-family: monospace; width: 100%; max-width: 800px;") {
+                                    : ctx.field_value("qualifier_score_config").map(str::to_owned).unwrap_or_else(|| event.qualifier_score_config.as_ref().map(|v| serde_json::to_string_pretty(v).unwrap_or_default()).unwrap_or_else(|| score_config_defaults(event.qualifier_score_kind_str.as_deref().unwrap_or(""), false)));
+                                }
+                                label(class = "help") : "Leave empty to preserve the selected scoring strategy's defaults. Example: {\"par_finishers\":4,\"required_finishes\":3,\"counted_attempts\":6,\"best_results\":3}. Optional formula fields: scale, offset, minimum, maximum, rounding (none/floor/nearest), aggregation (sum/average). Average divides by best_results, counting missing results as zero.";
                             }
-                            label(class = "help") : "Leave empty to preserve the selected scoring strategy's defaults. Example: {\"par_finishers\":4,\"required_finishes\":3,\"counted_attempts\":6,\"best_results\":3}. Optional formula fields: scale, offset, minimum, maximum, rounding (none/floor/nearest), aggregation (sum/average). Average divides by best_results, counting missing results as zero.";
                         });
 
                         : form_field("is_single_race", &mut errors, html! {
@@ -754,6 +767,7 @@ async fn setup_form(
             : header;
             : content;
             script(src = static_url!("user-search.js")) {}
+            script(src = static_url!("qualifier-score-config.js")) {}
             script(src = static_url!("setting-help.js")) {}
         },
     )
@@ -2243,21 +2257,19 @@ fn create_form_content(
                                     ("twwr_miniblins26", "TWWR Miniblins 26"),
                                     ("twwr_main", "TWWR Main"),
                                 ] {
-                                    @let defaults = super::scoring::ParScoreConfig::for_kind(slug, None)
-                                        .expect("built-in scoring defaults are valid")
-                                        .map(|config| serde_json::to_string_pretty(&config).expect("scoring defaults serialize"))
-                                        .unwrap_or_else(|| "{}".into());
-                                    option(value = slug, data_score_defaults = defaults, selected? = field_value("qualifier_score_kind").map_or(false, |v| v == *slug)) : *label;
+                                    option(value = slug, data_score_defaults = score_config_defaults(slug, false), data_score_new_defaults = score_config_defaults(slug, true), selected? = field_value("qualifier_score_kind").map_or(false, |v| v == *slug)) : *label;
                                 }
                             }
                         });
 
                         : form_field("qualifier_score_config", &mut errors, html! {
-                            : help::label("qualifier_score_config", "Qualifier scoring parameters (JSON)");
-                            textarea(id = "qualifier_score_config", name = "qualifier_score_config", rows = "5", style = "font-family: monospace; width: 100%; max-width: 800px;") {
-                                : field_value("qualifier_score_config").unwrap_or("");
+                            : help::label("qualifier_score_config", "Qualifier scoring parameters");
+                            div(id = "qualifier-score-json") {
+                                textarea(id = "qualifier_score_config", name = "qualifier_score_config", rows = "5", style = "font-family: monospace; width: 100%; max-width: 800px;") {
+                                    : field_value("qualifier_score_config").unwrap_or("");
+                                }
+                                label(class = "help") : "Selecting a scoring kind fills in its default parameters. Edit these values to customize scoring. An empty object means this kind has no configurable parameters.";
                             }
-                            label(class = "help") : "Selecting a scoring kind fills in its default parameters. Edit these values to customize scoring. An empty object means this kind has no configurable parameters.";
                         });
 
                         : form_field("is_single_race", &mut errors, html! {
