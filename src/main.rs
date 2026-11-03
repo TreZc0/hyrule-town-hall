@@ -626,6 +626,8 @@ async fn volunteer_request_manager(
     shutdown: rocket::Shutdown,
 ) -> Result<(), Error> {
     let mut interval = tokio::time::interval(Duration::from_secs(3 * 60)); // Check every 3 minutes
+    let http_client = reqwest::Client::new();
+    let mut mode_refresh_after = i64::MIN;
 
     loop {
         tokio::select! {
@@ -633,6 +635,11 @@ async fn volunteer_request_manager(
                 let discord_ctx = discord_ctx.read().await;
                 if let Err(e) = volunteer_requests::check_and_post_volunteer_requests(&db_pool, &discord_ctx).await {
                     eprintln!("Error checking volunteer requests: {}", e);
+                }
+                if let Err(error) = discord_scheduled_events::reconcile_mode_descriptions(
+                    &db_pool, &discord_ctx, &http_client, &mut mode_refresh_after,
+                ).await {
+                    log::warn!("Could not reconcile Discord event modes: {error}");
                 }
                 if let Err(e) = volunteer_pings::check_and_send_volunteer_pings(&db_pool, &discord_ctx).await {
                     eprintln!("Error sending volunteer pings: {}", e);

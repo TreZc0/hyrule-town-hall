@@ -653,30 +653,12 @@ async fn get_matchup_description(
         _ => "Unknown matchup".to_string(),
     };
 
-    let event_data = event::Data::new(transaction, race.series, &race.event)
-        .await
-        .ok()
-        .flatten();
-    let draft_mode = race.draft.as_ref().and_then(|draft| {
-        let game = race.game.unwrap_or(1);
-        let preset = draft.settings.get(&*format!("game{game}_preset"))?;
-        event_data.as_ref()?.draft_kind().and_then(|kind| {
-            kind.preset_display_name(preset.as_ref())
-                .map(|s| s.to_owned())
-        })
-    });
-
-    // Add round/phase/game info if available, then draft mode
+    // Add round/phase/game info if available.
     let mut result =
         match format_round_phase_game(race.round.as_deref(), race.phase.as_deref(), race.game) {
             Some(suffix) => format!("{matchup} ({suffix})"),
             None => matchup,
         };
-
-    // Append draft mode if present
-    if let Some(mode) = draft_mode {
-        result = format!("{} [{}]", result, mode);
-    }
 
     if let Some(companion_race_id) = race.companion_race_id {
         let companion = Race::from_id(&mut *transaction, http_client, companion_race_id).await?;
@@ -839,6 +821,10 @@ fn build_announcement_content(
             msg.push_timestamp(start, TimestampStyle::LongDateTime);
         }
         msg.push("\n");
+
+        if let Some(mode) = need.race.completed_mode(event_data) {
+            msg.push_safe(mode).push("\n");
+        }
 
         // Restream info
         if need.race.video_urls.is_empty() {
@@ -1121,6 +1107,8 @@ pub(crate) async fn update_volunteer_post_for_race(
             .execute(&mut *cleanup_tx)
             .await?;
             cleanup_tx.commit().await?;
+        } else {
+            return Err(e.into());
         }
     }
 
@@ -1302,6 +1290,96 @@ pub(crate) async fn update_volunteer_post_by_message_id(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    #[ignore = "requires HTH_TEST_DATABASE_URL pointing to a migrated production-copy *_test database"]
+    async fn completed_mode_is_in_initial_discord_posts_when_drafted_before_scheduling() {
+        let pool = event::configuration::test_pool().await;
+        let client = reqwest::Client::new();
+        let mut tx = pool.begin().await.unwrap();
+        let id: i64 = sqlx::query_scalar("SELECT id FROM races ORDER BY id LIMIT 1")
+            .fetch_one(&mut *tx)
+            .await
+            .unwrap();
+        let mut race = Race::from_id(&mut tx, &client, id.into()).await.unwrap();
+        let mut event = race.event(&mut tx).await.unwrap();
+        event.draft_kind_str = Some("ban_pick".into());
+        event.round_modes = None;
+        event.draft_config = Some(json!({
+            "label": "mode",
+            "order": [{"team": "high_seed", "phase": "pick"}, {"team": "low_seed", "phase": "pick"}],
+            "options": [
+                {"preset": "mcboss", "display_name": "McBoss"},
+                {"preset": "inverted", "display_name": "Inverted 2.0 with BK Shuffle"},
+                {"preset": "cabookey", "display_name": "Cabookey"}
+            ],
+            "can_defer": true
+        }));
+        race.schedule = RaceSchedule::Unscheduled;
+        race.game = Some(1);
+        race.draft = Some(Draft {
+            high_seed: 1_i64.into(),
+            went_first: None,
+            skipped_bans: 0,
+            settings: HashMap::from([
+                ("game1_preset".into(), "cabookey".into()),
+                ("game2_preset".into(), "inverted".into()),
+                ("game3_preset".into(), "mcboss".into()),
+            ]),
+        });
+        race.discord_scheduled_event_id = None;
+        race.volunteer_request_message_id = None;
+        race.volunteer_request_sent = false;
+        race.companion_race_id = None;
+        race.video_urls.clear();
+        race.phase = Some("Groups".into());
+        race.round = Some("Round 1".into());
+        race.save(&mut tx).await.unwrap();
+
+        // Scheduling reloads the completed draft; no completion callback runs here.
+        let mut race = Race::from_id(&mut tx, &client, race.id).await.unwrap();
+        assert!(matches!(race.schedule, RaceSchedule::Unscheduled));
+        assert_eq!(
+            race.completed_mode(&event).as_deref(),
+            Some("Mode: Cabookey")
+        );
+        let start = Utc::now() + TimeDelta::days(1);
+        race.schedule.set_live_start(start);
+        for game in 1..=3 {
+            race.game = Some(game);
+            let mode = ["Cabookey", "Inverted 2.0 with BK Shuffle", "McBoss"][(game - 1) as usize];
+            let description = crate::discord_scheduled_events::event_description(&race, &event);
+            assert!(
+                description.contains(&format!("Mode: {mode}\n\nPhase: Groups\nRound: Round 1"))
+            );
+            let need = RaceVolunteerNeed {
+                race: race.clone(),
+                matchup: "Player A vs Player B".into(),
+                role_needs: Vec::new(),
+            };
+            let (content, _) = build_announcement_content(&[need], &event, start, start);
+            assert!(content.contains(&format!("\nMode: {mode}\nRestream TBD")));
+            assert!(!content.contains(&format!("[{mode}]")));
+        }
+        race.phase = None;
+        race.round = None;
+        assert!(
+            crate::discord_scheduled_events::event_description(&race, &event)
+                .contains("Mode: McBoss")
+        );
+        race.draft.as_mut().unwrap().settings.remove("game3_preset");
+        assert!(
+            !crate::discord_scheduled_events::event_description(&race, &event).contains("Mode:")
+        );
+        let need = RaceVolunteerNeed {
+            race,
+            matchup: "Player A vs Player B".into(),
+            role_needs: Vec::new(),
+        };
+        let (content, _) = build_announcement_content(&[need], &event, start, start);
+        assert!(!content.contains("Mode:"));
+        tx.rollback().await.unwrap();
+    }
 
     fn msg(n: u64) -> MessageId {
         MessageId::new(n)

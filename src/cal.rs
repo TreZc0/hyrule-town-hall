@@ -820,6 +820,12 @@ pub(crate) struct Race {
 }
 
 impl Race {
+    pub(crate) fn completed_mode(&self, event: &event::Data<'_>) -> Option<String> {
+        event
+            .draft_kind()?
+            .completed_mode(self.draft.as_ref()?, self.game)
+    }
+
     pub(crate) fn supports_async(&self) -> bool {
         matches!(self.entrants, Entrants::Two(_) | Entrants::Three(_))
     }

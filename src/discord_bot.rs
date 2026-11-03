@@ -1812,6 +1812,52 @@ async fn post_button_draft_step(
     Ok(())
 }
 
+/// Reload every game sharing the committed draft, including games already scheduled.
+async fn refresh_completed_draft_displays(
+    pool: &PgPool,
+    ctx: &DiscordCtx,
+    http_client: &reqwest::Client,
+    race: &Race,
+) -> sqlx::Result<()> {
+    let races = sqlx::query_as::<_, (i64, Option<i64>)>(
+        "SELECT DISTINCT COALESCE(primary_race.id, r.id),
+                         COALESCE(primary_race.volunteer_request_message_id, r.volunteer_request_message_id)
+         FROM races r LEFT JOIN races primary_race ON primary_race.companion_race_id = r.id
+         WHERE r.series = $1 AND r.event = $2 AND r.draft_state = $3
+           AND NOT r.ignored AND r.start > NOW()",
+    )
+    .bind(race.series)
+    .bind(&race.event)
+    .bind(Json(&race.draft))
+    .fetch_all(pool)
+    .await?;
+    let mut updated_posts = HashSet::new();
+    for (id, message_id) in races {
+        if let Err(error) = crate::discord_scheduled_events::refresh_mode_description(
+            pool,
+            ctx,
+            http_client,
+            id.into(),
+        )
+        .await
+        {
+            log::warn!("Could not refresh Discord event after draft for race {id}: {error}");
+        }
+        if let Some(message_id) = message_id {
+            if updated_posts.insert(message_id) {
+                if let Err(error) =
+                    volunteer_requests::update_volunteer_post_for_race(pool, ctx, id.into()).await
+                {
+                    log::warn!(
+                        "Could not refresh volunteer post after draft for race {id}: {error}"
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 async fn draft_action(
     ctx: &DiscordCtx,
     interaction: &impl GenericInteraction,
@@ -1860,11 +1906,34 @@ async fn draft_action(
             )
             .execute(&mut *transaction)
             .await?;
-            if matches!(step.kind, draft::StepKind::Done(_)) && draft_kind.uses_button_draft() {
+            let completed =
+                matches!(step.kind, draft::StepKind::Done(_)) && draft_kind.uses_button_draft();
+            if completed {
                 race.copy_draft_to_remaining_games(&mut transaction, race.draft.as_ref().unwrap())
                     .await?;
             }
             transaction.commit().await?;
+            if completed {
+                let data = ctx.data.read().await;
+                let pool = data
+                    .get::<DbPool>()
+                    .expect("database connection pool missing from Discord context")
+                    .clone();
+                let http_client = data
+                    .get::<HttpClient>()
+                    .expect("HTTP client missing from Discord context")
+                    .clone();
+                let ctx = ctx.clone();
+                let race = race.clone();
+                // Keep Discord updates independent of the draft confirmation and next-step prompt.
+                tokio::spawn(async move {
+                    if let Err(error) =
+                        refresh_completed_draft_displays(&pool, &ctx, &http_client, &race).await
+                    {
+                        log::warn!("Could not load Discord posts for completed draft: {error}");
+                    }
+                });
+            }
             if draft_kind.uses_button_draft() {
                 // Publish the committed turn before editing the interaction response:
                 // a failed private confirmation must not hide the next team's prompt.

@@ -201,6 +201,34 @@ impl Kind {
             .map(|p| p.display_name.as_str())
     }
 
+    /// Public mode information is available only once every game has been assigned.
+    /// This reads saved picks (including randomized ban-only assignments), never rolls them.
+    pub(crate) fn completed_mode(&self, draft: &Draft, game: Option<i16>) -> Option<String> {
+        let label = match self {
+            Self::PickOnly { label, .. }
+            | Self::BanPick { label, .. }
+            | Self::BanOnly { label, .. } => label.trim(),
+            _ => return None,
+        };
+        self.validate().ok()?;
+        let count = self.game_count()?;
+        let game = usize::try_from(game.unwrap_or(1)).ok()?;
+        if !(1..=count).contains(&game)
+            || (1..=count).any(|n| {
+                !draft
+                    .settings
+                    .contains_key(format!("game{n}_preset").as_str())
+            })
+        {
+            return None;
+        }
+        let preset = draft.settings.get(format!("game{game}_preset").as_str())?;
+        let display = self.preset_display_name(preset)?;
+        let mut chars = label.chars();
+        let first = chars.next()?.to_uppercase();
+        Some(format!("{first}{}: {display}", chars.as_str()))
+    }
+
     fn language(&self) -> Language {
         match self {
             Self::S7
@@ -394,6 +422,10 @@ mod configured_draft_tests {
                     panic!("game is not ready")
                 };
                 assert_eq!(settings["preset"], format!("preset{}", game + 1));
+                assert_eq!(
+                    kind.completed_mode(&draft, Some(game as i16)),
+                    Some(format!("Preset: Preset {}", game + 1)),
+                );
             }
         }
     }
@@ -420,9 +452,87 @@ mod configured_draft_tests {
                     panic!("game is not ready")
                 };
                 assert!(assigned.insert(settings["preset"].as_str().unwrap().to_owned()));
+                assert_eq!(
+                    kind.completed_mode(&draft, Some(game as i16)),
+                    Some(format!(
+                        "Preset: {}",
+                        kind.preset_display_name(settings["preset"].as_str().unwrap())
+                            .unwrap()
+                    )),
+                );
             }
             assert!(!assigned.contains("preset0") && !assigned.contains("preset1"));
         }
+    }
+
+    #[test]
+    fn completed_mode_uses_configured_names_and_hides_incomplete_drafts() {
+        let kind = Kind::from_db(Some("ban_pick"), Some(&json!({
+            "label": "mode",
+            "order": [{"team": "high_seed", "phase": "pick"}, {"team": "low_seed", "phase": "pick"}],
+            "options": [
+                {"preset": "mcboss", "display_name": "McBoss"},
+                {"preset": "inverted", "display_name": "Inverted 2.0 with BK Shuffle"},
+                {"preset": "cabookey", "display_name": "Cabookey"}
+            ],
+            "can_defer": true
+        }))).unwrap();
+        let mut draft = Draft {
+            high_seed: 1_i64.into(),
+            went_first: None,
+            skipped_bans: 0,
+            settings: Picks::new(),
+        };
+        assert_eq!(kind.completed_mode(&draft, None), None);
+        for (game, preset) in [(1, "cabookey"), (2, "inverted")] {
+            draft
+                .settings
+                .insert(format!("game{game}_preset").into(), preset.into());
+            assert_eq!(kind.completed_mode(&draft, Some(game)), None);
+        }
+        draft
+            .settings
+            .insert("game3_preset".into(), "mcboss".into());
+        assert_eq!(
+            kind.completed_mode(&draft, None).as_deref(),
+            Some("Mode: Cabookey")
+        );
+        assert_eq!(
+            kind.completed_mode(&draft, Some(2)).as_deref(),
+            Some("Mode: Inverted 2.0 with BK Shuffle")
+        );
+        assert_eq!(
+            kind.completed_mode(&draft, Some(3)).as_deref(),
+            Some("Mode: McBoss")
+        );
+        for game in [-1, 0, 4] {
+            assert_eq!(kind.completed_mode(&draft, Some(game)), None);
+        }
+        draft
+            .settings
+            .insert("game1_preset".into(), "removed_preset".into());
+        assert_eq!(kind.completed_mode(&draft, None), None);
+        assert_eq!(Kind::S7.completed_mode(&draft, None), None);
+    }
+
+    #[tokio::test]
+    async fn completed_mode_supports_pick_only_and_preserves_label_case() {
+        let kind = Kind::PickOnly {
+            options: options(2),
+            who_starts: Team::HighSeed,
+            picks_per_player: 1,
+            unique: true,
+            label: "  épreuve ALTTPR  ".into(),
+        };
+        let draft = complete(&kind).await;
+        assert_eq!(
+            kind.completed_mode(&draft, Some(1)).as_deref(),
+            Some("Épreuve ALTTPR: Preset 0")
+        );
+        assert_eq!(
+            kind.completed_mode(&draft, Some(2)).as_deref(),
+            Some("Épreuve ALTTPR: Preset 1")
+        );
     }
 
     #[test]
@@ -462,6 +572,7 @@ mod configured_draft_tests {
         );
     }
 }
+
 
 #[derive(Clone)]
 pub(crate) struct BanSetting {

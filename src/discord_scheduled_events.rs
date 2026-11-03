@@ -25,6 +25,8 @@ pub(crate) enum Error {
     Cal(#[from] cal::Error),
     #[error(transparent)]
     DiscordBot(#[from] crate::discord_bot::Error),
+    #[error(transparent)]
+    Event(#[from] event::DataError),
     #[error("Event does not have Discord guild configured")]
     NoDiscordGuild,
 }
@@ -311,10 +313,29 @@ async fn generate_event_description(
     transaction: &mut Transaction<'_, Postgres>,
     ctx: &DiscordCtx,
 ) -> Result<String, Error> {
+    let mut desc = event_description(race, event_config);
+    if let Some(companion) = companion {
+        desc.push_str("\n**Shared race room:**\n");
+        desc.push_str(&format!(
+            "This scheduled event covers this race and {} for restream purposes.\n",
+            companion.matchup_label(transaction, ctx).await?
+        ));
+        desc.push_str("Only each runner's originally assigned matchup result counts for tournament progression.\n");
+    }
+    Ok(desc)
+}
+
+/// The same saved mode is rendered on initial creation and every later update.
+pub(crate) fn event_description(race: &Race, event_config: &EventData<'_>) -> String {
     let mut desc = String::new();
 
     // Add event name
     desc.push_str(&format!("**{}**\n\n", event_config.display_name));
+
+    if let Some(mode) = race.completed_mode(event_config) {
+        desc.push_str(&MessageBuilder::default().push_safe(mode).build());
+        desc.push_str("\n\n");
+    }
 
     // Add phase/round details
     if let (Some(phase), Some(round)) = (&race.phase, &race.round) {
@@ -370,16 +391,7 @@ async fn generate_event_description(
         }
     }
 
-    if let Some(companion) = companion {
-        desc.push_str("\n**Shared race room:**\n");
-        desc.push_str(&format!(
-            "This scheduled event covers this race and {} for restream purposes.\n",
-            companion.matchup_label(transaction, ctx).await?
-        ));
-        desc.push_str("Only each runner's originally assigned matchup result counts for tournament progression.\n");
-    }
-
-    Ok(desc)
+    desc
 }
 
 async fn load_companion_race(
@@ -392,6 +404,83 @@ async fn load_companion_race(
     } else {
         None
     })
+}
+
+/// Refresh metadata without changing the schedule or recreating an active event.
+pub(crate) async fn refresh_mode_description(
+    pool: &PgPool,
+    ctx: &DiscordCtx,
+    http_client: &reqwest::Client,
+    race_id: Id<Races>,
+) -> Result<(), Error> {
+    let mut transaction = pool.begin().await?;
+    let race = Race::from_id(&mut transaction, http_client, race_id).await?;
+    let Some(event) = EventData::new(&mut transaction, race.series, &race.event).await? else {
+        return Ok(());
+    };
+    if race.ignored
+        || !should_create_discord_event(&race, &event)
+        || !matches!(race.schedule, RaceSchedule::Live { start, .. } if start > Utc::now())
+        || race.companion_primary_id(&mut transaction).await?.is_some()
+    {
+        return Ok(());
+    }
+    let (Some(guild), Some(PgSnowflake(event_id))) =
+        (event.discord_guild, race.discord_scheduled_event_id)
+    else {
+        return Ok(());
+    };
+    let companion = load_companion_race(&mut transaction, http_client, &race).await?;
+    let description =
+        generate_event_description(&race, companion.as_ref(), &event, &mut transaction, ctx)
+            .await?;
+    transaction.commit().await?;
+
+    let current = guild.scheduled_event(&ctx.http, event_id, false).await?;
+    if current.status == ScheduledEventStatus::Scheduled
+        && current.description.as_deref() != Some(description.as_str())
+    {
+        guild
+            .edit_scheduled_event(
+                &ctx.http,
+                event_id,
+                EditScheduledEvent::new().description(description),
+            )
+            .await?;
+    }
+    Ok(())
+}
+
+/// Scan a bounded batch each tick, including events whose drafts predate deployment.
+/// Failed updates are retried on the next pass; unchanged descriptions need no edit.
+pub(crate) async fn reconcile_mode_descriptions(
+    pool: &PgPool,
+    ctx: &DiscordCtx,
+    http_client: &reqwest::Client,
+    after: &mut i64,
+) -> Result<(), Error> {
+    let ids = sqlx::query_scalar::<_, i64>(
+        "SELECT r.id FROM races r JOIN events e ON r.series = e.series AND r.event = e.event
+         WHERE r.id > $1 AND NOT r.ignored AND r.start > NOW()
+           AND r.discord_scheduled_event_id IS NOT NULL AND r.draft_state IS NOT NULL
+           AND e.discord_events_enabled AND e.discord_guild IS NOT NULL
+           AND e.draft_kind IN ('pick_only', 'ban_pick', 'ban_only')
+         ORDER BY r.id LIMIT 100",
+    )
+    .bind(*after)
+    .fetch_all(pool)
+    .await?;
+    *after = if ids.len() == 100 {
+        *ids.last().unwrap()
+    } else {
+        i64::MIN
+    };
+    for id in ids {
+        if let Err(error) = refresh_mode_description(pool, ctx, http_client, id.into()).await {
+            log::warn!("Could not refresh mode for Discord event of race {id}: {error}");
+        }
+    }
+    Ok(())
 }
 
 /// Create a Discord scheduled event for a race
