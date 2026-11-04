@@ -3829,7 +3829,9 @@ pub(crate) fn owr_choices_description_with_labels(
     let mut random = Vec::new();
     for (key, value) in choices.iter().sorted_by_key(|(key, _)| key.as_str()) {
         let entry = choice_entry(config, key);
-        if !choice_entry_affects_seed(entry) {
+        // Preferences and saved outcomes cover every mode; the selected config
+        // defines which choices can actually apply to this seed.
+        if entry.is_none() || !choice_entry_affects_seed(entry) {
             continue;
         }
         let label = choice_entry_label_with_labels(entry, key, labels);
