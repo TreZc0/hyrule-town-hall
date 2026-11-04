@@ -6625,7 +6625,12 @@ impl RaceHandler<GlobalState> for Handler {
                         )
                     })
                     .collect();
-                if !cal_event.race.video_urls.is_empty() {
+                if !cal_event.race.video_urls.is_empty()
+                    && matches!(
+                        data.status.value,
+                        RaceStatusValue::Open | RaceStatusValue::Invitational
+                    )
+                {
                     ctx.say("@entrants This race is being restreamed. Please ensure at least one participant has clean audio (no desktop alerts, no gameplay overlays) on stream.").await?;
                 }
                 // Pooled qualifiers use their own cutoff, including 0 to disable it.
@@ -6959,7 +6964,13 @@ impl RaceHandler<GlobalState> for Handler {
             ..
         }) = this.official_data
         {
-            if !restreams.is_empty() {
+            // Reconnecting to a running race must not replay pre-race restream setup.
+            if !restreams.is_empty()
+                && matches!(
+                    data.status.value,
+                    RaceStatusValue::Open | RaceStatusValue::Invitational
+                )
+            {
                 let ctx_clone = ctx.clone();
                 let restreams_clone = restreams.clone();
                 let lang_clone = event.language;
@@ -6967,6 +6978,12 @@ impl RaceHandler<GlobalState> for Handler {
                 tokio::spawn(async move {
                     // Small delay to allow handler to fully initialize
                     sleep(Duration::from_millis(100)).await;
+                    if !matches!(
+                        ctx_clone.data().await.status.value,
+                        RaceStatusValue::Open | RaceStatusValue::Invitational
+                    ) {
+                        return;
+                    }
                     if !Self::should_handle_inner(
                         &*ctx_clone.data().await,
                         ctx_clone.global_state.clone(),
@@ -7096,6 +7113,13 @@ impl RaceHandler<GlobalState> for Handler {
                             )
                         }
                     };
+                    // The race may have started while restreamer setup was awaiting I/O.
+                    if !matches!(
+                        ctx_clone.data().await.status.value,
+                        RaceStatusValue::Open | RaceStatusValue::Invitational
+                    ) {
+                        return;
+                    }
                     let _ = ctx_clone
                         .send_message(&announcement, true, Vec::default())
                         .await;
