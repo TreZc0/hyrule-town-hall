@@ -1198,7 +1198,7 @@ async fn reset_async_command(
     if seed_released || ready || played {
         interaction.create_response(ctx, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new()
             .ephemeral(true)
-            .content("That async part cannot be reset because its seed has already been released or its run has started.")
+            .content("That async part cannot be reset because preparation or play has already begun.")
         )).await?;
         transaction.rollback().await?;
         return Ok(());
@@ -4562,6 +4562,8 @@ pub(crate) fn configure_builder(
                         if let Err(e) = async_race::dispatch_button(ctx, &interaction, &pool, &custom_id).await {
                             let error_msg = match e {
                                 AsyncRaceError::UnauthorizedUser => "You are not authorized to click this button.",
+                                AsyncRaceError::NoSeedAvailable => "The seed is not available yet. Please contact an organizer, then try READY again once the seed is prepared.",
+                                AsyncRaceError::AlreadyReady => "You are already ready. Use the START COUNTDOWN button in this thread.",
                                 AsyncRaceError::AlreadyStarted => "The countdown has already been started.",
                                 AsyncRaceError::NotStarted => "You must start the countdown before finishing.",
                                 AsyncRaceError::AlreadyFinished => "You have already finished this race.",
@@ -6433,8 +6435,8 @@ pub(crate) async fn handle_race(
             .await?
     };
 
-    // The async manager may observe the same due race more than once. Do not roll or announce a
-    // second seed after this async part has already been handled.
+    // The async manager may observe the same due race more than once. Do not
+    // repeat seed generation or organizer notifications for the same async part.
     let already_notified = match cal_event.kind {
         cal::EventKind::Async1 => {
             sqlx::query_scalar::<_, bool>("SELECT async_notified_1 FROM races WHERE id = $1")
@@ -6456,16 +6458,14 @@ pub(crate) async fn handle_race(
     }
 
     let seed_prepared = cal_event.race.seed.files().is_some();
+    let uses_seed = async_race::uses_seed(&cal_event.race.seed, event.seed_gen_type.is_some());
 
-    if !seed_prepared {
+    if let Some(seed_gen_type) = event.seed_gen_type.as_ref().filter(|_| !seed_prepared) {
         transaction.commit().await?;
         let discord_data = discord_ctx.data.read().await;
         let global_state = discord_data
             .get::<GlobalState>()
             .expect("Global State missing from Discord context");
-        let Some(ref seed_gen_type) = event.seed_gen_type else {
-            return Ok(());
-        };
         let mut updates = global_state
             .clone()
             .roll_seed_for_event(seed_gen_type, &cal_event, &event)
@@ -6510,16 +6510,12 @@ pub(crate) async fn handle_race(
 
     for team in cal_event.active_teams() {
         let mut content = MessageBuilder::default();
-        content.push("Async starting for ");
+        content.push("Async preparation can begin for ");
         content
             .mention_team(&mut transaction, event.discord_guild, team)
             .await?;
 
-        if seed_prepared {
-            content.push(". A seed is already prepared. The runner will receive it as soon as they hit the READY button. Please work with them in their async channel in case of issues.");
-        } else {
-            content.push(". A Seed has been generated and will be distributed to the runner as soon as they hit the READY button. Please work with them in their async channel in case of issues.");
-        }
+        async_race::append_organizer_start_instructions(&mut content, uses_seed);
 
         let msg = content.build();
         if let Some(channel) = event.discord_organizer_channel {

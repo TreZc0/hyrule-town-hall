@@ -383,7 +383,7 @@ async fn thread_details(pool: &PgPool, row: &Delivery) -> Result<(String, String
     content.push("!\n\nThis thread is for your ").push_bold_safe(&row.mode_name)
         .push(if retry { " qualifier re-attempt in " } else { " qualifier async in " })
         .push_safe(&event.display_name).push(".\n\n");
-    append_async_instructions(&mut content, event.async_start_delay);
+    append_async_instructions(&mut content, event.async_start_delay, true);
     AsyncRaceManager::append_qualifier_recording_requirements(&mut tx, &event, &mut content).await?;
     content.push("\n**Timing:**\nRun limit: ")
         .push(English.format_duration(config.run_limit().to_std().unwrap_or_default(), false))

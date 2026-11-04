@@ -1,6 +1,111 @@
 use super::*;
 
 #[test]
+fn seedless_async_ready_skips_delivery_but_randomizers_still_require_a_seed() {
+    let empty = seed::Data::default();
+    assert!(!uses_seed(&empty, false));
+    assert!(uses_seed(&empty, true));
+    assert!(bracket_seed_message(&empty, false).unwrap().is_none());
+    assert!(matches!(bracket_seed_message(&empty, true), Err(Error::NoSeedAvailable)));
+
+    let prepared = seed::Data {
+        seed_data: Some(serde_json::json!({"type":"twwr", "permalink":"test-permalink", "seed_hash":"Bow"})),
+        ..seed::Data::default()
+    };
+    for requires_seed in [false, true] {
+        assert!(uses_seed(&prepared, requires_seed));
+        let message = bracket_seed_message(&prepared, requires_seed).unwrap().unwrap().build();
+        assert!(message.contains("test-permalink"));
+        assert!(message.contains("Bow"));
+    }
+
+    let invalid = seed::Data { seed_data: Some(serde_json::json!({})), ..seed::Data::default() };
+    assert!(matches!(bracket_seed_message(&invalid, false), Err(Error::NoSeedAvailable)));
+}
+
+#[test]
+fn seedless_async_messages_cover_the_workflow_without_randomizer_instructions() {
+    let mut messages = vec![FORCE_START_MESSAGE.to_owned(), RUNNING_MESSAGE.to_owned(), REVERTED_MESSAGE.to_owned()];
+    messages.extend(FORCE_START_WARNINGS.map(|(_, text)| text.to_owned()));
+    messages.extend([CountdownStep::Announcement, CountdownStep::Number(5), CountdownStep::Go].map(|step| step.content()));
+    for delay in [None, Some(0), Some(-1), Some(10)] {
+        let mut content = MessageBuilder::default();
+        append_async_instructions(&mut content, delay, uses_seed(&seed::Data::default(), false));
+        let text = content.build();
+        for step in ["**READY!**", "**START COUNTDOWN**", "**GO**", "**FINISH**", "**FORFEIT**"] {
+            assert!(text.contains(step));
+        }
+        assert_eq!(text.contains("10 minutes"), delay == Some(10));
+        messages.push(text);
+
+        let mut ready = MessageBuilder::default();
+        append_start_countdown_instructions(&mut ready, delay);
+        let text = ready.build();
+        assert!(text.contains("Start playing at **GO**"));
+        assert_eq!(text.contains("starts automatically"), delay == Some(10));
+        messages.push(text);
+    }
+    for first in [true, false] {
+        let mut content = MessageBuilder::default();
+        append_bracket_recording_instructions(&mut content, first, false, false);
+        messages.push(content.build());
+    }
+    let mut qualifier = MessageBuilder::default();
+    append_qualifier_recording_instructions(&mut qualifier, false, false);
+    messages.push(qualifier.build());
+    let mut organizer = MessageBuilder::default();
+    append_organizer_start_instructions(&mut organizer, false);
+    messages.push(organizer.build());
+    for run in runs() {
+        messages.push(completion_message_content(&run, "01:50:20", false, false).0);
+        messages.push(forfeit_message(&run, "<@123>").0);
+    }
+    for text in messages {
+        for forbidden in ["seed", "randomizer", "download", "patch", "permalink"] {
+            assert!(!text.to_lowercase().contains(forbidden), "unexpected {forbidden}: {text}");
+        }
+    }
+}
+
+#[test]
+fn async_seed_instructions_include_required_seeds_before_generation() {
+    let empty = seed::Data::default();
+    let mut welcome = MessageBuilder::default();
+    append_async_instructions(&mut welcome, Some(10), uses_seed(&empty, true));
+    let text = welcome.build();
+    assert!(text.contains("receive your seed"));
+    assert!(text.contains("Download and prepare the seed"));
+    assert!(matches!(bracket_seed_message(&empty, true), Err(Error::NoSeedAvailable)));
+
+    let mut organizer = MessageBuilder::default();
+    append_organizer_start_instructions(&mut organizer, true);
+    assert!(organizer.build().contains("delivered when the runner clicks **READY!**"));
+}
+
+#[test]
+fn async_completion_evidence_is_consistent_in_welcome_and_finish_messages() {
+    for (alttpr, twwr, expected) in [(true, false, "collection rate"), (false, true, "Ganondorf"), (false, false, "proof of run completion")] {
+        let mut evidence = MessageBuilder::default();
+        append_completion_evidence(&mut evidence, alttpr, twwr);
+        let evidence = evidence.build();
+        assert!(evidence.contains(expected));
+        let mut qualifier = MessageBuilder::default();
+        append_qualifier_recording_instructions(&mut qualifier, alttpr, twwr);
+        assert!(qualifier.build().contains(&evidence));
+        for first in [true, false] {
+            let mut welcome = MessageBuilder::default();
+            append_bracket_recording_instructions(&mut welcome, first, alttpr, twwr);
+            let text = welcome.build();
+            assert!(text.contains(&evidence));
+            assert_eq!(text.contains("You can stream"), !first);
+        }
+        for run in runs() {
+            assert!(completion_message_content(&run, "01:50:20", alttpr, twwr).0.contains(&evidence));
+        }
+    }
+}
+
+#[test]
 fn mmr_async_delivery_uses_remote_seed_and_complete_hash() {
     let data = serde_json::json!({"type":"mmr", "id":"123", "hash":["ITEM_BOW", "0x61", "future-icon"], "encrypted":true, "locked":true});
     let text = seed_message(&data).unwrap().build();
@@ -50,7 +155,7 @@ fn async_workflow_messages_and_existing_buttons_agree() {
     for (alttpr, twwr, screenshot) in [
         (true, false, "collection rate"),
         (false, true, "Ganondorf"),
-        (false, false, "indication of seed completion"),
+        (false, false, "proof of run completion"),
     ] {
         let (normal_text, _) = completion_message_content(&qualifier, "01:50:20", alttpr, twwr);
         let (pool_text, controls) = completion_message_content(&pooled, "01:50:20", alttpr, twwr);
@@ -84,7 +189,7 @@ fn async_force_start_schedule_and_finish_time_use_original_timestamps() {
     }
     for delay in [None, Some(0), Some(-1), Some(10)] {
         let mut content = MessageBuilder::default();
-        append_async_instructions(&mut content, delay);
+        append_async_instructions(&mut content, delay, true);
         let text = content.build();
         assert_eq!(text.contains("No automatic force-start"), delay != Some(10));
         assert!(text.contains("30 seconds"));

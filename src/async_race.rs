@@ -359,8 +359,9 @@ impl AsyncRaceManager {
         }
 
         content.push_line("");
-        append_async_instructions(&mut content, event.async_start_delay);
-        content.push("To maintain fairness, the final match results will only be shared after both players have completed the seed and organizers have confirmed the results.");
+        append_async_instructions(&mut content, event.async_start_delay,
+            uses_seed(&race.seed, event.seed_gen_type.is_some()));
+        content.push("To maintain fairness, the final match results will only be shared after both players have completed their runs and organizers have confirmed the results.");
 
         let is_alttpr = sqlx::query_scalar!(
             r#"SELECT EXISTS (
@@ -384,42 +385,8 @@ impl AsyncRaceManager {
         .fetch_one(&mut **transaction)
         .await
         .unwrap_or(false);
-        let display_order = Self::get_display_order(race, async_part);
-        if display_order == 1 {
-            content.push_line("");
-            content.push_line("");
-            content.push("**First Player Instructions:**");
-            content.push_line("");
-            content.push("• Local record from OBS and upload to YouTube as unlisted.");
-            content.push_line("");
-            if is_alttpr {
-                content.push("• When finished, inform us immediately with your finish time and a screenshot of the collection rate end scene.");
-            } else if is_twwr {
-                content.push("• When finished, inform us immediately with a screenshot showing your finish time together with the sword in Ganondorf's head.");
-            } else {
-                content.push("• When finished, inform us immediately and provide a screenshot showing your final time and an indicator of seed completion.");
-            }
-            content.push_line("");
-            content.push(
-                "• We suggest using MKV format for recording (more crash-resistant than MP4).",
-            );
-        } else {
-            content.push_line("");
-            content.push_line("");
-            content.push("**Second Player Instructions:**");
-            content.push_line("");
-            content.push("• You can stream to Twitch/YouTube OR local record and upload to YouTube as unlisted.");
-            content.push_line("");
-            if is_alttpr {
-                content.push("• When finished, inform us immediately with your finish time and a screenshot of the collection rate end scene.");
-            } else if is_twwr {
-                content.push("• When finished, inform us immediately with your finish time and a screenshot while showing the sword in Ganondorf's head.");
-            } else {
-                content.push("• When finished, inform us immediately and provide a screenshot showing your final time and an indicator of seed completion.");
-            }
-            content.push_line("");
-            content.push("• If streaming to Twitch, ensure VoDs are published for access for the organizers.");
-        }
+        append_bracket_recording_instructions(&mut content,
+            Self::get_display_order(race, async_part) == 1, is_alttpr, is_twwr);
 
         Ok(content)
     }
@@ -431,7 +398,10 @@ impl AsyncRaceManager {
         race: &Race,
         async_part: u8,
     ) -> Result<(), Error> {
-        let seed_data = race.seed.to_seed_data().ok_or(Error::NoSeedAvailable)?;
+        let Some(mut seed_content) = bracket_seed_message(&race.seed, event.seed_gen_type.is_some())? else {
+            // Non-randomizer events still use READY and the countdown, without seed delivery.
+            return Ok(());
+        };
 
         let team = Self::get_team_for_async_part(race, async_part)?;
         let player = team
@@ -446,7 +416,7 @@ impl AsyncRaceManager {
         content.mention_user(&player);
         content.push(", ");
         content.push_line("");
-        content.push(seed_message(&seed_data)?.build());
+        content.push(seed_content.build());
         if matches!(race.seed.files(), Some(seed::Files::TwwrPermalink { .. })) {
             if let (Some(VersionedBranch::Tww { tracker_link: Some(link), .. }), Some(settings)) = (&event.rando_version, &event.settings_string) {
                 content.push(format!("\nTracker: https://{link}/#/tracker/new/{}", urlencoding::encode(settings)));
@@ -822,7 +792,7 @@ impl AsyncRaceManager {
         content.push_line("");
         content.push_line("");
 
-        append_async_instructions(&mut content, event.async_start_delay);
+        append_async_instructions(&mut content, event.async_start_delay, true);
 
         Self::append_qualifier_recording_requirements(transaction, event, &mut content).await?;
         Ok(content)
@@ -833,10 +803,6 @@ impl AsyncRaceManager {
         event: &EventData<'_>,
         content: &mut MessageBuilder,
     ) -> Result<(), Error> {
-        content.push("**Recording Requirements:**");
-        content.push_line("");
-        content.push("• Upload your recording to YouTube (unlisted is fine).");
-        content.push_line("");
         let is_alttpr = sqlx::query_scalar!(
             r#"SELECT EXISTS (
                 SELECT 1 FROM game_series gs
@@ -859,14 +825,7 @@ impl AsyncRaceManager {
         .fetch_one(&mut **transaction)
         .await
         .unwrap_or(false);
-        if is_alttpr {
-            content.push("• Provide a screenshot of your final time and collection rate.");
-        } else if is_twwr {
-            content.push("• Provide a screenshot showing your final time together with the sword in Ganondorf's head.");
-        } else {
-            content.push("• Provide a screenshot showing your final time and an indicator of seed completion.");
-        }
-        content.push_line("");
+        append_qualifier_recording_instructions(content, is_alttpr, is_twwr);
 
         Ok(())
     }
@@ -1051,15 +1010,8 @@ impl AsyncRaceManager {
 
             content.push_line("");
             content.push_line("");
-            content.push("Click the 'Start Countdown' button when you're ready to begin your run.");
-
+            append_start_countdown_instructions(&mut content, event.async_start_delay);
             let async_start_delay = event.async_start_delay;
-            if let Some(delay) = async_start_delay {
-                if delay > 0 {
-                    content.push_line("");
-                    content.push(format!("You have **{} minutes** to click the start button before the seed is force started.", delay));
-                }
-            }
 
             let run = AsyncRun::BracketRace {
                 race_id,
@@ -1656,10 +1608,70 @@ fn forfeit_message(run: &AsyncRun, mentions: &str) -> (String, Vec<CreateActionR
             .label("Confirm Forfeit").style(ButtonStyle::Danger)])])
 }
 
-fn append_async_instructions(content: &mut MessageBuilder, force_start_delay: Option<i32>) {
-    content.push("**Instructions:**\n")
-        .push("1. Have your recording setup ready, then click **READY!** to receive your seed.\n")
-        .push("2. Download and prepare the seed. ");
+// A required seed remains required before generation; manually supplied seeds also
+// need delivery even if the event has no automatic generator.
+pub(crate) fn uses_seed(seed: &seed::Data, has_generator: bool) -> bool {
+    has_generator || seed.seed_data.is_some()
+}
+
+fn append_completion_evidence(content: &mut MessageBuilder, is_alttpr: bool, is_twwr: bool) {
+    content.push("• A screenshot showing your final time");
+    if is_alttpr {
+        content.push(" and collection rate");
+    } else if is_twwr {
+        content.push(" together with the sword in Ganondorf's head");
+    } else {
+        content.push(" and proof of run completion");
+    }
+    content.push(".\n");
+}
+
+fn append_bracket_recording_instructions(content: &mut MessageBuilder, first: bool, is_alttpr: bool, is_twwr: bool) {
+    content.push(if first { "\n\n**First Player Instructions:**\n" } else { "\n\n**Second Player Instructions:**\n" });
+    content.push(if first {
+        "• Record locally with OBS and upload to YouTube as unlisted.\n"
+    } else {
+        "• You can stream to Twitch/YouTube OR record locally and upload to YouTube as unlisted.\n"
+    });
+    content.push("When finished, inform us immediately and provide:\n");
+    append_completion_evidence(content, is_alttpr, is_twwr);
+    content.push(if first {
+        "• We suggest using MKV format for recording (more crash-resistant than MP4)."
+    } else {
+        "• If streaming to Twitch, ensure VODs are published for the organizers to access."
+    });
+}
+
+fn append_qualifier_recording_instructions(content: &mut MessageBuilder, is_alttpr: bool, is_twwr: bool) {
+    content.push("**Recording Requirements:**\n• Upload your recording to YouTube (unlisted is fine).\n");
+    append_completion_evidence(content, is_alttpr, is_twwr);
+}
+
+fn append_start_countdown_instructions(content: &mut MessageBuilder, force_start_delay: Option<i32>) {
+    content.push("Click **START COUNTDOWN** when ready. Start playing at **GO**, after the six-second countdown.");
+    if let Some(delay) = force_start_delay.filter(|delay| *delay > 0) {
+        content.push(format!("\nYou have **{delay} minutes** after READY before the countdown starts automatically."));
+    }
+}
+
+pub(crate) fn append_organizer_start_instructions(content: &mut MessageBuilder, has_seed: bool) {
+    if has_seed {
+        content.push(". The seed is prepared and will be delivered when the runner clicks **READY!**.");
+    } else {
+        content.push(". The runner can click **READY!**, then **START COUNTDOWN** when ready to begin.");
+    }
+    content.push(" Please help them in their async thread if any issues arise.");
+}
+
+fn append_async_instructions(content: &mut MessageBuilder, force_start_delay: Option<i32>, has_seed: bool) {
+    content.push("**Instructions:**\n");
+    if has_seed {
+        content.push("1. Have your recording setup ready, then click **READY!** to receive your seed.\n")
+            .push("2. Download and prepare the seed. ");
+    } else {
+        content.push("1. Have your recording setup ready, then click **READY!**.\n")
+            .push("2. Prepare your setup for the run. ");
+    }
     match force_start_delay.filter(|delay| *delay > 0) {
         Some(delay) => { content.push(format!("After READY, you have **{delay} minutes** to prepare before the countdown starts automatically.\n")); }
         None => { content.push("No automatic force-start is configured; click **START COUNTDOWN** when ready.\n"); }
@@ -1681,11 +1693,11 @@ const RUNNING_MESSAGE: &str = "**Good luck!** Click FINISH when done, or FORFEIT
 
 // Shared by bracket, normal qualifier, and pooled qualifier timers.
 const FORCE_START_WARNINGS: [(i64, &str); 2] = [
-    (120, "**2 minutes remaining** before the seed is force started!"),
-    (30, "**30 seconds remaining** before the seed is force started!"),
+    (120, "**2 minutes remaining** before the countdown starts automatically!"),
+    (30, "**30 seconds remaining** before the countdown starts automatically!"),
 ];
 
-const FORCE_START_MESSAGE: &str = "@here **The seed is being force started right now!**";
+const FORCE_START_MESSAGE: &str = "@here **The countdown is starting now!** Start playing at **GO**.";
 
 #[derive(Clone, Copy)]
 enum CountdownStep {
@@ -1835,13 +1847,8 @@ fn completion_message_content(run: &AsyncRun, formatted_time: &str, is_alttpr: b
         }
     }
 
-    if is_alttpr {
-        msg.push("• A screenshot of your final time & collection rate\n\n");
-    } else if is_twwr {
-        msg.push("• A screenshot showing your final time together with the sword in Ganondorf's head\n\n");
-    } else {
-        msg.push("• A screenshot of your final time and indication of seed completion\n\n");
-    }
+    append_completion_evidence(&mut msg, is_alttpr, is_twwr);
+    msg.push_line("");
 
     msg.push("Staff: click the **Confirm Result** button below to record the official time.");
     let confirm_button = CreateActionRow::Buttons(vec![
@@ -1943,14 +1950,6 @@ pub(crate) async fn handle_ready_bracket(
         interaction.user.id,
     )
     .await?;
-    interaction
-        .create_response(
-            ctx,
-            CreateInteractionResponse::UpdateMessage(
-                CreateInteractionResponseMessage::new().components(vec![]),
-            ),
-        )
-        .await?;
     Ok(())
 }
 
@@ -2065,11 +2064,8 @@ pub(crate) async fn handle_ready_qualifier(
         *team_id
     ).fetch_optional(&mut *transaction).await?.flatten();
 
-    if let Some(delay) = async_start_delay {
-        if delay > 0 {
-            seed_msg.push(format!("\nYou have **{} minutes** to click START COUNTDOWN before the seed is automatically started.", delay));
-        }
-    }
+    seed_msg.push_line("");
+    append_start_countdown_instructions(&mut seed_msg, async_start_delay);
 
     let run = AsyncRun::Qualifier {
         team_id: *team_id,
@@ -2099,16 +2095,15 @@ pub(crate) async fn handle_ready_qualifier(
             run.clone(), interaction.user.id, delay);
     }
 
-    interaction
-        .create_response(
-            ctx,
-            CreateInteractionResponse::UpdateMessage(
-                CreateInteractionResponseMessage::new().components(vec![]),
-            ),
-        )
-        .await?;
-
     Ok(())
+}
+
+fn bracket_seed_message(seed: &seed::Data, requires_seed: bool) -> Result<Option<MessageBuilder>, Error> {
+    match seed.to_seed_data() {
+        Some(data) => seed_message(&data).map(Some),
+        None if uses_seed(seed, requires_seed) => Err(Error::NoSeedAvailable),
+        None => Ok(None),
+    }
 }
 
 fn seed_message(seed_data: &serde_json::Value) -> Result<MessageBuilder, Error> {
@@ -2196,15 +2191,6 @@ pub(crate) async fn handle_ready_pooled(
     .await?;
     seed_message(&revealed.data)?;
     debug_assert_eq!(revealed.next_control_version, control_version + 1);
-    interaction
-        .create_response(
-            ctx,
-            CreateInteractionResponse::UpdateMessage(
-                CreateInteractionResponseMessage::new()
-                    .components(vec![]),
-            ),
-        )
-        .await?;
     pooled::reconcile(pool, &ctx.http, attempt_id).await?;
     Ok(())
 }
@@ -3067,9 +3053,12 @@ pub(crate) async fn dispatch_button(
         return Ok(false);
     };
 
-    run.verify_thread(pool, interaction.channel_id).await?;
-    match action.as_str() {
-        "ready" => match &run {
+    if action == "ready" {
+        // Thread/user checks and seed delivery can outlive the interaction deadline.
+        // Keep errors private and leave the shared READY message intact on failure.
+        interaction.defer_ephemeral(ctx).await?;
+        run.verify_thread(pool, interaction.channel_id).await?;
+        match &run {
             AsyncRun::BracketRace { .. } => {
                 handle_ready_bracket(ctx, interaction, pool, &run).await?
             }
@@ -3079,7 +3068,15 @@ pub(crate) async fn dispatch_button(
             AsyncRun::PooledQualifier { .. } => {
                 handle_ready_pooled(ctx, interaction, pool, &run).await?
             }
-        },
+        }
+        interaction.channel_id.edit_message(ctx, interaction.message.id,
+            EditMessage::new().components(vec![])).await?;
+        interaction.delete_response(&ctx.http).await?;
+        return Ok(true);
+    }
+
+    run.verify_thread(pool, interaction.channel_id).await?;
+    match action.as_str() {
         "start_countdown" => {
             handle_start_countdown(ctx, interaction, pool, &run).await?;
         }
