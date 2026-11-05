@@ -106,7 +106,7 @@
 }
 
 .race-info-link {
-  font-size: 1.25rem;
+  font-size: 1.125rem;
   text-decoration: none;
 }
 
@@ -283,8 +283,21 @@ nav h1 {
 .favicon-container {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   justify-content: center;
   gap: 8px;
+}
+
+.favicon-container > .favicon {
+  display: inline-flex;
+  flex: 0 0 16px;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+
+.favicon-container > .favicon > img {
+  display: block;
 }
 
 .favicon {
