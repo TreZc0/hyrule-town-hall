@@ -11,8 +11,15 @@
 }
 
 .race-detail {
-  max-width: 64rem;
-  margin: 0 auto;
+  width: 95%;
+  margin: 1.5rem 0 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.race-detail > :first-child {
+  margin-top: 0;
 }
 
 .race-detail-context,
@@ -25,10 +32,10 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
   gap: 1.5rem;
-  margin: 2rem 0;
-  padding: 1.5rem;
+  margin: 1.5rem 0;
+  padding: 1rem;
   border-block: 1px solid var(--border);
   background: var(--bg-secondary);
 }
@@ -36,7 +43,7 @@
 .race-entrant {
   flex: 1 1 12rem;
   min-width: 0;
-  text-align: center;
+  text-align: left;
   overflow-wrap: anywhere;
 }
 
@@ -51,6 +58,10 @@
 .race-previous {
   font-size: 0.9rem;
   line-height: 1.6;
+}
+
+.race-previous-meta {
+  margin-top: 0.25rem;
 }
 
 .race-detail-section {

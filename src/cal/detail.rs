@@ -9,6 +9,23 @@ fn entrants(race: &Race) -> Vec<Entrant> {
     }
 }
 
+// Previous opponents are context, not a second set of profile links.
+async fn opponent_name(
+    entrant: &Entrant,
+    transaction: &mut Transaction<'_, Postgres>,
+) -> sqlx::Result<String> {
+    Ok(match entrant {
+        Entrant::MidosHouseTeam(team) => team
+            .name(transaction)
+            .await?
+            .map_or_else(|| "(unnamed)".to_owned(), |name| name.into_owned()),
+        Entrant::Discord { id, .. } => User::from_discord(&mut **transaction, *id)
+            .await?
+            .map_or_else(|| id.to_string(), |user| user.display_name().to_owned()),
+        Entrant::Named { name, .. } => name.clone(),
+    })
+}
+
 // Names alone are not identities: two unlinked entrants can have the same name.
 fn same_entrant(a: &Entrant, b: &Entrant) -> bool {
     match (a, b) {
@@ -255,6 +272,22 @@ pub(crate) async fn race_detail(
     let broadcast_race = primary.unwrap_or(&race);
     let mut broadcasts = broadcast_race.video_urls.iter().collect::<Vec<_>>();
     broadcasts.sort_by_key(|(language, _)| **language);
+    let multistream = if broadcasts.is_empty() {
+        if matches!(
+            broadcast_race.schedule,
+            RaceSchedule::Live { room: Some(_), .. }
+        ) {
+            broadcast_race
+                .multistream_url(&mut transaction, http_client, &data)
+                .await?
+        } else {
+            broadcast_race
+                .multistream_url_prerace(&mut transaction, http_client, &data)
+                .await?
+        }
+    } else {
+        None
+    };
     let signups = Signup::for_race(&mut transaction, broadcast_race.id).await?;
     let bindings = EffectiveRoleBinding::for_event(&mut transaction, series, event).await?;
     let mut volunteers = Vec::new();
@@ -322,14 +355,21 @@ pub(crate) async fn race_detail(
                         @if let Some(previous) = previous_race(&race, entrant, &event_races, now) {
                             div(class = "race-previous") {
                                 a(href = uri!(race_detail(series, event, previous.id))) : "Previous race";
-                                @if let Some(start) = public_parts(previous).iter().filter_map(|part| part.start()).min() {
-                                    : " · "; : format_datetime(start, DateTimeFormat { long: false, running_text: false });
-                                }
-                                @if let Some(game) = previous.game { : " · Game "; : game; }
-                                div {
-                                    @for (index, opponent) in entrants(previous).iter().filter(|other| !same_entrant(entrant, other)).enumerate() {
+                                @let previous_entrants = entrants(previous);
+                                @let opponents = previous_entrants.iter().filter(|other| !same_entrant(entrant, other)).collect::<Vec<_>>();
+                                @let previous_start = public_parts(previous).iter().filter_map(|part| part.start()).min();
+                                div(class = "race-previous-meta") {
+                                    @for (index, opponent) in opponents.iter().enumerate() {
                                         : if index == 0 { "vs. " } else { ", " };
-                                        : opponent.to_html_with_optional_discord(&mut transaction, None, None, false).await?;
+                                        bdi : opponent_name(opponent, &mut transaction).await?;
+                                    }
+                                    @if let Some(start) = previous_start {
+                                        @if !opponents.is_empty() { : " · "; }
+                                        : format_datetime(start, DateTimeFormat { long: false, running_text: false });
+                                    }
+                                    @if let Some(game) = previous.game {
+                                        @if !opponents.is_empty() || previous_start.is_some() { : " · "; }
+                                        : "Game "; : game;
                                     }
                                 }
                             }
@@ -378,12 +418,15 @@ pub(crate) async fn race_detail(
                     }
                 }
             }
-            @if !broadcasts.is_empty() || !rooms.is_empty() || bracket.is_some() {
+            @if !broadcasts.is_empty() || multistream.is_some() || !rooms.is_empty() || bracket.is_some() {
                 section(class = "race-detail-section") {
                     h2 : "Watch & links";
                     div(class = "race-detail-links") {
                         @for (language, url) in &broadcasts {
                             a(class = "button", href = url.as_str(), target = "_blank", rel = "noopener noreferrer") : format!("{language} restream");
+                        }
+                        @if let Some(url) = &multistream {
+                            a(class = "button", href = url.as_str(), target = "_blank", rel = "noopener noreferrer") : "Watch multistream";
                         }
                         @for (index, room) in rooms.iter().enumerate() {
                             a(class = "button", href = room.as_str(), target = "_blank", rel = "noopener noreferrer") : if rooms.len() == 1 { "Race room".to_owned() } else { format!("Race room {}", index + 1) };
