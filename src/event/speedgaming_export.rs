@@ -2,9 +2,11 @@
 
 use {
     crate::{
+        cal,
         event::{self, Data, Tab},
         form::{form_field, full_form},
         http::{PageError, PageKind, PageStyle, StatusOrError, page},
+        id::Races,
         prelude::*,
         series::Series,
         speedgaming_export::{self, ExportConfig, ExportTrigger},
@@ -151,6 +153,7 @@ fn delivery_issues(
             } else {
                 p : "Retry an export, or ignore it to stop synchronization for that export. Ignoring keeps existing SpeedGaming entries.";
                 p : "Before retrying an uncertain submission, check SpeedGaming to avoid submitting it twice.";
+                p : "Re-export creates a new entry with the current race time and export delay. Remove any old entry on SpeedGaming first to avoid duplicates.";
                 form(method = "post", action = uri!(resolve_issues(series, event, export_id))) {
                     input(type = "hidden", name = "csrf", value = csrf.map(|token| token.authenticity_token().to_string()).unwrap_or_default());
                     button(type = "submit", name = "action", value = "ignore") : "Ignore all issues";
@@ -161,7 +164,11 @@ fn delivery_issues(
                         @for delivery in issues {
                             tr {
                                 td : &delivery.description;
-                                td : delivery.race_id.map(|id| id.to_string()).unwrap_or_default();
+                                td {
+                                    @if let Some(id) = delivery.race_id {
+                                        a(href = uri!(cal::edit_race(series, event, Id::<Races>::from(id as u64), Some(uri!(get(series, event)))))) : id.to_string();
+                                    }
+                                }
                                 td : delivery.episode_id.map(|id| id.to_string()).unwrap_or_default();
                                 td : &delivery.status;
                                 td : delivery.last_error.as_deref().unwrap_or_default();
@@ -171,6 +178,9 @@ fn delivery_issues(
                                         input(type = "hidden", name = "kind", value = &delivery.kind);
                                         input(type = "hidden", name = "id", value = delivery.id.to_string());
                                         button(type = "submit", name = "action", value = "retry", onclick? = delivery.status.contains("ambiguous").then_some("return confirm('Retry this uncertain submission? Confirm that SpeedGaming did not already receive it.')")) : "Retry";
+                                        @if delivery.kind == "race" {
+                                            button(type = "submit", name = "action", value = "reexport", onclick = "return confirm('Create a new SpeedGaming entry using the current race time and export delay? Any old entry must be removed on SpeedGaming manually to avoid duplicates.')") : "Re-export";
+                                        }
                                         button(type = "submit", name = "action", value = "ignore") : "Ignore";
                                     }
                                 }
@@ -489,6 +499,55 @@ async fn resolve_delivery_issues(
     Ok(())
 }
 
+async fn reexport_delivery(
+    transaction: &mut Transaction<'_, Postgres>,
+    export_id: i32,
+    race_id: i64,
+) -> sqlx::Result<bool> {
+    // Lock the race as well as its delivery so a concurrent cancellation cannot
+    // be overwritten by the reset. The caller holds both synchronization locks.
+    let previous: Option<(Option<i64>,)> = sqlx::query_as(
+        "WITH previous AS (
+            SELECT re.race_id, re.export_id, re.episode_id
+            FROM speedgaming_race_exports re
+            JOIN speedgaming_exports e ON e.id = re.export_id
+            JOIN races r ON r.id = re.race_id AND r.series = e.series AND r.event = e.event
+            WHERE re.export_id = $1 AND re.race_id = $2
+              AND re.state IN ('failed', 'ambiguous')
+              AND e.enabled AND e.archived_at IS NULL AND NOT r.ignored AND r.start > NOW()
+            FOR UPDATE OF r, re
+        )
+        UPDATE speedgaming_race_exports re
+        SET episode_id = NULL, match_id = NULL, synced_start = NULL,
+            operation = 'create', state = 'pending', exported_at = NULL,
+            attempt_count = 0, last_error = NULL, last_attempt_at = NULL, last_polled_at = NULL
+        FROM previous p
+        WHERE re.race_id = p.race_id AND re.export_id = p.export_id
+        RETURNING p.episode_id",
+    )
+    .bind(export_id)
+    .bind(race_id)
+    .fetch_optional(&mut **transaction)
+    .await?;
+    let Some((episode_id,)) = previous else {
+        return Ok(false);
+    };
+    // Drop tracking for the old episode, including withdrawn/deleted signups.
+    // Active signups will be submitted to the new episode by the normal worker.
+    // Explicitly ignored volunteer exports remain ignored.
+    sqlx::query(
+        "DELETE FROM speedgaming_volunteer_exports v
+        WHERE v.export_id = $1 AND v.state <> 'ignored'
+          AND (v.episode_id = $2 OR v.signup_id IN (SELECT id FROM signups WHERE race_id = $3))",
+    )
+    .bind(export_id)
+    .bind(episode_id)
+    .bind(race_id)
+    .execute(&mut **transaction)
+    .await?;
+    Ok(true)
+}
+
 #[rocket::post(
     "/event/<series>/<event>/sg-export/<export_id>/issues",
     data = "<form>"
@@ -510,13 +569,16 @@ pub(crate) async fn resolve_issues(
     form.verify(&csrf);
     if let Some(value) = form.value {
         let retry = match value.action.as_str() {
-            "retry" => true,
+            "retry" | "reexport" => true,
             "ignore" => false,
             _ => return Err(StatusOrError::Status(Status::BadRequest)),
         };
         match (value.kind.as_deref(), value.id, retry) {
             (None, None, false) | (Some("race" | "volunteer"), Some(_), _) => {}
             _ => return Err(StatusOrError::Status(Status::BadRequest)),
+        }
+        if value.action == "reexport" && value.kind.as_deref() != Some("race") {
+            return Err(StatusOrError::Status(Status::BadRequest));
         }
         let _guard = speedgaming_export::SYNC_LOCK.lock().await;
         let mut transaction = pool.begin().await?;
@@ -529,14 +591,20 @@ pub(crate) async fn resolve_issues(
         if export.series != series || export.event != event {
             return Err(StatusOrError::Status(Status::NotFound));
         }
-        resolve_delivery_issues(
-            &mut transaction,
-            export_id,
-            value.kind.as_deref(),
-            value.id,
-            retry,
-        )
-        .await?;
+        if value.action == "reexport" {
+            if !reexport_delivery(&mut transaction, export_id, value.id.unwrap()).await? {
+                return Err(StatusOrError::Status(Status::Conflict));
+            }
+        } else {
+            resolve_delivery_issues(
+                &mut transaction,
+                export_id,
+                value.kind.as_deref(),
+                value.id,
+                retry,
+            )
+            .await?;
+        }
         transaction.commit().await?;
         if retry {
             speedgaming_export::schedule_sync(pool.inner().clone(), http_client.inner().clone());
@@ -641,7 +709,7 @@ mod tests {
                 export_id,
                 kind: kind.into(),
                 id: id as i64,
-                race_id: Some(123),
+                race_id: Some(-3293359089707479822),
                 description: description.into(),
                 episode_id: Some(124),
                 status: "failed".into(),
@@ -662,10 +730,126 @@ mod tests {
         assert!(html.contains("Ignore all issues"));
         assert_eq!(html.matches(">Ignore</button>").count(), 2);
         assert_eq!(html.matches(">Retry</button>").count(), 2);
+        assert_eq!(html.matches(">Re-export</button>").count(), 1);
+        let race_id = -3293359089707479822_i64;
+        assert_eq!(
+            html.matches(&format!("/races/{}/edit?", race_id as u64))
+                .count(),
+            2
+        );
+        assert_eq!(html.matches(&format!(">{race_id}</a>")).count(), 2);
+        assert!(html.contains("redirect_to="));
         let html = delivery_issues(&[], 1, Series::Crosskeys, "test", None).0;
         assert!(html.contains("No export issues."));
         assert!(!html.contains("<table"));
         assert!(!html.contains("Ignore all issues"));
+    }
+
+    #[tokio::test]
+    #[ignore = "requires HTH_TEST_DATABASE_URL pointing to a migrated *_test database"]
+    async fn reexport_resets_failed_delivery_and_volunteers_within_export_scope() {
+        let pool = event::configuration::test_pool().await;
+        let mut transaction = pool.begin().await.unwrap();
+        let key = rng().random_range(1_000_000_i64..10_000_000);
+        let event = format!("re{key}");
+        let other_event = format!("ro{key}");
+        let race_id = -key * 100;
+        for slug in [&event, &other_event] {
+            sqlx::query("INSERT INTO events (series, event, display_name, team_config) VALUES ('xkeys', $1, 'SpeedGaming re-export test', 'solo')")
+                .bind(slug).execute(&mut *transaction).await.unwrap();
+        }
+        let export_id: i32 = sqlx::query_scalar("INSERT INTO speedgaming_exports (series, event, slug, trigger_condition, delay_minutes) VALUES ('xkeys', $1, 'test', 'when_scheduled', 15) RETURNING id")
+            .bind(&event).fetch_one(&mut *transaction).await.unwrap();
+        let other_export: i32 = sqlx::query_scalar("INSERT INTO speedgaming_exports (series, event, slug, trigger_condition) VALUES ('xkeys', $1, 'other', 'when_scheduled') RETURNING id")
+            .bind(&other_event).fetch_one(&mut *transaction).await.unwrap();
+        sqlx::query("INSERT INTO races (id, series, event, start, p1, p2) VALUES ($1, 'xkeys', $2, NOW() + INTERVAL '7 days', 'A', 'B')")
+            .bind(race_id).bind(&event).execute(&mut *transaction).await.unwrap();
+        for id in [export_id, other_export] {
+            sqlx::query("INSERT INTO speedgaming_race_exports (race_id, export_id, episode_id, match_id, synced_start, state, operation, attempt_count, last_error, last_attempt_at, exported_at, last_polled_at) VALUES ($1, $2, 124, 125, NOW() + INTERVAL '1 day', 'failed', 'delete', 3, 'Episode absent', NOW(), NOW(), NOW())")
+                .bind(race_id).bind(id).execute(&mut *transaction).await.unwrap();
+            // These records intentionally cover signups that no longer exist.
+            sqlx::query("INSERT INTO speedgaming_volunteer_exports (signup_id, export_id, episode_id, remote_id, role, state, submitted_at) VALUES ($1, $2, 124, 126, 'Commentary', 'succeeded', NOW()), ($1 - 1, $2, 124, 127, 'Tracking', 'ignored', NULL), ($1 - 2, $2, 999, 128, 'Commentary', 'succeeded', NOW())")
+                .bind(-(key as i32)).bind(id).execute(&mut *transaction).await.unwrap();
+        }
+        assert!(
+            !reexport_delivery(&mut transaction, other_export, race_id)
+                .await
+                .unwrap(),
+            "a race must belong to the export's event"
+        );
+        assert!(
+            reexport_delivery(&mut transaction, export_id, race_id)
+                .await
+                .unwrap()
+        );
+        let reset: bool = sqlx::query_scalar("SELECT episode_id IS NULL AND match_id IS NULL AND synced_start IS NULL AND operation = 'create' AND state = 'pending' AND attempt_count = 0 AND last_error IS NULL AND last_attempt_at IS NULL AND exported_at IS NULL AND last_polled_at IS NULL FROM speedgaming_race_exports WHERE export_id = $1 AND race_id = $2")
+            .bind(export_id).bind(race_id).fetch_one(&mut *transaction).await.unwrap();
+        assert!(reset);
+        let scheduled: bool =
+            sqlx::query_scalar("SELECT start = NOW() + INTERVAL '7 days' FROM races WHERE id = $1")
+                .bind(race_id)
+                .fetch_one(&mut *transaction)
+                .await
+                .unwrap();
+        assert!(
+            scheduled,
+            "re-export must use the current schedule without changing it"
+        );
+        let remaining: Vec<(i32, String)> = sqlx::query_as("SELECT signup_id, state::text FROM speedgaming_volunteer_exports WHERE export_id = $1 ORDER BY signup_id DESC")
+            .bind(export_id).fetch_all(&mut *transaction).await.unwrap();
+        assert_eq!(
+            remaining,
+            vec![-(key as i32) - 1, -(key as i32) - 2]
+                .into_iter()
+                .zip(["ignored".into(), "succeeded".into()])
+                .collect_vec()
+        );
+        let other: (Option<i64>, String, i64) = sqlx::query_as("SELECT episode_id, state::text, (SELECT COUNT(*) FROM speedgaming_volunteer_exports WHERE export_id = $1) FROM speedgaming_race_exports WHERE export_id = $1 AND race_id = $2")
+            .bind(other_export).bind(race_id).fetch_one(&mut *transaction).await.unwrap();
+        assert_eq!(other, (Some(124), "failed".into(), 3));
+        assert!(
+            !reexport_delivery(&mut transaction, export_id, race_id)
+                .await
+                .unwrap(),
+            "a repeated request must not reset a queued export"
+        );
+
+        for (start, ignored) in [
+            (None, false),
+            (Some(Utc::now() - TimeDelta::days(1)), false),
+            (Some(Utc::now() + TimeDelta::days(7)), true),
+        ] {
+            sqlx::query("UPDATE races SET start = $2, ignored = $3 WHERE id = $1")
+                .bind(race_id)
+                .bind(start)
+                .bind(ignored)
+                .execute(&mut *transaction)
+                .await
+                .unwrap();
+            sqlx::query("UPDATE speedgaming_race_exports SET state = 'failed' WHERE export_id = $1 AND race_id = $2")
+                .bind(export_id).bind(race_id).execute(&mut *transaction).await.unwrap();
+            assert!(
+                !reexport_delivery(&mut transaction, export_id, race_id)
+                    .await
+                    .unwrap(),
+                "unscheduled, past, and canceled races cannot be re-exported"
+            );
+        }
+
+        // A missing local race must not be recreated from a stale export record.
+        sqlx::query("DELETE FROM races WHERE id = $1")
+            .bind(race_id)
+            .execute(&mut *transaction)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE speedgaming_race_exports SET state = 'failed' WHERE export_id = $1 AND race_id = $2")
+            .bind(export_id).bind(race_id).execute(&mut *transaction).await.unwrap();
+        assert!(
+            !reexport_delivery(&mut transaction, export_id, race_id)
+                .await
+                .unwrap()
+        );
+        transaction.rollback().await.unwrap();
     }
 
     #[tokio::test]
