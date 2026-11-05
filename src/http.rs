@@ -1012,6 +1012,7 @@ pub(crate) async fn rocket(
             cal::import_races_post,
             cal::import_races_status,
             cal::practice_seed,
+            cal::detail::race_detail,
             cal::edit_race,
             cal::edit_race_post,
             cal::add_file_hash,

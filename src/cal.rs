@@ -29,6 +29,7 @@ use {
 
 #[cfg(test)]
 mod room_opening_tests;
+pub(crate) mod detail;
 mod scheduling_order;
 
 fn room_open_lead_time(
@@ -4135,6 +4136,13 @@ pub(crate) async fn race_table(
         .iter()
         .map(|race| i64::from(race.id))
         .collect::<Vec<_>>();
+    // Import previews and synthetic async rows do not yet have addressable race records.
+    let persisted_race_ids = sqlx::query_scalar::<_, Id<Races>>("SELECT id FROM races WHERE id = ANY($1)")
+        .bind(&displayed_race_ids)
+        .fetch_all(&mut **transaction)
+        .await?
+        .into_iter()
+        .collect::<HashSet<_>>();
     let shared_rooms = if displayed_race_ids.is_empty() {
         HashMap::new()
     } else {
@@ -4578,6 +4586,9 @@ pub(crate) async fn race_table(
                         }
                         td {
                             div(class = "favicon-container") {
+                                @if race.id != Id::dummy() && persisted_race_ids.contains(&race.id) {
+                                    a(class = "favicon race-info-link", title = "Race details", aria_label = "Race details", href = uri!(detail::race_detail(race.series, &*race.event, race.id))) : "ⓘ";
+                                }
                                 @for (language, video_url) in &restream_race.video_urls {
                                     a(class = "favicon", title = format!("{language} restream"), href = video_url.to_string(), target = "_blank") : favicon(video_url);
                                 }

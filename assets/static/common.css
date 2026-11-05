@@ -10,6 +10,125 @@
   --hover-text: #ffffff;
 }
 
+.race-detail {
+  max-width: 64rem;
+  margin: 0 auto;
+}
+
+.race-detail-context,
+.race-previous,
+.race-versus {
+  color: var(--text-muted);
+}
+
+.race-matchup {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 1.5rem;
+  margin: 2rem 0;
+  padding: 1.5rem;
+  border-block: 1px solid var(--border);
+  background: var(--bg-secondary);
+}
+
+.race-entrant {
+  flex: 1 1 12rem;
+  min-width: 0;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
+.race-entrant h2 {
+  margin: 0 0 0.75rem;
+}
+
+.race-versus {
+  font-size: 1.5rem;
+}
+
+.race-previous {
+  font-size: 0.9rem;
+  line-height: 1.6;
+}
+
+.race-detail-section {
+  margin-block: 1.5rem;
+  overflow-wrap: anywhere;
+}
+
+.race-detail-section dt {
+  font-weight: bold;
+  margin-top: 0.75rem;
+}
+
+.race-detail-section dd {
+  margin: 0.25rem 0 0;
+}
+
+.race-settings-summary {
+  white-space: pre-wrap;
+}
+
+.race-detail-section pre {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.race-detail-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.race-detail-links .button {
+  margin: 0;
+  border-radius: 4px;
+}
+
+.race-stream {
+  margin-top: 1rem;
+}
+
+.race-stream-player {
+  overflow-x: auto;
+  margin-top: 0.75rem;
+}
+
+.race-stream-player iframe {
+  display: block;
+  width: 100%;
+  min-width: 400px;
+  min-height: 300px;
+  aspect-ratio: 16 / 9;
+  border: 0;
+}
+
+.race-info-link {
+  font-size: 1.25rem;
+  text-decoration: none;
+}
+
+@media (max-width: 36rem) {
+  .race-matchup-two {
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+
+  .race-matchup-two .race-entrant {
+    flex-basis: auto;
+    width: 100%;
+  }
+}
+
+/* Twitch requires a player at least 400px wide; external watch links remain available. */
+@media (max-width: 431px) {
+  .race-stream {
+    display: none;
+  }
+}
+
 /* Volunteer ping workflow role selection, including the inline editor. */
 .ping-role-selection {
   min-inline-size: 0;
