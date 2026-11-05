@@ -130,7 +130,9 @@ fn twitch_embed(url: &Url, ended: bool) -> Option<String> {
     }
 }
 
-#[rocket::get("/event/<series>/<event>/races/<id>")]
+// Rocket gives both this dynamic path and /races/import the same default rank.
+// Keep named race routes ahead of the detail fallback so ignition cannot collide.
+#[rocket::get("/event/<series>/<event>/races/<id>", rank = 1)]
 pub(crate) async fn race_detail(
     pool: &State<PgPool>,
     http_client: &State<reqwest::Client>,
