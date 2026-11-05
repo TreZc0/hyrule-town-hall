@@ -1,8 +1,5 @@
 use super::*;
 
-#[cfg(test)]
-mod tests;
-
 fn entrants(race: &Race) -> Vec<Entrant> {
     match &race.entrants {
         Entrants::Two(entrants) => entrants.to_vec(),
@@ -127,6 +124,72 @@ fn twitch_embed(url: &Url, ended: bool) -> Option<String> {
             Some(format!("channel={channel}"))
         }
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn race_detail_does_not_collide_with_neighboring_routes() {
+        let routes = rocket::routes![
+            race_detail,
+            create_race,
+            import_races,
+            import_races_status,
+            practice_seed,
+            edit_race,
+            add_file_hash,
+        ];
+        for (index, route) in routes.iter().enumerate() {
+            for other in &routes[index + 1..] {
+                assert!(
+                    !route.collides_with(other),
+                    "{:?} collides with {:?}",
+                    route.name,
+                    other.name
+                );
+            }
+        }
+        for named in &routes[1..3] {
+            assert!(
+                named.rank < routes[0].rank,
+                "named routes must take precedence"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn race_detail_and_named_race_routes_ignite_together() {
+        // Only ignition is exercised: no real credentials, database, or Discord connection.
+        let oauth = serde_json::json!({"clientID": "test", "clientSecret": "test"});
+        let config: Config = serde_json::from_value(serde_json::json!({
+            "challonge": oauth,
+            "challongeApiKey": "test",
+            "discord": {"clientID": "1", "clientSecret": "test", "botToken": "test"},
+            "leagueApiKey": "test",
+            "ootrApiKey": "test",
+            "ootrApiKeyEncryption": "test",
+            "racetimeBot": oauth,
+            "racetimeOAuth": oauth,
+            "secretKey": "test",
+            "startgg": "test",
+            "startggOAuth": oauth
+        }))
+        .unwrap();
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://unused:unused@127.0.0.1/unused")
+            .unwrap();
+        rocket::build()
+            .manage(pool)
+            .manage(config)
+            .manage(reqwest::Client::new())
+            .manage(RwFuture::new(std::future::pending::<DiscordCtx>()))
+            .mount("/", rocket::routes![race_detail, create_race, import_races])
+            .ignite()
+            .await
+            .expect("race detail must coexist with /races/new and /races/import at startup");
     }
 }
 
