@@ -29,6 +29,8 @@ use {
 
 #[cfg(test)]
 mod room_opening_tests;
+#[cfg(test)]
+mod async_visibility_tests;
 pub(crate) mod detail;
 mod scheduling_order;
 
@@ -525,6 +527,21 @@ pub(crate) enum RaceSchedule {
 }
 
 impl RaceSchedule {
+    fn async_seed_is_public(&self, part_count: usize, received: [bool; 3]) -> bool {
+        let Self::Async {
+            end1, end2, end3, ..
+        } = self
+        else {
+            return false;
+        };
+        matches!(part_count, 2 | 3)
+            && [end1, end2, end3]
+                .iter()
+                .zip(received)
+                .take(part_count)
+                .all(|(end, received)| end.is_some() || received)
+    }
+
     fn new(
         live_start: Option<DateTime<Utc>>,
         async_start1: Option<DateTime<Utc>>,
@@ -1704,18 +1721,36 @@ impl Race {
         }
     }
 
-    /// The seed remains hidden until it's posted in the last calendar event of this race.
-    pub(crate) fn show_seed(&self) -> bool {
-        if let RaceSchedule::Unscheduled = self.schedule {
-            return false;
+    /// Async seeds are public only after every entrant has finished or received the seed.
+    pub(crate) async fn show_seed(
+        &self,
+        transaction: &mut Transaction<'_, Postgres>,
+    ) -> sqlx::Result<bool> {
+        if matches!(self.schedule, RaceSchedule::Async { .. }) {
+            let part_count = match self.entrants {
+                Entrants::Two(_) => 2,
+                Entrants::Three(_) => 3,
+                _ => return Ok(false),
+            };
+            if self.schedule.async_seed_is_public(part_count, [false; 3]) {
+                return Ok(true);
+            }
+            // These flags are set only after seed delivery succeeds, never just on scheduling.
+            let received: Option<(bool, bool, bool)> = sqlx::query_as(
+                "SELECT async_seed1, async_seed2, async_seed3 FROM races WHERE id = $1",
+            )
+            .bind(self.id)
+            .fetch_optional(&mut **transaction)
+            .await?;
+            return Ok(received.is_some_and(|(a, b, c)| {
+                self.schedule.async_seed_is_public(part_count, [a, b, c])
+            }));
         }
-        let now = Utc::now();
-        self.cal_events().all(|event| {
-            event.is_private_async_part()
-                || event
-                    .start()
-                    .is_some_and(|start| start <= now + TimeDelta::minutes(15))
-                || event.end().is_some()
+        Ok(match self.schedule {
+            RaceSchedule::Live { start, end, .. } => {
+                end.is_some() || start <= Utc::now() + TimeDelta::minutes(15)
+            }
+            RaceSchedule::Unscheduled | RaceSchedule::Async { .. } => false,
         })
     }
 
@@ -4083,7 +4118,7 @@ pub(crate) async fn race_table(
     let has_games = options.game_count || races.iter().any(|race| race.game.is_some());
     let has_seeds = 'has_seeds: {
         for race in races {
-            if race.show_seed() {
+            if race.show_seed(&mut *transaction).await? {
                 if race.seed.file_hash.is_some() || race.seed.files().is_some() {
                     break 'has_seeds true;
                 }
@@ -4657,8 +4692,9 @@ pub(crate) async fn race_table(
                             }
                         }
                         @if has_seeds {
+                            @let show_seed = race.show_seed(&mut *transaction).await?;
                             td {
-                                @if race.show_seed() {
+                                @if show_seed {
                                     @let game_id = event.game(&mut *transaction).await?.map(|g| g.id).unwrap_or(1);
                                     // Only show "Add Hash" for games that support hashes (not TWWR)
                                     @let supports_hash = !matches!(event.rando_version, Some(racetime_bot::VersionedBranch::Tww { .. }));
@@ -4691,7 +4727,7 @@ pub(crate) async fn race_table(
                                 }
 
                                 // Add Settings link for races with per-race player-chosen settings
-                                @if race.show_seed() || race.is_ended() || matches!(race.schedule, RaceSchedule::Unscheduled | RaceSchedule::Async { .. } | RaceSchedule::Live { .. }) {
+                                @if show_seed || race.is_ended() || matches!(race.schedule, RaceSchedule::Unscheduled | RaceSchedule::Async { .. } | RaceSchedule::Live { .. }) {
                                     @if let Some(sgt) = event.seed_gen_type.as_ref() {
                                         @if let Some(summary) = sgt.settings_display_str(&mut **transaction, race, &event.choice_requirements()).await {
                                             span(class = "settings-link", data_tooltip = summary) {

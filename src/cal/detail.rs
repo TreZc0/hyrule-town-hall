@@ -272,7 +272,11 @@ pub(crate) async fn race_detail(
     let broadcast_race = primary.unwrap_or(&race);
     let mut broadcasts = broadcast_race.video_urls.iter().collect::<Vec<_>>();
     broadcasts.sort_by_key(|(language, _)| **language);
-    let multistream = if broadcasts.is_empty() {
+    let is_async = matches!(race.schedule, RaceSchedule::Async { .. });
+    let multistream = if broadcasts.is_empty()
+        && !is_async
+        && !matches!(broadcast_race.schedule, RaceSchedule::Async { .. })
+    {
         if matches!(
             broadcast_race.schedule,
             RaceSchedule::Live { room: Some(_), .. }
@@ -334,7 +338,9 @@ pub(crate) async fn race_detail(
     related_games.sort_by_key(|other| (other.game, other.id));
     let rooms = broadcast_race.rooms().collect::<Vec<_>>();
     let bracket = race.startgg_set_url()?;
-    let parts = public_parts(primary.unwrap_or(&race));
+    // Schedules are public; private room URLs still go through Race::rooms().
+    let parts = broadcast_race.cal_events().collect::<Vec<_>>();
+    let show_seed = race.show_seed(&mut transaction).await?;
     let title = race.custom_title.as_deref().unwrap_or("Race details");
     let content = html! {
         : header;
@@ -346,6 +352,12 @@ pub(crate) async fn race_detail(
                 @if let Some(phase) = &race.phase { : " · "; : phase; }
                 @if let Some(round) = &race.round { : " · "; : round; }
                 @if let Some(game) = race.game { : " · Game "; : game; }
+            }
+            @if is_async {
+                div(class = "race-async-notice") {
+                    strong : "Async race";
+                    p : "Played separately, with an individual schedule for each entrant.";
+                }
             }
             div(class = if participants.len() == 2 { "race-matchup race-matchup-two" } else { "race-matchup" }) {
                 @for (index, entrant) in participants.iter().enumerate() {
@@ -386,11 +398,24 @@ pub(crate) async fn race_detail(
             }
             section(class = "race-detail-section", aria_label = "Schedule") {
                 h2 : "Schedule";
-                p(class = "race-detail-status") : if race.is_ended() { "Finished" } else if parts.iter().all(|part| part.start().is_none()) { "Not scheduled yet" } else if parts.iter().any(|part| part.start().is_some_and(|start| start <= now)) { "Awaiting completion" } else { "Scheduled" };
+                @if is_async {
+                    p(class = "race-detail-status") : format!("{} of {} parts scheduled · {} of {} parts completed",
+                        parts.iter().filter(|part| part.start().is_some()).count(), parts.len(),
+                        parts.iter().filter(|part| part.end().is_some()).count(), parts.len());
+                } else {
+                    p(class = "race-detail-status") : if race.is_ended() { "Finished" } else if parts.iter().all(|part| part.start().is_none()) { "Not scheduled yet" } else if parts.iter().any(|part| part.start().is_some_and(|start| start <= now)) { "Awaiting completion" } else { "Scheduled" };
+                }
                 @for part in &parts {
                     p {
-                        @if matches!(race.schedule, RaceSchedule::Async { .. }) {
-                            : match part.kind { EventKind::Async1 => "Async part 1: ", EventKind::Async2 => "Async part 2: ", EventKind::Async3 => "Async part 3: ", EventKind::Normal => "" };
+                        @if is_async {
+                            @let index = match part.kind { EventKind::Async1 => 0, EventKind::Async2 => 1, EventKind::Async3 => 2, EventKind::Normal => 0 };
+                            strong {
+                                : format!("Async part {}", index + 1);
+                                @if let Some(entrant) = participants.get(index) {
+                                    : " — "; bdi : opponent_name(entrant, &mut transaction).await?;
+                                }
+                                : ": ";
+                            }
                         }
                         @if let Some(start) = part.start() {
                             : format_datetime(start, DateTimeFormat { long: true, running_text: false });
@@ -470,11 +495,13 @@ pub(crate) async fn race_detail(
             }
             section(class = "race-detail-section") {
                 h2 : "Seed";
-                @if race.show_seed() {
+                @if show_seed {
                     @let game_id = data.game(&mut transaction).await?.map(|game| game.id).unwrap_or(1);
                     @if race.seed.file_hash.is_some() || race.seed.files().is_some() {
                         : seed::table_cell(now, &race.seed, true, None, &mut transaction, game_id, preset.as_deref()).await?;
                     } else { p : "No seed recorded."; }
+                } else if is_async {
+                    p : "The seed stays hidden until every entrant has finished or received it.";
                 } else { p : "The seed has not been revealed publicly yet."; }
             }
             @if !volunteers.is_empty() {
