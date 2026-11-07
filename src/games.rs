@@ -1,3 +1,4 @@
+pub(crate) mod racetime;
 pub(crate) mod series;
 use crate::{
     event::roles::{
@@ -406,6 +407,7 @@ async fn game_page<'a>(
                 }
                 @if me.as_ref().is_some_and(User::is_global_admin) {
                     p { a(href = uri!(series::get(&game.name))) : "Manage Series"; }
+                    p { a(href = uri!(racetime::get(&game.name, _))) : "Manage racetime Connection"; }
                 }
                 p {
                     a(href = uri!(manage_admins(&game.name))) : "Manage Game Admins";

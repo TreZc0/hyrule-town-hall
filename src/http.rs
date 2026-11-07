@@ -1175,6 +1175,8 @@ pub(crate) async fn rocket(
             admin::game_management_overview,
             games::series::get,
             games::series::post,
+            games::racetime::get,
+            games::racetime::post,
             games::list,
             games::get,
             games::manage_admins,
