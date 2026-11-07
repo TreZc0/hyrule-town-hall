@@ -289,7 +289,7 @@ pub(crate) async fn get(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>)
                         code : "!ready";
                         : " is a broadcast gate, not the entrant Ready button. Only the racetime.gg account assigned as a restreamer for that race can use it. Wait until the stream is genuinely ready: the channel is live, the correct runner feeds are visible, and the production team is prepared.";
                     }
-                    p : "If HTH says that only restreamers can use the command, check the Restreamer field—not just the Restream URL—and make sure it identifies the same racetime.gg account currently in the room. When no restreamer identity was assigned, an organizer must arrange race-monitor access before the start can be controlled.";
+                    p : "If HTH says that only restreamers can use the command, check the Restreamer field-not just the Restream URL-and make sure it identifies the same racetime.gg account currently in the room. When no restreamer identity was assigned, an organizer must arrange race-monitor access before the start can be controlled.";
                 }
 
                 div(class = "hth-info-screenshot-grid") {
@@ -671,7 +671,7 @@ pub(crate) async fn get(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>)
             }
 
             section(id = "faq", class = "hth-info-section hth-info-final hth-info-faq-section") {
-                h2 : "FAQ: something went wrong—what now?";
+                h2 : "FAQ: something went wrong-what now?";
                 p : "These are the usual recovery paths. Use Discord commands in the match's scheduling thread and racetime.gg commands in the race room, as described below. Some commands are limited to runners, race monitors, or event organizers. If an event has stricter rules, follow those rules first.";
                 div(class = "hth-info-faq") {
                     details {
@@ -742,7 +742,7 @@ pub(crate) async fn get(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>)
                     }
                     details {
                         summary : "A volunteer can no longer make the race.";
-                        p : "Before the race starts, the volunteer can withdraw on the match signup page or use the withdrawal button in HTH's Discord message. The request post and roster update automatically. After the race has started, contact the restream coordinator or an organizer directly—the self-service withdrawal is closed.";
+                        p : "Before the race starts, the volunteer can withdraw on the match signup page or use the withdrawal button in HTH's Discord message. The request post and roster update automatically. After the race has started, contact the restream coordinator or an organizer directly-the self-service withdrawal is closed.";
                     }
                     details {
                         summary : "The wrong volunteer was confirmed, or coverage changed.";

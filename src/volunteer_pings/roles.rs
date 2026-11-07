@@ -75,6 +75,22 @@ impl RoleSelection {
                 .is_none_or(|ids| ids.contains(&binding.id))
     }
 
+    /// Use the workflow's full role scope, not just the roles still needing volunteers.
+    pub(super) fn single_role_name<'a>(
+        &self,
+        bindings: &'a [EffectiveRoleBinding],
+        language: Language,
+    ) -> Option<&'a str> {
+        let mut included = bindings
+            .iter()
+            .filter(|binding| self.includes(binding, language));
+        let first = included.next()?;
+        included
+            .next()
+            .is_none()
+            .then_some(first.role_type_name.as_str())
+    }
+
     pub(crate) fn label(&self, choices: &[RoleChoice], language: Language) -> String {
         match &self.ids {
             None => "All roles in this language".into(),
@@ -184,6 +200,29 @@ mod tests {
         let mut disabled = binding(99, English, true);
         disabled.is_disabled = true;
         assert!(!selection.includes(&disabled, English));
+    }
+
+    #[test]
+    fn single_role_heading_uses_effective_workflow_scope() {
+        let all = RoleSelection::default();
+        assert_eq!(all.single_role_name(&[], English), None);
+        let mut bindings = vec![binding(1, English, true), binding(3, French, false)];
+        // The role must remain identifiable even without a Discord role to mention.
+        bindings[0].discord_role_id = None;
+        assert_eq!(all.single_role_name(&bindings, English), Some("Role 1"));
+
+        bindings.push(binding(2, English, false));
+        assert_eq!(all.single_role_name(&bindings, English), None);
+        let selected =
+            RoleSelection::parse("selected", &[Id::from(1_i64)], &choices(), English).unwrap();
+        assert_eq!(
+            selected.single_role_name(&bindings, English),
+            Some("Role 1")
+        );
+
+        bindings[0].is_disabled = true;
+        assert_eq!(selected.single_role_name(&bindings, English), None);
+        assert_eq!(all.single_role_name(&bindings, English), Some("Role 2"));
     }
 
     #[test]

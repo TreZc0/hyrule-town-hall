@@ -15,7 +15,6 @@ use {
         lang::Language,
         prelude::*,
         series::Series,
-        volunteer_requests::format_round_phase_game,
     },
     chrono::{DateTime, Duration, NaiveTime, Utc},
     serenity::all::CreateMessage,
@@ -238,6 +237,7 @@ fn build_scheduled_ping_message(
     series: Series,
     event: &str,
     volunteer_page_url: &str,
+    single_role_name: Option<&str>,
 ) -> CreateMessage {
     let mut msg = MessageBuilder::default();
 
@@ -250,16 +250,13 @@ fn build_scheduled_ping_message(
         msg.push("\n\n");
     }
 
-    msg.push("**Looking for Volunteers — ");
+    msg.push("**");
+    msg.push(single_role_name.unwrap_or("Volunteers"));
+    msg.push(" needed: ");
     msg.push(display_name);
-    msg.push(&format!(
-        "** ({} restreams)\n",
-        language.short_code().to_uppercase()
-    ));
+    msg.push(&format!(" ({})**\n", language.short_code().to_uppercase()));
 
-    msg.push("Upcoming races (timestamps in your timezone):\n");
     for (matchup, start_ts, msg_id, chan_id, race_id_raw, needed_role_names) in race_summaries {
-        let needs_str = needed_role_names.join(", ");
         let web_url = format!(
             "{}/event/{}/{}/races/{}/signups",
             base_uri(),
@@ -270,20 +267,20 @@ fn build_scheduled_ping_message(
         let link_str =
             if let (Some(msg_id), Some(chan_id), Some(guild)) = (msg_id, chan_id, guild_id) {
                 format!(
-                    "[[Discord signup](https://discord.com/channels/{}/{}/{})] [[Web signup]({})]",
+                    "[Discord](https://discord.com/channels/{}/{}/{}) / [Web]({})",
                     guild, chan_id, msg_id, web_url
                 )
             } else {
-                format!("[[Web signup]({})]", web_url)
+                format!("[Web]({})", web_url)
             };
-        msg.push(&format!(
-            "• {} — Needs: {} — {}: {}\n",
-            matchup, needs_str, start_ts, link_str
-        ));
+        msg.push(&format!("• {} | {}", start_ts, matchup));
+        if single_role_name.is_none() {
+            msg.push(&format!(" | Needs: {}", needed_role_names.join(", ")));
+        }
+        msg.push(&format!(" | {}\n", link_str));
     }
 
-    msg.push("\nAll upcoming races: ");
-    msg.push(volunteer_page_url);
+    msg.push(&format!("\n[All races]({})", volunteer_page_url));
 
     CreateMessage::new().content(msg.build())
 }
@@ -300,6 +297,7 @@ fn build_per_race_ping_message(
     race_web_signup_url: &str,
     needed_role_names: &[String],
     volunteer_page_url: &str,
+    single_role_name: Option<&str>,
 ) -> CreateMessage {
     let mut msg = MessageBuilder::default();
 
@@ -312,16 +310,16 @@ fn build_per_race_ping_message(
     }
 
     msg.push("**");
+    msg.push(single_role_name.unwrap_or("Volunteers"));
+    msg.push(" needed: ");
     msg.push(display_name);
-    msg.push(&format!(" ({}) — ", language.short_code().to_uppercase()));
+    msg.push(&format!(" ({})**\n", language.short_code().to_uppercase()));
+    msg.push(&format!("{} | ", start_ts));
     msg.push(matchup);
-    msg.push("**\n");
-
-    let needs_str = needed_role_names.join(", ");
-    msg.push(&format!(
-        "Needs: {} — Race starts: {}\n",
-        needs_str, start_ts
-    ));
+    if single_role_name.is_none() {
+        msg.push(&format!(" | Needs: {}", needed_role_names.join(", ")));
+    }
+    msg.push("\n");
 
     if let (Some(msg_id), Some(chan_id), Some(guild)) = (
         volunteer_request_message_id,
@@ -329,15 +327,14 @@ fn build_per_race_ping_message(
         guild_id,
     ) {
         msg.push(&format!(
-            "[Discord signup post](https://discord.com/channels/{}/{}/{}) | [Web signup]({})\n",
+            "[Discord](https://discord.com/channels/{}/{}/{}) / [Web]({})\n",
             guild, chan_id, msg_id, race_web_signup_url
         ));
     } else {
-        msg.push(&format!("[Web signup]({})\n", race_web_signup_url));
+        msg.push(&format!("[Web]({})\n", race_web_signup_url));
     }
 
-    msg.push("Signup for all races: ");
-    msg.push(volunteer_page_url);
+    msg.push(&format!("[All races]({})", volunteer_page_url));
 
     CreateMessage::new().content(msg.build())
 }
@@ -519,6 +516,11 @@ async fn check_scheduled_workflow(
 
     let mut transaction = pool.begin().await?;
 
+    let role_bindings = EffectiveRoleBinding::for_event(&mut transaction, series, event).await?;
+    let single_role_name = workflow
+        .roles
+        .single_role_name(&role_bindings, workflow.language);
+
     for race_id_raw in &race_ids {
         let race_id: Id<Races> = Id::from(*race_id_raw);
         let race = match Race::from_id(&mut transaction, &http_client, race_id).await {
@@ -527,8 +529,6 @@ async fn check_scheduled_workflow(
         };
 
         // Determine role needs for this workflow's language
-        let role_bindings =
-            EffectiveRoleBinding::for_event(&mut transaction, series, event).await?;
         let signups = Signup::for_race(&mut transaction, race_id).await?;
 
         let mut needs_ping = false;
@@ -567,7 +567,7 @@ async fn check_scheduled_workflow(
 
         // Build race summary
         let start_ts = match race.schedule {
-            RaceSchedule::Live { start, .. } => format!("<t:{}:F>", start.timestamp()),
+            RaceSchedule::Live { start, .. } => format!("<t:{}:s>", start.timestamp()),
             _ => continue,
         };
 
@@ -629,6 +629,7 @@ async fn check_scheduled_workflow(
             series,
             event,
             volunteer_page_url,
+            single_role_name,
         );
 
         let posted = match channel_id.send_message(discord_ctx, message).await {
@@ -731,6 +732,9 @@ async fn check_per_race_workflow(
         // Check if any role for this language needs a ping
         let role_bindings =
             EffectiveRoleBinding::for_event(&mut transaction, series, event).await?;
+        let single_role_name = workflow
+            .roles
+            .single_role_name(&role_bindings, workflow.language);
         let signups = Signup::for_race(&mut transaction, race_id).await?;
 
         let mut role_ids_to_ping: HashSet<i64> = HashSet::new();
@@ -768,7 +772,7 @@ async fn check_per_race_workflow(
         }
 
         let start_ts = match race.schedule {
-            RaceSchedule::Live { start, .. } => format!("<t:{}:F>", start.timestamp()),
+            RaceSchedule::Live { start, .. } => format!("<t:{}:s>", start.timestamp()),
             _ => {
                 let _ = transaction.rollback().await;
                 continue;
@@ -819,6 +823,7 @@ async fn check_per_race_workflow(
             &race_web_signup_url,
             &needed_role_names,
             volunteer_page_url,
+            single_role_name,
         );
 
         let posted = match channel_id.send_message(discord_ctx, message).await {
@@ -880,7 +885,7 @@ pub(crate) async fn delete_stale_ping_messages(
         let channel_id = ChannelId::new(row.channel_id as u64);
         let message_id = MessageId::new(row.message_id as u64);
 
-        // Attempt deletion — ignore error if already gone
+        // Attempt deletion; ignore error if already gone
         let _ = channel_id.delete_message(discord_ctx, message_id).await;
 
         sqlx::query!(
@@ -932,9 +937,114 @@ async fn build_matchup_label(
         _ => "Race".to_string(),
     };
     Ok(
-        match format_round_phase_game(race.round.as_deref(), race.phase.as_deref(), race.game) {
+        match format_compact_round_phase_game(
+            race.round.as_deref(),
+            race.phase.as_deref(),
+            race.game,
+        ) {
             Some(suffix) => format!("{base} ({suffix})"),
             None => base,
         },
     )
+}
+
+fn format_compact_round_phase_game(
+    round: Option<&str>,
+    phase: Option<&str>,
+    game: Option<i16>,
+) -> Option<String> {
+    let mut parts = Vec::new();
+    if let Some(round) = round {
+        parts.push(match round.strip_prefix("Round ") {
+            Some(number) => format!("Rd. {number}"),
+            None => round.to_owned(),
+        });
+    }
+    if let Some(phase) = phase {
+        parts.push(phase.to_owned());
+    }
+    if let Some(game) = game {
+        parts.push(format!("G{game}"));
+    }
+    (!parts.is_empty()).then(|| parts.join(", "))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn content(message: CreateMessage) -> String {
+        serde_json::to_value(message).unwrap()["content"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    }
+
+    #[test]
+    fn scheduled_ping_only_omits_needs_for_a_single_role_workflow() {
+        let races = vec![(
+            format!(
+                "Alice vs Bob ({})",
+                format_compact_round_phase_game(Some("Round 2"), Some("Group O"), Some(1)).unwrap(),
+            ),
+            "<t:1794067200:s>".into(),
+            Some(30),
+            Some(20),
+            1,
+            vec!["Commentary".into()],
+        )];
+        for single_role_name in [Some("Commentary"), None] {
+            let message = content(build_scheduled_ping_message(
+                &HashSet::new(),
+                &races,
+                "Tournament",
+                English,
+                Some(10),
+                Series::Standard,
+                "test",
+                "https://example.com/volunteers",
+                single_role_name,
+            ));
+            assert!(message.starts_with(&format!(
+                "**{} needed: Tournament (EN)**\n",
+                single_role_name.unwrap_or("Volunteers"),
+            )));
+            assert_eq!(
+                message.contains("Needs: Commentary"),
+                single_role_name.is_none()
+            );
+            assert!(message.contains("• <t:1794067200:s> | Alice vs Bob (Rd. 2, Group O, G1)"));
+            assert!(message.contains("[Discord](https://discord.com/channels/10/20/30) / [Web]("));
+            assert!(message.ends_with("[All races](https://example.com/volunteers)"));
+            assert!(!message.contains('—'));
+        }
+    }
+
+    #[test]
+    fn per_race_ping_keeps_needs_and_web_link_without_a_discord_post() {
+        for single_role_name in [Some("Commentary"), None] {
+            let message = content(build_per_race_ping_message(
+                &HashSet::from([42]),
+                "Alice vs Bob",
+                "<t:1794067200:s>",
+                "Tournament",
+                English,
+                Some(10),
+                None,
+                Some(20),
+                "https://example.com/signups",
+                &["Commentary".into()],
+                "https://example.com/volunteers",
+                single_role_name,
+            ));
+            assert!(message.starts_with("<@&42>"));
+            assert_eq!(
+                message.contains("Needs: Commentary"),
+                single_role_name.is_none()
+            );
+            assert!(!message.contains("[Discord]"));
+            assert!(message.contains("[Web](https://example.com/signups)"));
+            assert!(!message.contains('—'));
+        }
+    }
 }
