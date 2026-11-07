@@ -5323,12 +5323,12 @@ pub(crate) fn configure_builder(
                                 .components(vec![
                                     CreateActionRow::InputText(
                                         CreateInputText::new(InputTextStyle::Short, format!("{name_a} time"), "time_a")
-                                            .placeholder("H:MM:SS or HH:MM:SS")
+                                            .placeholder("HH:MM:SS.sss (milliseconds optional)")
                                             .required(true)
                                     ),
                                     CreateActionRow::InputText(
                                         CreateInputText::new(InputTextStyle::Short, format!("{name_b} time"), "time_b")
-                                            .placeholder("H:MM:SS or HH:MM:SS")
+                                            .placeholder("HH:MM:SS.sss (milliseconds optional)")
                                             .required(true)
                                     ),
                                 ])
@@ -5515,21 +5515,21 @@ pub(crate) fn configure_builder(
                             )).await?;
                             return Ok(());
                         };
-                        let Some((total_a, _)) = parse_hms(&time_a_str) else {
+                        let Some(time_a) = finish::parse(&time_a_str) else {
                             interaction.create_response(ctx, CreateInteractionResponse::Message(
                                 CreateInteractionResponseMessage::new().ephemeral(true)
-                                    .content(format!("Invalid time format for first team: \"{time_a_str}\". Use H:MM:SS or HH:MM:SS."))
+                                    .content(format!("Invalid time format for first team: \"{time_a_str}\". Use HH:MM:SS or HH:MM:SS.sss (for example, 01:23:45.123)."))
                             )).await?;
                             return Ok(());
                         };
-                        let Some((total_b, _)) = parse_hms(&time_b_str) else {
+                        let Some(time_b) = finish::parse(&time_b_str) else {
                             interaction.create_response(ctx, CreateInteractionResponse::Message(
                                 CreateInteractionResponseMessage::new().ephemeral(true)
-                                    .content(format!("Invalid time format for second team: \"{time_b_str}\". Use H:MM:SS or HH:MM:SS."))
+                                    .content(format!("Invalid time format for second team: \"{time_b_str}\". Use HH:MM:SS or HH:MM:SS.sss (for example, 01:23:45.123)."))
                             )).await?;
                             return Ok(());
                         };
-                        if total_a == total_b {
+                        if time_a == time_b {
                             interaction.create_response(ctx, CreateInteractionResponse::Message(
                                 CreateInteractionResponseMessage::new().ephemeral(true)
                                     .content("Error: the two times are identical — cannot determine a winner. Please enter different times.")
@@ -5570,12 +5570,10 @@ pub(crate) fn configure_builder(
                                     return Err("Error: could not determine race room URL from race record.".into());
                                 }
                             };
-                            let dur_a = Duration::from_secs(total_a as u64);
-                            let dur_b = Duration::from_secs(total_b as u64);
-                            let (winner, winner_time, loser, loser_time) = if total_a <= total_b {
-                                (entrant_a, dur_a, entrant_b, dur_b)
+                            let (winner, winner_time, loser, loser_time) = if time_a < time_b {
+                                (entrant_a, time_a, entrant_b, time_b)
                             } else {
-                                (entrant_b, dur_b, entrant_a, dur_a)
+                                (entrant_b, time_b, entrant_a, time_a)
                             };
                             let global_state = ctx.data.read().await.get::<GlobalState>().expect("global state missing from Discord context").clone();
                             let (transaction, _) = racetime_bot::report::complete_1v1_result(

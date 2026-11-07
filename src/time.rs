@@ -1,5 +1,7 @@
 use {crate::prelude::*, sqlx::postgres::types::PgInterval};
 
+pub(crate) mod finish;
+
 const NANOS_PER_SEC: u32 = 1_000_000_000;
 
 pub(crate) trait TimeDeltaExt: Sized {

@@ -834,7 +834,14 @@ pub(crate) async fn complete_1v1_result<'a>(
     loser_time: Option<Duration>,
     losing_room: Url,
 ) -> Result<(Transaction<'a, Postgres>, Vec<Id<Races>>), Error> {
+    let show_millis = [winner_time, loser_time]
+        .into_iter()
+        .flatten()
+        .any(|time| time.subsec_millis() != 0);
     let fmt_time = |time: Option<Duration>, language: Language| -> Cow<'static, str> {
+        if show_millis && let Some(time) = time {
+            return Cow::Owned(finish::format_millis(time));
+        }
         match language {
             French => time.map_or(Cow::Borrowed("forfait"), |t| {
                 Cow::Owned(French.format_duration(t, false))
