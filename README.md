@@ -10,10 +10,22 @@ This is the source code for <https://hyruletownhall.com/>, a platform for organi
 
 Hyrule Town Hall is custom-built in close cooperation with event organizers to allow it to work with the features that make each event unique. It is a fork of Mido's House created by Fenhl.
 
+# AI Disclosure
+
+We have used and use specific coding agents and models for work that we otherwise have no time to do. We will continue to ensure that the quality of the codebase is maintained, even through the use of agentic ai models.
+
+In the case of this service, AI was used extensively to make the forked code base understandable and free of hard codes inherited by upstream and its dedicated use cases. In addition, together with the very strong and opionated Rust compiler, it is used for feature development and runtime optimization, especially in regards to stability and crash resilience.
+
+No form of AI code was committed or delivered to production without previous human review or significant manual testing efforts. 
+
+Any current contributor to the project is vehemently against using generative AI for creative work including creative writing, art, and music.
+
+Wherever possible, locally hosted AI was used to fulfill the required tasks.
+
 # Contributing
 
-If you're interested in contributing to the Hyrule Town Hall project, feel free to contact me on Discord (@trezc0_). Here are some ways you could help out:
-
+If you're interested in contributing to the Hyrule Town Hall project, feel free to contact me on Discord (@trezc0_) or contact through Issues/Pull Requests.
+Note that while AI assisted contributions are allowed, our coding guidelines require every contributor to be fully aware of the scope of their contribution, to be able to defend the design philosophy, and provide support for the implementation. Purely vibecoded contributions will be rejected. 
 
 ## Discord
 
