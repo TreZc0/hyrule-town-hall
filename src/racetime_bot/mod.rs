@@ -9361,12 +9361,79 @@ pub(crate) enum HandleRoomsError {
     Wheel(#[from] wheel::Error),
 }
 
+async fn handle_category(
+    connection: GameRacetimeConnection,
+    global_state: Arc<GlobalState>,
+    shutdown: rocket::Shutdown,
+) {
+    let category_slug = &connection.category_slug;
+    let mut wait_time = Duration::from_secs(5);
+    loop {
+        let started = Instant::now();
+        println!("Creating bot for category '{category_slug}'");
+        let builder = racetime::BotBuilder::new(
+            category_slug,
+            &connection.client_id,
+            &connection.client_secret,
+        )
+        .state(global_state.clone())
+        .host(global_state.host_info.clone())
+        .user_agent(concat!(
+            "HyruleTownHall/",
+            env!("CARGO_PKG_VERSION"),
+            " (https://github.com/TreZc0/hyrule-town-hall)"
+        ))
+        .scan_races_every(Duration::from_secs(5))
+        .network_timeout(Some(Duration::from_secs(30)));
+        let bot = tokio::select! {
+            biased;
+            _ = shutdown.clone() => return,
+            bot = builder.build() => bot,
+        };
+        match bot {
+            Ok(bot) => {
+                let sender = bot.extra_room_sender();
+                lock!(@write senders = global_state.extra_room_senders; senders.insert(category_slug.clone(), sender));
+                println!("racetime.gg bot for category '{category_slug}' connected");
+                // The authenticated scan includes unlisted rooms. Existing active handlers
+                // are excluded by should_handle_inner, even across bot restarts.
+                let result = bot.run_until::<Handler, _, _>(shutdown.clone()).await;
+                lock!(@write senders = global_state.extra_room_senders; senders.remove(category_slug));
+                match result {
+                    Ok(()) => return, // Application shutdown, not a reason to restart.
+                    Err(e) => {
+                        eprintln!("racetime.gg bot for category '{category_slug}' errored: {e} ({e:?})");
+                        if let Environment::Production = Environment::default() {
+                            log::error!("racetime.gg bot for category '{category_slug}' errored: {e} ({e:?})");
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("failed to create bot for category '{category_slug}': {e} ({e:?})");
+            }
+        }
+        if started.elapsed() >= Duration::from_secs(60) {
+            wait_time = Duration::from_secs(5);
+        }
+        eprintln!("restarting racetime.gg bot for category '{category_slug}' in {}s", wait_time.as_secs());
+        tokio::select! {
+            biased;
+            _ = shutdown.clone() => return,
+            _ = sleep(wait_time) => {}
+        }
+        wait_time = Duration::from_secs(match wait_time.as_secs() {
+            5 => 10,
+            10 => 30,
+            _ => 60,
+        });
+    }
+}
+
 async fn handle_rooms(
     global_state: Arc<GlobalState>,
     shutdown: rocket::Shutdown,
 ) -> Result<(), HandleRoomsError> {
-    let mut last_crash = Instant::now();
-    let mut wait_time = Duration::from_secs(1);
     loop {
         // Get all racetime connections from the database
         let mut transaction = global_state.db_pool.begin().await.to_racetime()?;
@@ -9395,90 +9462,31 @@ async fn handle_rooms(
             eprintln!(
                 "No racetime connections found in database. Please add entries to game_racetime_connection table."
             );
-            sleep(Duration::from_secs(60)).await; // Wait 1 minute before retrying
+            tokio::select! {
+                _ = shutdown.clone() => return Ok(()),
+                _ = sleep(Duration::from_secs(60)) => {}
+            }
             continue;
         }
 
-        // Create multiple bot instances, one for each category
+        // Each category retries independently, including failures during initial setup.
         let mut bot_handles = Vec::new();
-
         for connection in racetime_connections {
-            let global_state = global_state.clone();
-            let shutdown = shutdown.clone();
-            let category_slug = connection.category_slug.clone();
-
-            println!("Creating bot for category '{}'", category_slug);
-
-            match racetime::BotBuilder::new(
-                &connection.category_slug,
-                &connection.client_id,
-                &connection.client_secret,
-            )
-            .state(global_state.clone())
-            .host(global_state.host_info.clone())
-            .user_agent(concat!(
-                "HyruleTownHall/",
-                env!("CARGO_PKG_VERSION"),
-                " (https://github.com/TreZc0/hyrule-town-hall)"
-            ))
-            .scan_races_every(Duration::from_secs(5))
-            .network_timeout(Some(Duration::from_secs(30)))
-            .build()
-            .await
-            {
-                Ok(bot) => {
-                    let sender = bot.extra_room_sender();
-                    lock!(@write senders = global_state.extra_room_senders; senders.insert(category_slug.clone(), sender));
-                    let handle = tokio::spawn(async move {
-                        if let Err(e) = bot.run_until::<Handler, _, _>(shutdown).await {
-                            eprintln!(
-                                "racetime.gg bot for category '{category_slug}' errored: {e} ({e:?})"
-                            );
-                            if let Environment::Production = Environment::default() {
-                                log::error!(
-                                    "racetime.gg bot for category '{category_slug}' errored: {e} ({e:?})"
-                                );
-                            }
-                        }
-                    });
-                    bot_handles.push(handle);
-                }
-                Err(e) => {
-                    eprintln!(
-                        "failed to create bot for category {}: {e} ({e:?})",
-                        connection.category_slug
-                    );
-                    // Continue with other bots even if one fails
+            bot_handles.push(tokio::spawn(handle_category(
+                connection,
+                global_state.clone(),
+                shutdown.clone(),
+            )));
+        }
+        for handle in bot_handles {
+            if let Err(e) = handle.await {
+                eprintln!("racetime.gg bot task panicked: {e}");
+                if let Environment::Production = Environment::default() {
+                    log::error!("racetime.gg bot task panicked: {e}");
                 }
             }
         }
-
-        if bot_handles.is_empty() {
-            // All bots failed to start
-            if last_crash.elapsed() >= Duration::from_secs(60 * 60 * 24) {
-                wait_time = Duration::from_secs(1);
-            } else {
-                wait_time *= 2;
-            }
-            eprintln!(
-                "failed to connect any racetime.gg bots (retrying in {}): {}",
-                English.format_duration(wait_time, true),
-                wait_time.as_secs()
-            );
-            sleep(wait_time).await;
-            last_crash = Instant::now();
-        } else {
-            // Wait for all bots to complete
-            for handle in bot_handles {
-                if let Err(e) = handle.await {
-                    eprintln!("racetime.gg bot task panicked: {e}");
-                    if let Environment::Production = Environment::default() {
-                        log::error!("racetime.gg bot task panicked: {e}");
-                    }
-                }
-            }
-            break Ok(());
-        }
+        return Ok(());
     }
 }
 
