@@ -41,7 +41,7 @@ async fn qualifiers_form(
     let races = sqlx::query_as!(
         RaceRow,
         r#"SELECT race.id AS "id: Id<Races>", race.phase, race.qualifier_number,
-            race.round, race.start, race.room, mode.display_name AS mode_name
+            race.round, race.start, race.room, mode.display_name AS "mode_name?"
         FROM races race
         LEFT JOIN qualifier_seeds seed ON seed.live_race_id = race.id AND seed.source = 'live'
         LEFT JOIN qualifier_modes mode ON mode.id = seed.mode_id
@@ -1807,7 +1807,7 @@ async fn edit_race_form(
     }
     let race = sqlx::query_as!(RaceData,
         r#"SELECT race.phase, race.qualifier_number, race.round, race.start, race.room,
-            seed.mode_id FROM races race LEFT JOIN qualifier_seeds seed ON seed.live_race_id = race.id
+            seed.mode_id AS "mode_id?" FROM races race LEFT JOIN qualifier_seeds seed ON seed.live_race_id = race.id
             WHERE race.id = $1 AND race.series = $2 AND race.event = $3 AND race.is_qualifier"#,
         race_id as _, event.series as _, &event.event
     )
@@ -2790,6 +2790,7 @@ pub(crate) mod route_tests {
         let auth_pool = pool.clone();
         let rocket = rocket::build()
             .manage(pool.clone())
+            .manage(RwFuture::new(std::future::pending::<DiscordCtx>()))
             .attach(rocket_csrf::Fairing::default())
             .attach(AdHoc::on_request("fixture identity", move |request, _| {
                 let pool = auth_pool.clone();
@@ -2809,6 +2810,7 @@ pub(crate) mod route_tests {
                 rocket::routes![
                     token,
                     get,
+                    get_edit,
                     details::get_results,
                     details::get_pool,
                     details::get_live,
@@ -2831,6 +2833,12 @@ pub(crate) mod route_tests {
             .await
             .unwrap();
         let base = format!("/event/{series}/{event}/qualifiers");
+        // A normal qualifier has no pooled seed/mode. Both joins must decode
+        // that absence as None, even if SQLx infers the joined columns as NOT NULL.
+        let unpooled_race = -9_000_000_000_000_020_i64;
+        sqlx::query("INSERT INTO races(series,event,id,start,is_qualifier,round) VALUES($1,$2,$3,NOW()+INTERVAL '1 day',TRUE,'Unpooled qualifier regression')")
+            .bind(series).bind(event).bind(unpooled_race)
+            .execute(pool).await.unwrap();
         let private = client
             .get(&base)
             .header(rocket::http::Header::new("x-test-user", staff.to_string()))
@@ -2838,6 +2846,14 @@ pub(crate) mod route_tests {
             .await;
         assert_eq!(private.status(), Status::Ok);
         let private = private.into_string().await.unwrap();
+        assert!(private.contains("Unpooled qualifier regression"));
+        let edit = client
+            .get(format!("{base}/{}/edit", unpooled_race as u64))
+            .header(rocket::http::Header::new("x-test-user", staff.to_string()))
+            .dispatch().await;
+        assert_eq!(edit.status(), Status::Ok);
+        sqlx::query("DELETE FROM races WHERE id=$1")
+            .bind(unpooled_race).execute(pool).await.unwrap();
         assert!(private.contains("Qualifier seed pools"));
         assert!(private.contains("Awaiting verification"));
         assert!(!private.contains("Re-attempt declaration"));

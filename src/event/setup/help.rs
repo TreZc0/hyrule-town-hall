@@ -221,6 +221,11 @@ pub(super) fn label(field: &str, title: &str) -> RawHtml<String> {
             "Enables the special handling for start.gg double round-robin stages represented as best-of-one sets. The import creates two game records for each matchup and uses the workflow that force-closes the start.gg set after both results are played.",
             "start.gg has no native double-RR format. Enable this when one RR/BO1 set represents two meetings managed by this site. Only matching RR sets receive the special handling; elimination BO3 sets still finish at two wins, even with this event option enabled. Use it only when the external stage is intended to represent those two meetings. It is not a general best-of-two match setting and does not change a single-elimination or ordinary best-of-one stage into double round-robin.",
         ],
+        "startgg_rr_play_all" => &[
+            "Requires all three race results before completing a start.gg round-robin best-of-three set, including when a player leads 2–0. Configure the affected pools as best-of-three on start.gg before importing; HTH imports their three races normally.",
+            "This option applies to every round-robin BO3 set in this event. It does not change elimination matches, other best-of formats, or the separate double round-robin workaround that creates two local races from one start.gg RR/BO1 set. Both options can be enabled for an event with mixed pool sizes.",
+            "Enable before reporting results. This setting does not restore third races already ignored by an earlier 2–0 result.",
+        ],
         "is_live_event" => &[
             "Means an in-person event. For scheduled races after the event starts, the workflow sends notifications instead of creating racetime rooms as it would for an online event.",
             "Leave it disabled for an online tournament, including online races played live rather than asynchronously. The word live here describes an in-person venue, not the live-versus-async qualifier distinction.",

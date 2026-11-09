@@ -25,9 +25,6 @@ mod scheduling_time;
 
 use scheduling_time::{parse_natural_language_timestamp, parse_timestamp, timezone_utc_offset};
 
-#[cfg(test)]
-mod async_reporting_tests;
-
 pub(crate) const ADMIN_USER: UserId = UserId::new(82783364175630336); // TreZ
 const BUTTONS_PER_PAGE: usize = 25;
 
@@ -6637,6 +6634,7 @@ async fn report_async_race_to_external_platforms(
             race,
             winner_id,
             event.startgg_double_rr,
+            event.startgg_rr_play_all,
         )
         .await?;
         ignored_race_ids = ignored;

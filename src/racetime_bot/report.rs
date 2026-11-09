@@ -129,8 +129,9 @@ async fn collect_completed_game_results(
     current_game: i16,
     current_winner_id: &startgg::ID,
     double_rr_enabled: bool,
+    rr_play_all: bool,
     total_games: i16,
-) -> Result<(Vec<startgg::GameResult>, bool), Error> {
+) -> Result<(Vec<startgg::GameResult>, ReportSetFormat), Error> {
     let set_data = startgg_report_request::<startgg::SetQuery>(
         http_client,
         startgg_token,
@@ -142,7 +143,7 @@ async fn collect_completed_game_results(
     )
     .await?;
 
-    let is_double_rr = classify_report_set(&set_data, double_rr_enabled, total_games)
+    let format = classify_report_set(&set_data, double_rr_enabled, rr_play_all, total_games)
         .map_err(|error| Error::Custom(format!("start.gg set {set_id}: {error}").into()))?;
     let mut results = Vec::new();
 
@@ -172,16 +173,29 @@ async fn collect_completed_game_results(
 
     results.sort_by_key(|r| r.game_num);
 
-    Ok((results, is_double_rr))
+    Ok((results, format))
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ReportSetFormat {
+    BestOf,
+    DoubleRoundRobin,
+    PlayAllRoundRobinBo3,
+}
+
+struct SetReportOutcome {
+    decided: bool,
+    ignore_remaining: bool,
 }
 
 fn classify_report_set(
     data: &startgg::set_query::ResponseData,
-    enabled: bool,
+    double_rr_enabled: bool,
+    rr_play_all: bool,
     total_games: i16,
-) -> Result<bool, String> {
-    if !enabled {
-        return Ok(false);
+) -> Result<ReportSetFormat, String> {
+    if !double_rr_enabled && !rr_play_all {
+        return Ok(ReportSetFormat::BestOf);
     }
     let set = data
         .set
@@ -196,13 +210,13 @@ fn classify_report_set(
         .as_ref()
         .ok_or("Set bracket type unavailable; result was not reported.")?;
     if *bracket != startgg::set_query::BracketType::ROUND_ROBIN {
-        return Ok(false);
+        return Ok(ReportSetFormat::BestOf);
     }
     let set_type = set
         .set_games_type
         .ok_or("Set games type unavailable; result was not reported.")?;
     if set_type == 2 {
-        return Ok(false);
+        return Ok(ReportSetFormat::BestOf);
     }
     if set_type != 1 {
         return Err("Unknown set games type; result was not reported.".into());
@@ -216,14 +230,23 @@ fn classify_report_set(
         .and_then(|rounds| rounds.iter().flatten().find(|r| r.number == Some(round)))
         .and_then(|r| r.best_of)
         .ok_or("Round best-of format unavailable; result was not reported.")?;
-    let special = startgg::uses_double_rr(enabled, Some(set_type), true, Some(best_of));
+    let special = startgg::uses_double_rr(double_rr_enabled, Some(set_type), true, Some(best_of));
     if special && total_games != 2 {
         return Err(
             "Double-RR BO1 sets must have exactly two local games; check the imported match."
                 .into(),
         );
     }
-    Ok(special)
+    if special {
+        Ok(ReportSetFormat::DoubleRoundRobin)
+    } else if rr_play_all && best_of == 3 {
+        if total_games != 3 {
+            return Err("Play-all RR BO3 sets must have exactly three local games; check the imported match, including any ignored games.".into());
+        }
+        Ok(ReportSetFormat::PlayAllRoundRobinBo3)
+    } else {
+        Ok(ReportSetFormat::BestOf)
+    }
 }
 
 async fn report_startgg_games(
@@ -233,22 +256,36 @@ async fn report_startgg_games(
     game: i16,
     winner_entrant_id: &startgg::ID,
     double_rr_enabled: bool,
+    rr_play_all: bool,
     total_games: i16,
-) -> Result<bool, Error> {
-    let (completed_game_results, is_double_rr_set) = collect_completed_game_results(
+) -> Result<SetReportOutcome, Error> {
+    let (completed_game_results, format) = collect_completed_game_results(
         http_client,
         startgg_token,
         set,
         game,
         winner_entrant_id,
         double_rr_enabled,
+        rr_play_all,
         total_games,
     )
     .await?;
-    let match_decided = if is_double_rr_set {
-        game as i16 == total_games
-    } else {
-        is_match_decided(&completed_game_results, total_games)
+    let is_double_rr_set = format == ReportSetFormat::DoubleRoundRobin;
+    let match_decided = match format {
+        ReportSetFormat::DoubleRoundRobin => game == total_games,
+        ReportSetFormat::BestOf => is_match_decided(&completed_game_results, total_games),
+        ReportSetFormat::PlayAllRoundRobinBo3 => {
+            let mut seen = HashSet::new();
+            if completed_game_results
+                .iter()
+                .any(|result| !(1..=3).contains(&result.game_num) || !seen.insert(result.game_num))
+            {
+                return Err(Error::Custom(format!("start.gg set {set}: invalid or duplicate RR BO3 game numbers; result was not reported.").into()));
+            }
+            // Game 3 can be reported before game 1 or 2. A majority, or the
+            // current game's number, is not enough to finish a play-all set.
+            seen.len() == 3
+        }
     };
     if match_decided {
         if is_double_rr_set {
@@ -357,6 +394,9 @@ async fn report_startgg_games(
         )
         .await?;
     } else {
+        // reportBracketSet marks the set complete when winnerId is supplied.
+        // Play-all BO3 sets still send only game data at 2–0, preserving the
+        // results on start.gg for the final three-game report without a reset.
         startgg_report_request::<startgg::ReportBracketSetMutation>(
             http_client,
             startgg_token,
@@ -375,7 +415,11 @@ async fn report_startgg_games(
         )
         .await?;
     }
-    Ok(match_decided)
+    Ok(SetReportOutcome {
+        decided: match_decided,
+        // All three races count, including when game 1 or 2 is reported last.
+        ignore_remaining: match_decided && format != ReportSetFormat::PlayAllRoundRobinBo3,
+    })
 }
 
 /// Shared by live races and Discord async results. Only a decided set may retire
@@ -387,30 +431,32 @@ pub(crate) async fn report_startgg_result(
     race: &Race,
     winner_entrant_id: &startgg::ID,
     double_rr_enabled: bool,
+    rr_play_all: bool,
 ) -> Result<(bool, Vec<Id<Races>>), Error> {
     let cal::Source::StartGG { set, .. } = &race.source else {
         return Err(Error::Custom("Race has no start.gg set".into()));
     };
     if let Some(game) = race.game {
         let total_games = race.game_count(transaction).await.to_racetime()?;
-        let decided = report_startgg_games(
+        let outcome = report_startgg_games(
             http_client,
             startgg_token,
             set,
             game,
             winner_entrant_id,
             double_rr_enabled,
+            rr_play_all,
             total_games,
         )
         .await?;
-        let ignored = if decided {
+        let ignored = if outcome.ignore_remaining {
             race.ignore_remaining_games(transaction)
                 .await
                 .to_racetime()?
         } else {
             Vec::new()
         };
-        Ok((decided, ignored))
+        Ok((outcome.decided, ignored))
     } else {
         startgg_report_request::<startgg::ReportOneGameResultMutation>(
             http_client,
@@ -1114,6 +1160,7 @@ async fn report_external_and_init_draft<'a>(
                     race,
                     winner_entrant_id,
                     event.startgg_double_rr,
+                    event.startgg_rr_play_all,
                 )
                 .await?;
                 series_decided = standings_changed && race.game.is_some();
@@ -1308,11 +1355,12 @@ mod completion_tests {
                         previous.len() as i16 + 1,
                         &startgg::ID(current.into()),
                         enabled,
+                        false,
                         total_games,
                     )
                     .await
                     .unwrap();
-                    assert_eq!(decided, expected_decided);
+                    assert_eq!(decided.decided, expected_decided);
                     startgg::MOCK_QUERIES.with(|mock| {
                         let mock = mock.borrow();
                         assert!(mock.responses.is_empty());
@@ -1334,31 +1382,50 @@ mod completion_tests {
     #[tokio::test]
     async fn game_two_played_first_does_not_report_a_bo3_winner() {
         for enabled in [false, true] {
-            startgg::MOCK_QUERIES.scope(
-                std::cell::RefCell::new(startgg::MockQueries {
-                    responses: std::collections::VecDeque::from([
-                        ("SetQuery".into(), set_response("SINGLE_ELIMINATION", 3, &[])),
-                        ("ReportBracketSetMutation".into(), json!({"data": {"reportBracketSet": [{"id": "1"}]}})),
-                    ]),
-                    requests: Vec::new(),
-                }),
-                async {
-                    assert!(!report_startgg_games(
-                        &reqwest::Client::new(), "unused", &startgg::ID("1".into()),
-                        2, &startgg::ID("10".into()), enabled, 3,
-                    ).await.unwrap());
-                    startgg::MOCK_QUERIES.with(|mock| {
-                        let mock = mock.borrow();
-                        assert!(mock.responses.is_empty());
-                        let vars = &mock.requests.last().unwrap()["variables"];
-                        assert!(vars["winnerID"].is_null());
-                        let games = vars["gameData"].as_array().unwrap();
-                        assert_eq!(games.len(), 1);
-                        assert_eq!(games[0]["gameNum"], 2);
-                        assert_eq!(games[0]["winnerId"], "10");
-                    });
-                },
-            ).await;
+            startgg::MOCK_QUERIES
+                .scope(
+                    std::cell::RefCell::new(startgg::MockQueries {
+                        responses: std::collections::VecDeque::from([
+                            (
+                                "SetQuery".into(),
+                                set_response("SINGLE_ELIMINATION", 3, &[]),
+                            ),
+                            (
+                                "ReportBracketSetMutation".into(),
+                                json!({"data": {"reportBracketSet": [{"id": "1"}]}}),
+                            ),
+                        ]),
+                        requests: Vec::new(),
+                    }),
+                    async {
+                        assert!(
+                            !report_startgg_games(
+                                &reqwest::Client::new(),
+                                "unused",
+                                &startgg::ID("1".into()),
+                                2,
+                                &startgg::ID("10".into()),
+                                enabled,
+                                false,
+                                3,
+                            )
+                            .await
+                            .unwrap()
+                            .decided
+                        );
+                        startgg::MOCK_QUERIES.with(|mock| {
+                            let mock = mock.borrow();
+                            assert!(mock.responses.is_empty());
+                            let vars = &mock.requests.last().unwrap()["variables"];
+                            assert!(vars["winnerID"].is_null());
+                            let games = vars["gameData"].as_array().unwrap();
+                            assert_eq!(games.len(), 1);
+                            assert_eq!(games[0]["gameNum"], 2);
+                            assert_eq!(games[0]["winnerId"], "10");
+                        });
+                    },
+                )
+                .await;
         }
     }
 
@@ -1476,6 +1543,7 @@ mod completion_tests {
                                 2,
                                 &startgg::ID("10".into()),
                                 true,
+                                false,
                                 3
                             )
                             .await
@@ -1486,6 +1554,248 @@ mod completion_tests {
                     },
                 )
                 .await;
+        }
+    }
+
+    async fn exercise_play_all_report(
+        previous: &[(i64, &str)],
+        game: i16,
+        winner: &str,
+        double_rr: bool,
+        expected_winner: Option<&str>,
+        reject_report: bool,
+    ) {
+        let mut response = set_response("ROUND_ROBIN", 3, &[]);
+        response["data"]["set"]["games"] = json!(previous.iter().map(|(number, winner)| {
+            json!({"id": number.to_string(), "orderNum": number, "winnerId": winner.parse::<i64>().unwrap()})
+        }).collect::<Vec<_>>());
+        startgg::MOCK_QUERIES
+            .scope(
+                std::cell::RefCell::new(startgg::MockQueries {
+                    responses: std::collections::VecDeque::from([
+                        ("SetQuery".into(), response),
+                        (
+                            "ReportBracketSetMutation".into(),
+                            if reject_report {
+                                json!({"errors": [{"message": "Result reporting rejected"}]})
+                            } else {
+                                json!({"data": {"reportBracketSet": [{"id": "1"}]}})
+                            },
+                        ),
+                    ]),
+                    requests: Vec::new(),
+                }),
+                async {
+                    let result = report_startgg_games(
+                        &reqwest::Client::new(),
+                        "unused",
+                        &startgg::ID("1".into()),
+                        game,
+                        &startgg::ID(winner.into()),
+                        double_rr,
+                        true,
+                        3,
+                    )
+                    .await;
+                    if reject_report {
+                        assert!(result.is_err());
+                    } else {
+                        let outcome = result.unwrap();
+                        assert_eq!(outcome.decided, expected_winner.is_some());
+                        assert!(!outcome.ignore_remaining);
+                    }
+                    startgg::MOCK_QUERIES.with(|mock| {
+                        let mock = mock.borrow();
+                        assert!(mock.responses.is_empty());
+                        assert_eq!(mock.requests.len(), 2); // Never reset the BO3 set.
+                        let vars = &mock.requests[1]["variables"];
+                        assert_eq!(
+                            vars["winnerID"],
+                            expected_winner.map_or(json!(null), |id| json!(id))
+                        );
+                        let mut expected: Vec<_> = previous
+                            .iter()
+                            .copied()
+                            .filter(|(number, _)| *number != i64::from(game))
+                            .collect();
+                        expected.push((i64::from(game), winner));
+                        expected.sort_by_key(|(number, _)| *number);
+                        let games = vars["gameData"].as_array().unwrap();
+                        assert_eq!(games.len(), expected.len());
+                        for (actual, (number, winner)) in games.iter().zip(expected) {
+                            assert_eq!(actual["gameNum"], number);
+                            assert_eq!(actual["winnerId"], winner);
+                        }
+                    });
+                },
+            )
+            .await;
+    }
+
+    #[tokio::test]
+    async fn play_all_rr_bo3_requires_every_result_even_after_two_wins() {
+        for double_rr in [false, true] {
+            exercise_play_all_report(&[], 1, "10", double_rr, None, false).await;
+            exercise_play_all_report(&[(1, "10")], 2, "10", double_rr, None, false).await;
+            exercise_play_all_report(
+                &[(1, "10"), (2, "10")],
+                3,
+                "10",
+                double_rr,
+                Some("10"),
+                false,
+            )
+            .await;
+            // The last race's winner is not necessarily the set winner.
+            exercise_play_all_report(
+                &[(1, "10"), (2, "10")],
+                3,
+                "20",
+                double_rr,
+                Some("10"),
+                false,
+            )
+            .await;
+            exercise_play_all_report(
+                &[(1, "10"), (2, "20")],
+                3,
+                "20",
+                double_rr,
+                Some("20"),
+                false,
+            )
+            .await;
+            // Out-of-order reporting: game 3 alone, or two wins with a gap,
+            // cannot complete the set. Reporting the missing game can.
+            exercise_play_all_report(&[], 3, "10", double_rr, None, false).await;
+            exercise_play_all_report(&[(1, "10")], 3, "10", double_rr, None, false).await;
+            exercise_play_all_report(
+                &[(3, "20"), (2, "10")],
+                1,
+                "10",
+                double_rr,
+                Some("10"),
+                false,
+            )
+            .await;
+            exercise_play_all_report(
+                &[(1, "10"), (3, "20")],
+                2,
+                "20",
+                double_rr,
+                Some("20"),
+                false,
+            )
+            .await;
+            // A retry replaces an existing game rather than counting it twice.
+            exercise_play_all_report(&[(1, "10"), (2, "10")], 2, "20", double_rr, None, false)
+                .await;
+            exercise_play_all_report(
+                &[(1, "10"), (2, "10"), (3, "20")],
+                3,
+                "20",
+                double_rr,
+                Some("10"),
+                false,
+            )
+            .await;
+        }
+    }
+
+    #[tokio::test]
+    async fn play_all_report_failure_propagates_without_completing_locally() {
+        exercise_play_all_report(&[(1, "10")], 2, "10", false, None, true).await;
+        exercise_play_all_report(&[(1, "10"), (2, "10")], 3, "20", false, Some("10"), true).await;
+    }
+
+    #[tokio::test]
+    async fn play_all_rejects_invalid_game_numbers_before_reporting() {
+        for numbers in [[1, 1], [0, 1], [1, 4]] {
+            let mut response = set_response("ROUND_ROBIN", 3, &["10", "10"]);
+            for (game, number) in response["data"]["set"]["games"]
+                .as_array_mut()
+                .unwrap()
+                .iter_mut()
+                .zip(numbers)
+            {
+                game["orderNum"] = json!(number);
+            }
+            startgg::MOCK_QUERIES
+                .scope(
+                    std::cell::RefCell::new(startgg::MockQueries {
+                        responses: std::collections::VecDeque::from([(
+                            "SetQuery".into(),
+                            response,
+                        )]),
+                        requests: Vec::new(),
+                    }),
+                    async {
+                        assert!(
+                            report_startgg_games(
+                                &reqwest::Client::new(),
+                                "unused",
+                                &startgg::ID("1".into()),
+                                3,
+                                &startgg::ID("20".into()),
+                                false,
+                                true,
+                                3,
+                            )
+                            .await
+                            .is_err()
+                        );
+                        startgg::MOCK_QUERIES
+                            .with(|mock| assert_eq!(mock.borrow().requests.len(), 1));
+                    },
+                )
+                .await;
+        }
+    }
+
+    #[test]
+    fn play_all_is_opt_in_and_only_applies_to_rr_bo3() {
+        for double_rr in [false, true] {
+            for play_all in [false, true] {
+                for bracket in ["ROUND_ROBIN", "SINGLE_ELIMINATION", "DOUBLE_ELIMINATION"] {
+                    for best_of in [1, 3, 5] {
+                        let double = bracket == "ROUND_ROBIN" && best_of == 1 && double_rr;
+                        let data = serde_json::from_value(
+                            set_response(bracket, best_of, &[])["data"].clone(),
+                        )
+                        .unwrap();
+                        let expected = if double {
+                            ReportSetFormat::DoubleRoundRobin
+                        } else if bracket == "ROUND_ROBIN" && best_of == 3 && play_all {
+                            ReportSetFormat::PlayAllRoundRobinBo3
+                        } else {
+                            ReportSetFormat::BestOf
+                        };
+                        assert_eq!(
+                            classify_report_set(
+                                &data,
+                                double_rr,
+                                play_all,
+                                if double { 2 } else { best_of as i16 }
+                            )
+                            .unwrap(),
+                            expected
+                        );
+                    }
+                }
+            }
+        }
+        let data =
+            serde_json::from_value(set_response("ROUND_ROBIN", 3, &[])["data"].clone()).unwrap();
+        for count in [1, 2, 4] {
+            assert!(classify_report_set(&data, false, true, count).is_err());
+        }
+        for missing in [
+            json!({"set": null}),
+            json!({"set": {"phaseGroup": null}}),
+            json!({"set": {"setGamesType": 1, "round": 1, "phaseGroup": {"bracketType": "ROUND_ROBIN", "rounds": null}}}),
+        ] {
+            let data = serde_json::from_value(missing).unwrap();
+            assert!(classify_report_set(&data, false, true, 3).is_err());
         }
     }
 

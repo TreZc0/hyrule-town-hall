@@ -606,6 +606,12 @@ async fn setup_form(
                             label(class = "help") : " (When enabled with a start.gg round-robin best-of-1 bracket, HTH schedules 2 games per set and force-closes the start.gg set after both are played.)";
                         });
 
+                        : form_field("startgg_rr_play_all", &mut errors, html! {
+                            input(type = "checkbox", id = "startgg_rr_play_all", name = "startgg_rr_play_all", checked? = ctx.field_value("startgg_rr_play_all").map_or(event.startgg_rr_play_all, |value| value == "on"));
+                            : help::label("startgg_rr_play_all", "Play all three games in start.gg round-robin BO3 sets");
+                            label(class = "help") : " (Requires game 3 even at 2–0. Configure those pools as best-of-3 on start.gg.)";
+                        });
+
                         : form_field("is_live_event", &mut errors, html! {
                             input(type = "checkbox", id = "is_live_event", name = "is_live_event", checked? = ctx.field_value("is_live_event").map_or(event.is_live_event, |value| value == "on"));
                             : help::label("is_live_event", "Is Live Event");
@@ -861,6 +867,7 @@ pub(crate) struct SetupForm {
     spoiler_unlock: String,
     is_custom_goal: bool,
     startgg_double_rr: bool,
+    startgg_rr_play_all: bool,
     is_live_event: bool,
     seed_gen_type: Option<String>,
     seed_config: Option<String>,
@@ -1448,7 +1455,8 @@ pub(crate) async fn post(
                     async_start_delay = $43, startgg_double_rr = $44,
                     preroll_mode = $45, spoiler_unlock = $46, is_custom_goal = $47,
                     fpa_enabled = $48, swiss_standings = $49, rando_version = $50,
-                    is_live_event = $51, seed_gen_type = $52, seed_config = $53
+                    is_live_event = $51, seed_gen_type = $52, seed_config = $53,
+                    startgg_rr_play_all = $54
                 WHERE series = $32 AND event = $33
             "#,
                 value.display_name,
@@ -1504,6 +1512,7 @@ pub(crate) async fn post(
                 value.is_live_event,
                 seed_gen_type,
                 seed_config_json as _,
+                value.startgg_rr_play_all,
             ).execute(&mut *transaction).await?;
 
             mirror_twwr_permalink(&mut transaction, event_data.series, &event_data.event).await?;
