@@ -373,7 +373,7 @@ pub(crate) async fn check_and_send_volunteer_pings(
         let workflows = match resolve_workflows_for_event(pool, series, event).await {
             Ok(w) => w,
             Err(e) => {
-                eprintln!(
+                log::warn!(
                     "Error resolving ping workflows for {}/{}: {}",
                     series.slug(),
                     event,
@@ -408,7 +408,7 @@ pub(crate) async fn check_and_send_volunteer_pings(
                     )
                     .await
                     {
-                        eprintln!(
+                        log::warn!(
                             "Error in scheduled ping workflow {} for {}/{}: {}",
                             workflow.id,
                             series.slug(),
@@ -433,7 +433,7 @@ pub(crate) async fn check_and_send_volunteer_pings(
                         )
                         .await
                         {
-                            eprintln!(
+                            log::warn!(
                                 "Error in per-race ping workflow {} lt={} for {}/{}: {}",
                                 workflow.id,
                                 lead_time_h,
@@ -525,7 +525,17 @@ async fn check_scheduled_workflow(
         let race_id: Id<Races> = Id::from(*race_id_raw);
         let race = match Race::from_id(&mut transaction, &http_client, race_id).await {
             Ok(r) => r,
-            Err(_) => continue,
+            Err(e) => {
+                log::warn!(
+                    "Failed to load race {} for scheduled ping workflow {} ({}/{}): {}",
+                    race_id_raw,
+                    workflow.id,
+                    series.slug(),
+                    event,
+                    e
+                );
+                continue;
+            }
         };
 
         // Determine role needs for this workflow's language
@@ -635,7 +645,7 @@ async fn check_scheduled_workflow(
         let posted = match channel_id.send_message(discord_ctx, message).await {
             Ok(m) => m,
             Err(e) => {
-                eprintln!(
+                log::warn!(
                     "Failed to send scheduled ping for workflow {} ({}/{}): {}",
                     workflow.id,
                     series.slug(),
@@ -723,7 +733,15 @@ async fn check_per_race_workflow(
 
         let race = match Race::from_id(&mut transaction, &http_client, race_id).await {
             Ok(r) => r,
-            Err(_) => {
+            Err(e) => {
+                log::warn!(
+                    "Failed to load race {} for per-race ping workflow {} ({}/{}): {}",
+                    race_id_raw,
+                    workflow.id,
+                    series.slug(),
+                    event,
+                    e
+                );
                 let _ = transaction.rollback().await;
                 continue;
             }
@@ -829,9 +847,11 @@ async fn check_per_race_workflow(
         let posted = match channel_id.send_message(discord_ctx, message).await {
             Ok(m) => m,
             Err(e) => {
-                eprintln!(
+                log::warn!(
                     "Failed to send per-race ping for workflow {} race {}: {}",
-                    workflow.id, race_id_raw, e
+                    workflow.id,
+                    race_id_raw,
+                    e
                 );
                 continue;
             }
@@ -848,7 +868,10 @@ async fn check_per_race_workflow(
         )
         .execute(pool)
         .await {
-            eprintln!("Failed to record per-race ping message: {}", e);
+            log::warn!(
+                "Failed to record per-race ping message for workflow {} race {}: {}",
+                workflow.id, race_id_raw, e
+            );
         }
     }
 

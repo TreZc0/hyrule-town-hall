@@ -87,7 +87,7 @@ impl ScheduledSettings {
             return false;
         };
         now >= target
-            && now - target < Duration::minutes(3)
+            && now - target < Duration::minutes(10)
             && last_sent.is_none_or(|last| last.with_timezone(&self.timezone).date_naive() < date)
     }
 
@@ -166,7 +166,7 @@ mod tests {
         ] {
             assert!(schedule.should_fire(now, None));
             assert_eq!(schedule.cutoff(now, 72), now + Duration::hours(24));
-            assert!(!schedule.should_fire(now + Duration::minutes(3), None));
+            assert!(!schedule.should_fire(now + Duration::minutes(15), None));
             assert!(!schedule.should_fire(now, Some(now)));
         }
         let morning = settings("09:00", "15");
