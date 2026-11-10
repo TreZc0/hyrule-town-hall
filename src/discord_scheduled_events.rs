@@ -58,7 +58,7 @@ pub(crate) fn should_create_discord_event(race: &Race, event_config: &EventData<
 }
 
 /// Resolve the location URL for a Discord event, falling back through:
-/// restream URL → multistream URL → event URL
+/// restream URL → multistream URL → configured event URL → Hyrule Town Hall event page
 async fn resolve_event_location(
     transaction: &mut Transaction<'_, Postgres>,
     http_client: &reqwest::Client,
@@ -85,7 +85,13 @@ async fn resolve_event_location(
             .url
             .as_ref()
             .map(|u| u.to_string())
-            .unwrap_or_else(|| "https://ootrandomizer.com".to_string())
+            .unwrap_or_else(|| {
+                uri!(
+                    base_uri(),
+                    event::info(event_config.series, &*event_config.event)
+                )
+                .to_string()
+            })
     });
 
     Ok(if url.len() > 100 {
