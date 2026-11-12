@@ -240,7 +240,7 @@ async fn agreed_settings_and_random_outcomes_travel_with_the_seed() {
         assert_eq!(baselines::seed_summary(&saved, true).as_deref(), Some(expected));
         assert_eq!(
             baselines::discord_summary(&baselines::seed_summary(&saved, true).unwrap()),
-            "Choices resolved at seed reveal:\n\n**Applied:** Pseudoboots\n\n**Rules:** Hovering/Moldorm Bouncing: banned",
+            "**Enabled:** Pseudoboots\n\n**Rules:** Hovering/Moldorm Bouncing: banned",
         );
     }
     snapshot.preferences.insert("flute".into(), ChoiceValue::Random);

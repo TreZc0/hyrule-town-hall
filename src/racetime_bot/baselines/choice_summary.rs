@@ -11,27 +11,42 @@ struct Groups {
 
 impl Groups {
     fn finish(&mut self, messages: &mut Vec<String>, discord: bool) {
+        if discord && self.applied.is_empty() {
+            for heading in &mut self.headings {
+                if heading.starts_with("**Settings:** ") {
+                    heading.push_str(" (no additional settings were applied)");
+                }
+            }
+        }
         let heading = self.headings.join(" ");
         let prefix = if discord {
             if !self.headings.is_empty() {
                 messages.push(self.headings.join("\n"));
             }
-            "**Applied:** ".to_owned()
+            "**Enabled:** ".to_owned()
         } else if heading.is_empty() {
             "Applied: ".to_owned()
         } else {
             format!("{heading} Applied: ")
         };
-        push_group(
-            messages,
-            &prefix,
-            &if self.applied.is_empty() {
-                "none (base settings)".to_owned()
-            } else {
-                self.applied.join(", ")
-            },
-            discord,
-        );
+        if !discord || !self.applied.is_empty() {
+            push_group(
+                messages,
+                &prefix,
+                &if self.applied.is_empty() {
+                    "none (base settings)".to_owned()
+                } else {
+                    self.applied.join(", ")
+                },
+                discord,
+            );
+        } else if !self
+            .headings
+            .iter()
+            .any(|heading| heading.starts_with("**Settings:** "))
+        {
+            messages.push("Base settings (no additional settings were applied).".to_owned());
+        }
         for (label, items, separator) in [
             ("Rules: ", &self.rules, "; "),
             ("Superseded: ", &self.superseded, "; "),
@@ -94,7 +109,7 @@ pub(crate) fn messages(text: &str) -> Vec<String> {
     format_summary(text, false)
 }
 
-/// Discord preserves line breaks, so keep the groups together as labelled sections.
+/// Show the settings and outcomes without internal resolution timing or empty sections.
 pub(crate) fn discord_summary(text: &str) -> String {
     format_summary(text, true).join("\n\n")
 }
@@ -132,7 +147,26 @@ fn format_summary(text: &str, discord: bool) -> Vec<String> {
                 groups.finish(&mut messages, discord);
                 has_outcomes = false;
             }
-            groups.headings.push(line.to_owned());
+            if discord {
+                if line == "Baseline: awaiting mode draft"
+                    || line.starts_with("Choices resolved at ")
+                        && line.ends_with("(mode selection pending):")
+                {
+                    if !groups
+                        .headings
+                        .iter()
+                        .any(|heading| heading == "Mode selection pending.")
+                    {
+                        groups.headings.push("Mode selection pending.".to_owned());
+                    }
+                } else if let Some(label) = line.strip_prefix("Baseline: ") {
+                    groups.headings.push(format!("**Settings:** {label}"));
+                } else if !line.starts_with("Choices resolved at ") {
+                    groups.headings.push(line.to_owned());
+                }
+            } else {
+                groups.headings.push(line.to_owned());
+            }
             continue;
         }
         has_outcomes = true;
@@ -176,7 +210,7 @@ mod tests {
             discord_summary(
                 "Choices resolved at seed reveal:\nBaseline: Crosskeys\nHovering: banned\nBoots: not applied\nSmall Keys: not applied (superseded by Full Keysanity)\nFull Keysanity: applied\nSwordless: applied"
             ),
-            "Choices resolved at seed reveal:\nBaseline: Crosskeys\n\n**Applied:** Full Keysanity, Swordless\n\n**Rules:** Hovering: banned\n\n**Superseded:** Small Keys (replaced by Full Keysanity)\n\n**Not applied:** Boots",
+            "**Settings:** Crosskeys\n\n**Enabled:** Full Keysanity, Swordless\n\n**Rules:** Hovering: banned\n\n**Superseded:** Small Keys (replaced by Full Keysanity)\n\n**Not applied:** Boots",
         );
     }
 
@@ -184,15 +218,17 @@ mod tests {
     fn discord_preserves_pending_modes_empty_groups_and_legacy_line_breaks() {
         assert_eq!(
             discord_summary(
-                "Choices resolved at room opening (mode selection pending):\nIf a is selected:\nBoots: applied\nIf b is selected:\nFlute: not applied"
+                "Baseline: awaiting mode draft\nChoices resolved at room opening (mode selection pending):\nIf a is selected:\nBoots: applied\nIf b is selected:\nFlute: not applied"
             ),
-            "Choices resolved at room opening (mode selection pending):\nIf a is selected:\n\n**Applied:** Boots\n\nIf b is selected:\n\n**Applied:** none (base settings)\n\n**Not applied:** Flute",
+            "Mode selection pending.\nIf a is selected:\n\n**Enabled:** Boots\n\nIf b is selected:\n\nBase settings (no additional settings were applied).\n\n**Not applied:** Flute",
         );
         let legacy = "Final settings - Boots: Enabled\nFlute: Disabled";
         assert_eq!(discord_summary(legacy), legacy);
         assert_eq!(
-            discord_summary("Baseline: Standard\nNo optional patches applied."),
-            "Baseline: Standard\n\n**Applied:** none (base settings)"
+            discord_summary(
+                "Choices resolved at seed reveal:\nBaseline: Inverted 2.0 with BK Shuffle\nNo optional patches applied."
+            ),
+            "**Settings:** Inverted 2.0 with BK Shuffle (no additional settings were applied)"
         );
     }
 
