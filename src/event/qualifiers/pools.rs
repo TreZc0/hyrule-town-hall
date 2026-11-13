@@ -194,6 +194,12 @@ fn seed_metadata(seed: &SeedRow) -> RawHtml<String> {
                     code : uuid.or(seed.physical_seed_identity.as_deref()).unwrap_or("Not available");
                 }
                 p { strong : "Seed hash: "; : hash.as_deref().unwrap_or("Not available"); }
+                @if let Some(seed::Files::MmrWeb { seed_page_secret: Some(secret), .. }) = data.files() {
+                    details(class = "seed-password") {
+                        summary : "Password (click to reveal)";
+                        code : secret;
+                    }
+                }
             }
         }
     }

@@ -1935,6 +1935,9 @@ p.error {
 .seed-meta-trigger:hover::after { content: none; }
 .seed-meta-panel[popover] { width: min(28rem, calc(100vw - 24px)); }
 .seed-meta-panel code { user-select: all; }
+.seed-password > summary { cursor: pointer; font-size: 0.85rem; }
+.seed-password[open] > summary { margin-bottom: 0.25rem; }
+.seed-password > code { user-select: all; }
 .qualifier-jump {
   display: flex;
   flex-wrap: wrap;

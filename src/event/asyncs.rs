@@ -488,6 +488,12 @@ pub(super) async fn editor(
                                                     @if let Some(seed::Files::MmrWeb { id, hash, seed_page_secret }) = row.seed_data.as_ref().and_then(seed::Files::from_seed_data) {
                                                         a(href = crate::mmr_web::seed_url(&id, seed_page_secret.as_deref()), target = "_blank") : "View seed";
                                                         span(class = "async-hash") : seed::render_hash_icons(&hash_icons, &hash);
+                                                        @if let Some(secret) = seed_page_secret {
+                                                            details(class = "seed-password") {
+                                                                summary : "Password (click to reveal)";
+                                                                code : secret;
+                                                            }
+                                                        }
                                                     } else { : "Not generated"; }
                                                 }
                                             }
