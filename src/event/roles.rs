@@ -1,3 +1,5 @@
+pub(crate) mod pairs;
+
 use {
     crate::{
         cal::{Entrant, Entrants, Race, RaceSchedule},
@@ -35,6 +37,8 @@ use {
 
 #[derive(Debug, thiserror::Error, rocket_util::Error)]
 pub(crate) enum Error {
+    #[error("{0}")]
+    Signup(String),
     #[error(transparent)]
     Sqlx(#[from] sqlx::Error),
     #[error(transparent)]
@@ -131,6 +135,8 @@ pub(crate) struct RoleBinding {
     pub(crate) role_type_name: String,
     pub(crate) discord_role_id: Option<i64>,
     pub(crate) auto_approve: bool,
+    pub(crate) allow_signup_notes: bool,
+    pub(crate) allow_paired_signups: bool,
     pub(crate) language: Language,
 }
 
@@ -143,6 +149,8 @@ pub(crate) struct GameRoleBinding {
     pub(crate) role_type_name: String,
     pub(crate) discord_role_id: Option<i64>,
     pub(crate) auto_approve: bool,
+    pub(crate) allow_signup_notes: bool,
+    pub(crate) allow_paired_signups: bool,
     pub(crate) language: Language,
 }
 
@@ -191,6 +199,8 @@ pub(crate) struct EffectiveRoleBinding {
     pub(crate) role_type_name: String,
     pub(crate) discord_role_id: Option<i64>,
     pub(crate) auto_approve: bool,
+    pub(crate) allow_signup_notes: bool,
+    pub(crate) allow_paired_signups: bool,
     pub(crate) is_game_binding: bool,
     pub(crate) has_event_override: bool,
     pub(crate) is_disabled: bool,
@@ -209,6 +219,8 @@ pub(crate) struct EventRoleBindingOverride {
     pub(crate) max_count: Option<i32>,
     pub(crate) created_at: DateTime<Utc>,
     pub(crate) updated_at: DateTime<Utc>,
+    pub(crate) allow_signup_notes: Option<bool>,
+    pub(crate) allow_paired_signups: Option<bool>,
 }
 
 #[derive(Debug, Clone)]
@@ -265,7 +277,7 @@ impl RoleBinding {
                     rb.max_count,
                     rt.name AS "role_type_name",
                     rb.discord_role_id,
-                    rb.auto_approve,
+                    rb.auto_approve, rb.allow_signup_notes, rb.allow_paired_signups,
                     rb.language AS "language: Language"
                 FROM role_bindings rb
                 JOIN role_types rt ON rb.role_type_id = rt.id
@@ -289,6 +301,8 @@ impl RoleBinding {
         discord_role_id: Option<i64>,
         auto_approve: bool,
         language: Language,
+        allow_signup_notes: bool,
+        allow_paired_signups: bool,
     ) -> sqlx::Result<Id<RoleBindings>> {
         let id = sqlx::query_scalar!(
             r#"INSERT INTO role_bindings (series, event, role_type_id, min_count, max_count, discord_role_id, game_id, auto_approve, language)
@@ -303,6 +317,13 @@ impl RoleBinding {
             language as _
         )
         .fetch_one(&mut **pool)
+        .await?;
+        pairs::set_binding_options(
+            pool,
+            Id::from(id as i64),
+            allow_signup_notes,
+            allow_paired_signups,
+        )
         .await?;
         Ok(Id::from(id as i64))
     }
@@ -353,7 +374,7 @@ impl GameRoleBinding {
                     rb.max_count,
                     rt.name AS "role_type_name",
                     rb.discord_role_id,
-                    rb.auto_approve,
+                    rb.auto_approve, rb.allow_signup_notes, rb.allow_paired_signups,
                     rb.language AS "language: Language"
                 FROM role_bindings rb
                 JOIN role_types rt ON rb.role_type_id = rt.id
@@ -375,6 +396,8 @@ impl GameRoleBinding {
         discord_role_id: Option<i64>,
         auto_approve: bool,
         language: Language,
+        allow_signup_notes: bool,
+        allow_paired_signups: bool,
     ) -> sqlx::Result<Id<RoleBindings>> {
         let id = sqlx::query_scalar!(
             r#"INSERT INTO role_bindings (game_id, role_type_id, min_count, max_count, discord_role_id, series, event, auto_approve, language)
@@ -388,6 +411,13 @@ impl GameRoleBinding {
             language as _
         )
         .fetch_one(&mut **pool)
+        .await?;
+        pairs::set_binding_options(
+            pool,
+            Id::from(id as i64),
+            allow_signup_notes,
+            allow_paired_signups,
+        )
         .await?;
         Ok(Id::from(id as i64))
     }
@@ -925,6 +955,57 @@ async fn assign_binding_discord_role(
     Ok(())
 }
 
+/// Synchronize role enrollment after committing the signup transaction.
+pub(crate) async fn sync_signup_discord_roles(
+    pool: &PgPool,
+    ctx: &DiscordCtx,
+    data: &Data<'_>,
+    binding_id: Id<RoleBindings>,
+    user_id: Id<Users>,
+) {
+    async fn sync(
+        pool: &PgPool,
+        ctx: &DiscordCtx,
+        data: &Data<'_>,
+        binding_id: Id<RoleBindings>,
+        user_id: Id<Users>,
+    ) -> Result<(), Error> {
+        let mut tx = pool.begin().await?;
+        if !RoleRequest::approved_for_user(&mut tx, binding_id, user_id).await? {
+            return Ok(());
+        }
+        let Some(user) = User::from_id(&mut *tx, user_id).await? else {
+            return Ok(());
+        };
+        let Some(discord) = user.discord else {
+            return Ok(());
+        };
+        let role_binding = sqlx::query_as!(
+                        RoleBinding,
+                        r#"SELECT rb.id as "id: Id<RoleBindings>", rb.series as "series: Series", rb.event, rb.game_id,
+                                  rb.role_type_id as "role_type_id: Id<RoleTypes>", rb.min_count, rb.max_count,
+                                  rt.name as role_type_name, rb.discord_role_id, rb.auto_approve, rb.allow_signup_notes, rb.allow_paired_signups,
+                                  rb.language AS "language: Language"
+                               FROM role_bindings rb
+                               JOIN role_types rt ON rb.role_type_id = rt.id
+                               WHERE rb.id = $1"#,
+                        binding_id as _
+                    )
+                    .fetch_one(&mut *tx)
+                    .await?;
+
+        if role_binding.auto_approve {
+            assign_binding_discord_role(&mut tx, ctx, data, &role_binding, discord.id).await?;
+            assign_event_override_discord_roles(&mut tx, ctx, binding_id, discord.id).await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+    if let Err(error) = sync(pool, ctx, data, binding_id, user_id).await {
+        eprintln!("Failed to assign auto-approved volunteer Discord roles: {error}");
+    }
+}
+
 impl Signup {
     pub(crate) async fn for_race(
         pool: &mut Transaction<'_, Postgres>,
@@ -967,6 +1048,16 @@ impl Signup {
         user_id: Id<Users>,
         notes: Option<String>,
     ) -> sqlx::Result<Id<Signups>> {
+        pairs::lock(pool).await?;
+        if Self::active_for_user(pool, race_id, role_binding_id, user_id).await?
+            || pairs::outgoing(pool, race_id, role_binding_id, user_id)
+                .await?
+                .is_some()
+        {
+            return Err(sqlx::Error::Protocol(
+                "An active signup or invitation already exists".into(),
+            ));
+        }
         let id = sqlx::query_scalar!(
             r#"INSERT INTO signups (race_id, role_binding_id, user_id, notes)
                VALUES ($1, $2, $3, $4) RETURNING id"#,
@@ -985,6 +1076,10 @@ impl Signup {
         id: Id<Signups>,
         status: VolunteerSignupStatus,
     ) -> sqlx::Result<bool> {
+        pairs::lock(pool).await?;
+        if pairs::signup_pair(pool, id).await?.is_some() {
+            return Ok(false);
+        }
         let result = sqlx::query!(
             r#"UPDATE signups SET status = $1, updated_at = NOW() WHERE id = $2 AND status != $1"#,
             status as _,
@@ -1003,6 +1098,10 @@ impl Signup {
         event: &str,
         status: VolunteerSignupStatus,
     ) -> sqlx::Result<bool> {
+        pairs::lock(pool).await?;
+        if pairs::signup_pair(pool, id).await?.is_some() {
+            return Ok(false);
+        }
         let result = sqlx::query("UPDATE signups s SET status = $1, updated_at = NOW() FROM races r WHERE s.id = $2 AND s.race_id = $3 AND r.id = s.race_id AND r.series = $4 AND r.event = $5 AND s.status = 'pending' AND $1 IN ('confirmed', 'declined')")
             .bind(status).bind(i64::from(id)).bind(i64::from(race_id)).bind(series.to_string()).bind(event).execute(&mut **pool).await?;
         Ok(result.rows_affected() == 1)
@@ -1064,7 +1163,9 @@ impl Signup {
         pool: &mut Transaction<'_, Postgres>,
         confirmed_signup_id: Id<Signups>,
         user_id: Id<Users>,
-    ) -> sqlx::Result<()> {
+    ) -> sqlx::Result<Vec<i64>> {
+        let mut affected_pairs = Vec::new();
+        pairs::lock(pool).await?;
         let confirmed_signup = sqlx::query!(
             r#"SELECT s.race_id, s.role_binding_id, r.series as "series: Series", r.start
                FROM signups s
@@ -1099,18 +1200,17 @@ impl Signup {
                     let signup_end_time = signup_start_time + signup_duration;
 
                     if start_time < signup_end_time && signup_start_time < end_time {
-                        sqlx::query!(
-                            r#"UPDATE signups SET status = 'declined', updated_at = NOW() WHERE id = $1"#,
-                            signup.id
-                        )
-                        .execute(&mut **pool)
-                        .await?;
+                        if let Some(pair) =
+                            pairs::decline_overlap(pool, Id::from(i64::from(signup.id))).await?
+                        {
+                            affected_pairs.push(pair);
+                        }
                     }
                 }
             }
         }
 
-        Ok(())
+        Ok(affected_pairs)
     }
 }
 
@@ -1655,6 +1755,8 @@ async fn roles_page(
                                 th : "Min Count";
                                 th : "Max Count";
                                 th : "Auto-approve";
+                                th : "Signup notes";
+                                th : "Paired signups";
                                 th : "Discord Role";
                                 th : "Actions";
                             }
@@ -1662,6 +1764,7 @@ async fn roles_page(
                         tbody {
                             @for binding in &filtered_bindings {
                                 @let raw_override = raw_overrides.get(&binding.id);
+                                @let inherited_signup_options = sqlx::query_as::<_, (bool, bool)>("SELECT allow_signup_notes,allow_paired_signups FROM role_bindings WHERE id=$1").bind(i64::from(binding.id)).fetch_one(&mut *transaction).await?;
                                 tr(
                                     data_binding_id = binding.id.to_string(),
                                     data_save_path = format!("/event/{}/{}/roles/binding/{}/edit", data.series.slug(), &data.event, binding.id),
@@ -1669,7 +1772,11 @@ async fn roles_page(
                                     data_override_save_path = format!("/event/{}/{}/role-binding-override", data.series.slug(), &data.event),
                                     data_override_discord_role_id = raw_override.and_then(|o| o.discord_role_id).map(|id| id.to_string()).unwrap_or_default(),
                                     data_override_min_count = raw_override.and_then(|o| o.min_count).map(|n| n.to_string()).unwrap_or_default(),
-                                    data_override_max_count = raw_override.and_then(|o| o.max_count).map(|n| n.to_string()).unwrap_or_default()
+                                    data_override_max_count = raw_override.and_then(|o| o.max_count).map(|n| n.to_string()).unwrap_or_default(),
+                                    data_override_allow_signup_notes = raw_override.and_then(|o| o.allow_signup_notes).map(|v| v.to_string()).unwrap_or_default(),
+                                    data_override_allow_paired_signups = raw_override.and_then(|o| o.allow_paired_signups).map(|v| v.to_string()).unwrap_or_default()
+                                    ,data_inherited_allow_signup_notes = inherited_signup_options.0.to_string()
+                                    ,data_inherited_allow_paired_signups = inherited_signup_options.1.to_string()
                                 ) {
                                     td(class = "role-type") : binding.role_type_name;
                                     td(class = "min-count", data_value = binding.min_count.to_string()) {
@@ -1690,6 +1797,14 @@ async fn roles_page(
                                         } else {
                                             span(style = "color: red;") : "✗ No";
                                         }
+                                    }
+                                    td(class = "allow-signup-notes", data_value = binding.allow_signup_notes.to_string()) {
+                                        : if binding.allow_signup_notes { "Enabled" } else { "Disabled" };
+                                        @if raw_override.and_then(|o| o.allow_signup_notes).is_some() { span(class = "override-indicator") : " (override)"; }
+                                    }
+                                    td(class = "allow-paired-signups", data_value = binding.allow_paired_signups.to_string()) {
+                                        : if binding.allow_paired_signups { "Enabled" } else { "Disabled" };
+                                        @if raw_override.and_then(|o| o.allow_paired_signups).is_some() { span(class = "override-indicator") : " (override)"; }
                                     }
                                     td(class = "discord-role", data_value = binding.discord_role_id.map(|id| id.to_string()).unwrap_or_default()) {
                                         @if let Some(discord_role_id) = binding.discord_role_id {
@@ -1799,6 +1914,8 @@ async fn roles_page(
                             label(for = "discord_role_id") : "Discord Role ID (optional):";
                             input(type = "text", name = "discord_role_id", id = "discord_role_id", placeholder = "e.g. 123456789012345678");
                         });
+                        label { input(type = "checkbox", name = "allow_signup_notes", checked); : " Allow race signup notes"; }
+                        label { input(type = "checkbox", name = "allow_paired_signups"); : " Allow paired signups"; }
                         : form_field("auto_approve", &mut errors, html! {
                             label(for = "auto_approve") : "Auto-approve requests:";
                             input(type = "checkbox", name = "auto_approve", id = "auto_approve");
@@ -2087,6 +2204,8 @@ pub(crate) struct AddRoleBindingForm {
     discord_role_id: String,
     auto_approve: bool,
     language: Language,
+    allow_signup_notes: bool,
+    allow_paired_signups: bool,
 }
 
 /// Form for editing an existing role binding.
@@ -2102,6 +2221,8 @@ pub(crate) struct EditRoleBindingForm {
     #[field(default = String::new())]
     discord_role_id: String,
     auto_approve: bool,
+    allow_signup_notes: bool,
+    allow_paired_signups: bool,
 }
 
 #[rocket::post("/event/<series>/<event>/roles/add-binding", data = "<form>")]
@@ -2222,6 +2343,8 @@ pub(crate) async fn add_role_binding(
                 discord_role_id,
                 value.auto_approve,
                 value.language,
+                value.allow_signup_notes,
+                value.allow_paired_signups,
             )
             .await?;
             transaction.commit().await?;
@@ -2354,7 +2477,7 @@ pub(crate) async fn edit_role_binding(
     series: Series,
     event: &str,
     binding: Id<RoleBindings>,
-    _csrf: Option<CsrfToken>,
+    csrf: Option<CsrfToken>,
     form: Form<Contextual<'_, EditRoleBindingForm>>,
 ) -> Result<RedirectOrContent, StatusOrError<Error>> {
     let mut transaction = pool.begin().await?;
@@ -2366,6 +2489,11 @@ pub(crate) async fn edit_role_binding(
         return Err(StatusOrError::Status(Status::Forbidden));
     }
 
+    let mut form = form.into_inner();
+    form.verify(&csrf);
+    if form.context.errors().next().is_some() {
+        return Err(StatusOrError::Status(Status::BadRequest));
+    }
     let value = form
         .value
         .as_ref()
@@ -2391,8 +2519,8 @@ pub(crate) async fn edit_role_binding(
         )
     };
 
-    // Update the role binding
-    sqlx::query!(
+    // Update only the binding in this event before changing signup options.
+    let updated = sqlx::query!(
         r#"UPDATE role_bindings 
            SET min_count = $1, max_count = $2, discord_role_id = $3, auto_approve = $4
            WHERE id = $5 AND series = $6 AND event = $7"#,
@@ -2407,6 +2535,16 @@ pub(crate) async fn edit_role_binding(
     .execute(&mut *transaction)
     .await?;
 
+    if updated.rows_affected() != 1 {
+        return Err(StatusOrError::Status(Status::NotFound));
+    }
+    pairs::set_binding_options(
+        &mut transaction,
+        binding,
+        value.allow_signup_notes,
+        value.allow_paired_signups,
+    )
+    .await?;
     transaction.commit().await?;
 
     // Update volunteer info messages to reflect the new thresholds
@@ -2605,7 +2743,7 @@ pub(crate) async fn approve_role_request(
             // Get the role binding to check for Discord role ID
             let role_binding = sqlx::query_as!(
                 RoleBinding,
-                r#"SELECT rb.id as "id: Id<RoleBindings>", rb.series as "series: Series", rb.event, rb.game_id, rb.role_type_id as "role_type_id: Id<RoleTypes>", rb.min_count, rb.max_count, rt.name as role_type_name, rb.discord_role_id, rb.auto_approve, rb.language AS "language: Language" FROM role_bindings rb JOIN role_types rt ON rb.role_type_id = rt.id WHERE rb.id = $1"#,
+                r#"SELECT rb.id as "id: Id<RoleBindings>", rb.series as "series: Series", rb.event, rb.game_id, rb.role_type_id as "role_type_id: Id<RoleTypes>", rb.min_count, rb.max_count, rt.name as role_type_name, rb.discord_role_id, rb.auto_approve, rb.allow_signup_notes, rb.allow_paired_signups, rb.language AS "language: Language" FROM role_bindings rb JOIN role_types rt ON rb.role_type_id = rt.id WHERE rb.id = $1"#,
                 i64::from(role_request.role_binding_id) as i32
             )
             .fetch_optional(&mut *transaction)
@@ -2869,7 +3007,7 @@ pub(crate) async fn apply_for_role(
                 RoleBinding,
                 r#"SELECT rb.id as "id: Id<RoleBindings>", rb.series as "series: Series", rb.event as "event!", rb.game_id,
                           rb.role_type_id as "role_type_id: Id<RoleTypes>", rb.min_count as "min_count!",
-                          rb.max_count as "max_count!", rt.name as "role_type_name!", rb.discord_role_id, rb.auto_approve,
+                          rb.max_count as "max_count!", rt.name as "role_type_name!", rb.discord_role_id, rb.auto_approve, rb.allow_signup_notes, rb.allow_paired_signups,
                           rb.language AS "language: Language"
                        FROM role_bindings rb
                        JOIN role_types rt ON rb.role_type_id = rt.id
@@ -3601,6 +3739,7 @@ pub(crate) struct SignupForMatchForm {
     #[field(default = String::new())]
     notes: String,
     lang: Option<Language>,
+    partner: Option<Id<Users>>,
 }
 
 #[rocket::post("/event/<series>/<event>/races/<race_id>/signup", data = "<form>")]
@@ -3621,6 +3760,70 @@ pub(crate) async fn signup_for_match(
         .ok_or(StatusOrError::Status(Status::NotFound))?;
     let mut form = form.into_inner();
     form.verify(&csrf);
+
+    if form.context.errors().next().is_none() {
+        if let Some(ref value) = form.value {
+            if let Some(partner) = value.partner {
+                match pairs::create(
+                    &mut transaction,
+                    &data,
+                    race_id,
+                    value.role_binding_id,
+                    me.id,
+                    partner,
+                    &value.notes,
+                )
+                .await
+                {
+                    Ok((pair, created)) => {
+                        transaction.commit().await?;
+                        if created {
+                            sync_signup_discord_roles(
+                                pool,
+                                &*discord_ctx.read().await,
+                                &data,
+                                pair.binding_id(),
+                                me.id,
+                            )
+                            .await;
+                        }
+                        let mut url = pair.url(series, event);
+                        if created
+                            && !pairs::notify(pool, &*discord_ctx.read().await, pair.id).await
+                        {
+                            url.push_str("?dm_failed=true");
+                        }
+                        return Ok(RedirectOrContent::Redirect(Redirect::to(url)));
+                    }
+                    Err(Error::Signup(message)) => {
+                        transaction.rollback().await?;
+                        transaction = pool.begin().await?;
+                        form.context.push_error(form::Error::validation(message));
+                    }
+                    Err(error) => return Err(error.into()),
+                }
+            } else {
+                pairs::lock(&mut transaction).await?;
+                let validation = async {
+                    pairs::check_race(&mut transaction, &data, race_id, false).await?;
+                    let binding = pairs::binding(&mut transaction, &data, value.role_binding_id).await?;
+                    pairs::notes(&value.notes, binding.allow_signup_notes).map_err(Error::Signup)?;
+                    if pairs::outgoing(&mut transaction, race_id, binding.id, me.id).await?.is_some() {
+                        return Err(Error::Signup("You have an outgoing pair invitation for this role. Cancel it before signing up individually.".into()));
+                    }
+                    Ok::<_,Error>(())
+                }.await;
+                if let Err(error) = validation {
+                    match error {
+                        Error::Signup(message) => {
+                            form.context.push_error(form::Error::validation(message))
+                        }
+                        other => return Err(other.into()),
+                    }
+                }
+            }
+        }
+    }
 
     Ok(if let Some(ref value) = form.value {
         if data.is_ended() {
@@ -3701,49 +3904,17 @@ pub(crate) async fn signup_for_match(
                 notes,
             )
             .await?;
-            if auto_approved_role {
-                if let Some(discord_user) = me.discord.as_ref() {
-                    let role_binding = sqlx::query_as!(
-                        RoleBinding,
-                        r#"SELECT rb.id as "id: Id<RoleBindings>", rb.series as "series: Series", rb.event, rb.game_id,
-                                  rb.role_type_id as "role_type_id: Id<RoleTypes>", rb.min_count, rb.max_count,
-                                  rt.name as role_type_name, rb.discord_role_id, rb.auto_approve,
-                                  rb.language AS "language: Language"
-                               FROM role_bindings rb
-                               JOIN role_types rt ON rb.role_type_id = rt.id
-                               WHERE rb.id = $1"#,
-                        value.role_binding_id as _
-                    )
-                    .fetch_one(&mut *transaction)
-                    .await?;
-                    let discord_ctx = discord_ctx.read().await;
-                    if let Err(e) = assign_binding_discord_role(
-                        &mut transaction,
-                        &*discord_ctx,
-                        &data,
-                        &role_binding,
-                        discord_user.id,
-                    )
-                    .await
-                    {
-                        eprintln!("Failed to assign auto-approved base Discord role: {}", e);
-                    }
-                    if let Err(e) = assign_event_override_discord_roles(
-                        &mut transaction,
-                        &*discord_ctx,
-                        value.role_binding_id,
-                        discord_user.id,
-                    )
-                    .await
-                    {
-                        eprintln!(
-                            "Failed to assign auto-approved event override Discord roles: {}",
-                            e
-                        );
-                    }
-                }
-            }
             transaction.commit().await?;
+            if auto_approved_role {
+                sync_signup_discord_roles(
+                    pool,
+                    &*discord_ctx.read().await,
+                    &data,
+                    value.role_binding_id,
+                    me.id,
+                )
+                .await;
+            }
 
             speedgaming_export::schedule_sync(pool.inner().clone(), http_client.inner().clone());
 
@@ -3822,6 +3993,7 @@ pub(crate) async fn manage_roster(
     form: Form<Contextual<'_, ManageRosterForm>>,
 ) -> Result<RedirectOrContent, StatusOrError<Error>> {
     let mut transaction = pool.begin().await?;
+    pairs::lock(&mut transaction).await?;
     let data = Data::new(&mut transaction, series, event)
         .await?
         .ok_or(StatusOrError::Status(Status::NotFound))?;
@@ -3896,6 +4068,40 @@ pub(crate) async fn manage_roster(
                 }
             };
 
+            let candidate = Signup::from_id(&mut transaction, value.signup_id)
+                .await?
+                .ok_or(StatusOrError::Status(Status::Conflict))?;
+            if candidate.race_id != race_id || candidate.status != VolunteerSignupStatus::Pending {
+                return Err(StatusOrError::Status(Status::Conflict));
+            }
+            if pairs::signup_pair(&mut transaction, value.signup_id)
+                .await?
+                .is_some()
+            {
+                return Err(StatusOrError::Status(Status::Conflict));
+            }
+            if status == VolunteerSignupStatus::Confirmed {
+                let binding = match pairs::binding(
+                    &mut transaction,
+                    &data,
+                    candidate.role_binding_id,
+                )
+                .await
+                {
+                    Ok(binding) => binding,
+                    Err(Error::Signup(_)) => return Err(StatusOrError::Status(Status::Conflict)),
+                    Err(error) => return Err(error.into()),
+                };
+                if pairs::confirmed_conflict(&mut transaction, race_id, candidate.user_id).await? {
+                    return Err(StatusOrError::Status(Status::Conflict));
+                }
+                let count: i64 = sqlx::query_scalar("SELECT count(*) FROM signups WHERE race_id=$1 AND role_binding_id=$2 AND status='confirmed'")
+                    .bind(race_id).bind(i64::from(binding.id)).fetch_one(&mut *transaction).await?;
+                if count >= i64::from(binding.max_count) {
+                    return Err(StatusOrError::Status(Status::Conflict));
+                }
+            }
+            let mut affected_pairs = Vec::new();
             let status_changed = Signup::decide_pending(
                 &mut transaction,
                 value.signup_id,
@@ -3917,12 +4123,16 @@ pub(crate) async fn manage_roster(
                     .await?
                     .ok_or(StatusOrError::Status(Status::NotFound))?;
 
-                Signup::auto_reject_overlapping_signups(
+                affected_pairs = Signup::auto_reject_overlapping_signups(
                     &mut transaction,
                     value.signup_id,
                     signup.user_id,
                 )
                 .await?;
+
+                // Release the allocation lock before fetching notification details or contacting Discord.
+                transaction.commit().await?;
+                transaction = pool.begin().await?;
 
                 // Send DM notification to the selected volunteer
                 {
@@ -4076,6 +4286,13 @@ pub(crate) async fn manage_roster(
             }
 
             transaction.commit().await?;
+            pairs::refresh(
+                pool,
+                http_client,
+                &*discord_ctx.read().await,
+                &affected_pairs,
+            )
+            .await;
 
             // Update the volunteer info post to reflect the status change
             let _ = volunteer_requests::update_volunteer_post_for_race(
@@ -4149,6 +4366,15 @@ async fn match_signup_page(
     // Get race details
     let race = Race::from_id(&mut transaction, &reqwest::Client::new(), race_id).await?;
     let signups = Signup::for_race(&mut transaction, race_id).await?;
+    let pair_signups = pairs::for_race(&mut transaction, race_id).await?;
+    let grouped_ids: HashSet<i64> = sqlx::query_scalar(
+        "SELECT id::bigint FROM signups WHERE race_id=$1 AND pair_id IS NOT NULL",
+    )
+    .bind(race_id)
+    .fetch_all(&mut *transaction)
+    .await?
+    .into_iter()
+    .collect();
     let effective_role_bindings =
         EffectiveRoleBinding::for_event(&mut transaction, data.series, &data.event).await?;
 
@@ -4315,6 +4541,18 @@ async fn match_signup_page(
                 : render_language_content_box_start();
             }
 
+            @for pair in &pair_signups {
+                @if can_view || pair.contains(me.id) {
+                    @let inviter = User::from_id(&mut *transaction, pair.inviter_user_id).await?;
+                    @let invitee = User::from_id(&mut *transaction, pair.invitee_user_id).await?;
+                    div(class = "signup-item") {
+                        p { strong : format!("{} + {} · Together only", inviter.as_ref().map_or("Volunteer", User::display_name), invitee.as_ref().map_or("Volunteer", User::display_name)); }
+                        p : pair.label();
+                        @if let Some(role) = effective_role_bindings.iter().find(|b| b.id == pair.binding_id()) { p : format!("{} · {} · 2 slots", role.role_type_name, role.language); }
+                        a(class = "button", href = pair.url(data.series, &data.event)) : if can_view { "Review pair" } else { "View invitation / signup" };
+                    }
+                }
+            }
             @if can_view {
                 h3 : "Race signups";
                 @let inactive_signups = signups.iter()
@@ -4324,7 +4562,7 @@ async fn match_signup_page(
                     .filter(|s| s.language == current_language && !matches!(s.status, VolunteerSignupStatus::Declined | VolunteerSignupStatus::Aborted))
                     .collect::<Vec<_>>();
 
-                @for signup in &active_signups {
+                @for signup in active_signups.iter().filter(|s| !grouped_ids.contains(&i64::from(s.id))) {
                     @if let Some(user) = User::from_id(&mut *transaction, signup.user_id).await? {
                         div(class = "signup-item") {
                             div(class = "signup-item-content") {
@@ -4403,7 +4641,7 @@ async fn match_signup_page(
                 @if !inactive_signups.is_empty() {
                     details {
                         summary : format!("Declined/Withdrawn Signups ({})", inactive_signups.len());
-                        @for signup in &inactive_signups {
+                        @for signup in inactive_signups.iter().filter(|s| !grouped_ids.contains(&i64::from(s.id))) {
                             @if let Some(user) = User::from_id(&mut *transaction, signup.user_id).await? {
                                 div(class = "signup-item") {
                                     div(class = "signup-item-content") {
@@ -4540,7 +4778,10 @@ async fn match_signup_page(
                     @let has_pending_request = my_requests.as_ref().map(|reqs| {
                         reqs.iter().any(|req| req.role_binding_id == binding.id && matches!(req.status, RoleRequestStatus::Pending))
                     }).unwrap_or(false);
-                    @if let Some(my_signup) = my_signup {
+                    @if let Some(my_pair) = pair_signups.iter().find(|p| p.binding_id() == binding.id && ((p.inviter_user_id == me.id && p.state == "awaiting_partner") || (p.contains(me.id) && matches!(p.state.as_str(), "pending" | "confirmed")))) {
+                        p : my_pair.label();
+                        a(class="button",href=my_pair.url(data.series,&data.event)) : "View paired signup";
+                    } else if let Some(my_signup) = my_signup {
                         p : "You have already signed up for this role.";
 
                         // Allow withdrawal if:
@@ -4550,11 +4791,11 @@ async fn match_signup_page(
                             VolunteerSignupStatus::Pending => true,
                             VolunteerSignupStatus::Confirmed => {
                                 match race.schedule {
-                                    RaceSchedule::Live { start, .. } => start > chrono::Utc::now(),
+                                    RaceSchedule::Live { start, .. } => start > Utc::now(),
                                     RaceSchedule::Async { start1, start2, start3, .. } => {
                                         [start1, start2, start3].iter()
                                             .filter_map(|s| *s)
-                                            .all(|s| s > chrono::Utc::now())
+                                            .all(|s| s > Utc::now())
                                     }
                                     _ => false,
                                 }
@@ -4614,16 +4855,13 @@ async fn match_signup_page(
                                 : signup_button;
                             }
                         } else {
-                            @let mut errors = Vec::new();
+                            @let errors = Vec::new();
                             : full_form(uri!(signup_for_match(data.series, &*data.event, race_id)), csrf.as_ref(), html! {
                                 input(type = "hidden", name = "role_binding_id", value = binding.id.to_string());
                                 @if active_languages.len() > 1 {
                                     input(type = "hidden", name = "lang", value = current_language.short_code());
                                 }
-                                : form_field("notes", &mut errors, html! {
-                                    label(for = "notes") : "Notes:";
-                                    input(type = "text", name = "notes", id = "notes", maxlength = "60", size = "30", placeholder = "Optional notes for organizers");
-                                });
+                                : pairs::signup_fields(&mut transaction, binding, me.id).await?;
                             }, errors, &format!("Sign up for {}", binding.role_type_name));
                         }
                         @if let Some(reason) = reason {
@@ -4669,16 +4907,13 @@ async fn match_signup_page(
                                 : signup_button;
                             }
                         } else {
-                            @let mut errors = Vec::new();
+                            @let errors = Vec::new();
                             : full_form(uri!(signup_for_match(data.series, &*data.event, race_id)), csrf.as_ref(), html! {
                                 input(type = "hidden", name = "role_binding_id", value = binding.id.to_string());
                                 @if active_languages.len() > 1 {
                                     input(type = "hidden", name = "lang", value = current_language.short_code());
                                 }
-                                : form_field("notes", &mut errors, html! {
-                                    label(for = "notes") : "Notes:";
-                                    input(type = "text", name = "notes", id = "notes", maxlength = "60", size = "30", placeholder = "Optional notes for organizers");
-                                });
+                                : pairs::signup_fields(&mut transaction, binding, me.id).await?;
                             }, errors, &format!("Sign up for {}", binding.role_type_name));
                         }
                         @if let Some(reason) = reason {
@@ -4890,6 +5125,12 @@ pub(crate) async fn withdraw_signup(
             ));
         }
 
+        if pairs::signup_pair(&mut transaction, value.signup_id)
+            .await?
+            .is_some()
+        {
+            return Err(StatusOrError::Status(Status::Conflict));
+        }
         if signup.race_id != race_id {
             form.context
                 .push_error(form::Error::validation("Invalid signup for this race"));
@@ -5059,6 +5300,12 @@ pub(crate) async fn revoke_signup(
             .await?
             .ok_or(StatusOrError::Status(Status::NotFound))?;
 
+        if pairs::signup_pair(&mut transaction, value.signup_id)
+            .await?
+            .is_some()
+        {
+            return Err(StatusOrError::Status(Status::Conflict));
+        }
         if signup.race_id != race_id {
             form.context
                 .push_error(form::Error::validation("Invalid signup for this race"));
@@ -5361,6 +5608,8 @@ impl EventRoleBindingOverride {
                     discord_role_id,
                     min_count,
                     max_count,
+                    allow_signup_notes,
+                    allow_paired_signups,
                     created_at AS "created_at!",
                     updated_at AS "updated_at!"
                 FROM event_role_binding_overrides
@@ -5382,26 +5631,13 @@ impl EventRoleBindingOverride {
         discord_role_id: Option<i64>,
         min_count: Option<i32>,
         max_count: Option<i32>,
+        allow_signup_notes: Option<bool>,
+        allow_paired_signups: Option<bool>,
     ) -> sqlx::Result<Id<EventRoleBindingOverrides>> {
-        let id = sqlx::query_scalar!(
-            r#"INSERT INTO event_role_binding_overrides (series, event, role_binding_id, discord_role_id, min_count, max_count)
-               VALUES ($1, $2, $3, $4, $5, $6)
-               ON CONFLICT (series, event, role_binding_id)
-               DO UPDATE SET
-                   discord_role_id = EXCLUDED.discord_role_id,
-                   min_count = EXCLUDED.min_count,
-                   max_count = EXCLUDED.max_count,
-                   updated_at = NOW()
-               RETURNING id"#,
-            series as _,
-            event,
-            role_binding_id as _,
-            discord_role_id,
-            min_count,
-            max_count
-        )
-        .fetch_one(&mut **pool)
-        .await?;
+        let id: i32 = sqlx::query_scalar("INSERT INTO event_role_binding_overrides (series,event,role_binding_id,discord_role_id,min_count,max_count,allow_signup_notes,allow_paired_signups) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT (series,event,role_binding_id) DO UPDATE SET discord_role_id=EXCLUDED.discord_role_id,min_count=EXCLUDED.min_count,max_count=EXCLUDED.max_count,allow_signup_notes=EXCLUDED.allow_signup_notes,allow_paired_signups=EXCLUDED.allow_paired_signups,updated_at=NOW() RETURNING id")
+            .bind(series.to_string()).bind(event).bind(i64::from(role_binding_id)).bind(discord_role_id)
+            .bind(min_count).bind(max_count).bind(allow_signup_notes).bind(allow_paired_signups)
+            .fetch_one(&mut **pool).await?;
         Ok(Id::from(id as i64))
     }
 
@@ -5435,6 +5671,8 @@ impl EventRoleBindingOverride {
                     discord_role_id,
                     min_count,
                     max_count,
+                    allow_signup_notes,
+                    allow_paired_signups,
                     created_at AS "created_at!",
                     updated_at AS "updated_at!"
                 FROM event_role_binding_overrides
@@ -5573,7 +5811,7 @@ impl EffectiveRoleBinding {
                     rb.max_count,
                     rt.name AS "role_type_name",
                     rb.discord_role_id,
-                    rb.auto_approve,
+                    rb.auto_approve, rb.allow_signup_notes, rb.allow_paired_signups,
                     rb.language AS "language: Language",
                     false AS "is_game_binding!: bool",
                     false AS "has_event_override!: bool",
@@ -5606,7 +5844,7 @@ impl EffectiveRoleBinding {
                             rb.max_count,
                             rt.name AS "role_type_name",
                             rb.discord_role_id,
-                            rb.auto_approve,
+                            rb.auto_approve, rb.allow_signup_notes, rb.allow_paired_signups,
                             rb.language AS "language: Language",
                             true AS "is_game_binding!: bool",
                             false AS "has_event_override!: bool",
@@ -5649,6 +5887,12 @@ impl EffectiveRoleBinding {
              override_map: &HashMap<Id<RoleBindings>, EventRoleBindingOverride>| {
                 if let Some(o) = override_map.get(&binding.id) {
                     binding.has_event_override = true;
+                    if let Some(value) = o.allow_signup_notes {
+                        binding.allow_signup_notes = value;
+                    }
+                    if let Some(value) = o.allow_paired_signups {
+                        binding.allow_paired_signups = value;
+                    }
                     if let Some(discord_role_id) = o.discord_role_id {
                         binding.discord_role_id = Some(discord_role_id);
                     }
@@ -5690,7 +5934,7 @@ impl EffectiveRoleBinding {
         let mut languages: Vec<Language> = bindings
             .iter()
             .map(|b| b.language)
-            .collect::<std::collections::HashSet<_>>()
+            .collect::<HashSet<_>>()
             .into_iter()
             .collect();
         languages.sort_by_key(|l| l.short_code().to_string());
@@ -5877,6 +6121,8 @@ pub(crate) struct AddRoleBindingOverrideFromFormData {
     discord_role_id: Option<String>,
     min_count: Option<i32>,
     max_count: Option<i32>,
+    allow_signup_notes: Option<bool>,
+    allow_paired_signups: Option<bool>,
 }
 
 #[rocket::post("/event/<series>/<event>/role-binding-override", data = "<form>")]
@@ -5945,9 +6191,14 @@ pub(crate) async fn upsert_role_binding_override(
         };
 
         // Validate: at least one override field must be provided
-        if discord_role_id.is_none() && value.min_count.is_none() && value.max_count.is_none() {
+        if discord_role_id.is_none()
+            && value.min_count.is_none()
+            && value.max_count.is_none()
+            && value.allow_signup_notes.is_none()
+            && value.allow_paired_signups.is_none()
+        {
             form.context.push_error(form::Error::validation(
-                "At least one of Discord role ID, minimum count, or maximum count must be provided.",
+                "Provide at least one role override, including signup notes or paired signups.",
             ));
         }
         if let (Some(min), Some(max)) = (value.min_count, value.max_count) {
@@ -6003,6 +6254,8 @@ pub(crate) async fn upsert_role_binding_override(
                 discord_role_id,
                 value.min_count,
                 value.max_count,
+                value.allow_signup_notes,
+                value.allow_paired_signups,
             )
             .await?;
 
@@ -6706,7 +6959,7 @@ pub(crate) async fn edit_ping_workflow(
     workflow_id: i32,
     csrf: Option<CsrfToken>,
     form: Form<Contextual<'_, EditPingWorkflowForm>>,
-) -> Result<rocket::http::Status, StatusOrError<Error>> {
+) -> Result<Status, StatusOrError<Error>> {
     let mut transaction = pool.begin().await?;
     let data = Data::new(&mut transaction, series, event)
         .await?
@@ -6831,7 +7084,7 @@ pub(crate) async fn edit_ping_workflow(
         return Err(StatusOrError::Status(Status::BadRequest));
     }
 
-    Ok(rocket::http::Status::Ok)
+    Ok(Status::Ok)
 }
 
 #[derive(FromForm, CsrfForm)]

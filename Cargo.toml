@@ -107,4 +107,4 @@ xdg = "3"
 directories = "6"
 
 [patch.crates-io]
-serenity = { git = "https://github.com/TreZc0/serenity.git", branch = "fix-permission-removal" }
+serenity = { path = "vendor/serenity" }

@@ -763,7 +763,6 @@ dependencies = [
 [[package]]
 name = "command_attr"
 version = "0.5.4"
-source = "git+https://github.com/TreZc0/serenity.git?branch=fix-permission-removal#8df6f173fc5920bfc2d01ae94a60e64acebe50d8"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -6830,7 +6829,6 @@ dependencies = [
 [[package]]
 name = "serenity"
 version = "0.12.5"
-source = "git+https://github.com/TreZc0/serenity.git?branch=fix-permission-removal#8df6f173fc5920bfc2d01ae94a60e64acebe50d8"
 dependencies = [
  "arrayvec",
  "async-trait",

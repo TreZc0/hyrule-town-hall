@@ -22,6 +22,7 @@ use {
 };
 
 mod scheduling_time;
+mod volunteer_signups;
 
 use scheduling_time::{parse_natural_language_timestamp, parse_timestamp, timezone_utc_offset};
 
@@ -4880,6 +4881,10 @@ pub(crate) fn configure_builder(
                         let bindings = event::roles::EffectiveRoleBinding::for_event(&mut transaction, race.series, &race.event).await?;
                         let signups = event::roles::Signup::for_race(&mut transaction, race_id).await?;
 
+                        let pair_links = event::roles::pairs::for_race(&mut transaction, race_id).await?.into_iter()
+                            .filter(|p| p.contains(user.id) && matches!(p.state.as_str(), "awaiting_partner" | "pending" | "confirmed"))
+                            .map(|p| format!("{}: {}{}", p.label(), base_uri(), p.url(race.series, &race.event)))
+                            .collect::<Vec<_>>().join("\n");
                         // Auto-approve bindings the user can sign up for directly (no prior role
                         // request needed): not disabled, slot available, not already signed up,
                         // and user has no pending/approved request for them yet.
@@ -4944,7 +4949,7 @@ pub(crate) fn configure_builder(
 
                                 let label = format!("{} [{}]", binding.role_type_name, binding.language.short_code());
                                 buttons.push(
-                                    CreateButton::new(format!("volunteer_role_{}_{}", u64::from(race_id), u64::from(binding.id)))
+                                    CreateButton::new(format!("volunteer_role_{}_{}_{}_{}", u64::from(race_id), u64::from(binding.id), u8::from(binding.allow_signup_notes), u8::from(binding.allow_paired_signups)))
                                         .label(label)
                                         .style(ButtonStyle::Success)
                                 );
@@ -4962,7 +4967,7 @@ pub(crate) fn configure_builder(
                             }
                             let label = format!("{} [{}] ✦", binding.role_type_name, binding.language.short_code());
                             buttons.push(
-                                CreateButton::new(format!("volunteer_role_{}_{}", u64::from(race_id), u64::from(binding.id)))
+                                CreateButton::new(format!("volunteer_role_{}_{}_{}_{}", u64::from(race_id), u64::from(binding.id), u8::from(binding.allow_signup_notes), u8::from(binding.allow_paired_signups)))
                                     .label(label)
                                     .style(ButtonStyle::Primary)
                             );
@@ -4970,7 +4975,7 @@ pub(crate) fn configure_builder(
 
                         if buttons.is_empty() {
                             interaction.edit_response(ctx, EditInteractionResponse::new()
-                                .content("All roles you're qualified for are either full or you're already signed up.")
+                                .content(format!("All roles you're qualified for are either full or you're already signed up.\n{pair_links}"))
                             ).await?;
                             return Ok(());
                         }
@@ -4983,148 +4988,13 @@ pub(crate) fn configure_builder(
                         };
 
                         interaction.edit_response(ctx, EditInteractionResponse::new()
-                            .content(prompt)
+                            .content(format!("{prompt}\n{pair_links}"))
                             .components(vec![CreateActionRow::Buttons(buttons)])
                         ).await?;
 
                         transaction.commit().await?;
                     } else if let Some(params) = custom_id.strip_prefix("volunteer_role_") {
-                        // Handle volunteer role selection - creates the signup
-                        // Defer immediately: the DB queries and possible racetime.gg call below
-                        // can exceed Discord's 3-second ack window, causing "Unknown interaction".
-                        interaction.create_response(ctx, CreateInteractionResponse::Defer(
-                            CreateInteractionResponseMessage::new().ephemeral(true)
-                        )).await?;
-
-                        let (pool, http_client) = {
-                            let data = ctx.data.read().await;
-                            (
-                                data.get::<DbPool>().expect("database connection pool missing from Discord context").clone(),
-                                data.get::<HttpClient>().expect("HTTP client missing from Discord context").clone(),
-                            )
-                        };
-                        let mut transaction = pool.begin().await?;
-
-                        // Parse race_id and binding_id from custom_id
-                        let (race_id_str, binding_id_str) = match params.split_once('_') {
-                            Some((r, b)) => (r, b),
-                            None => {
-                                interaction.edit_response(ctx, EditInteractionResponse::new()
-                                    .content("Invalid button format.")
-                                ).await?;
-                                return Ok(());
-                            }
-                        };
-
-                        let race_id: Id<Races> = match race_id_str.parse::<u64>() {
-                            Ok(id) => Id::from(id),
-                            Err(_) => {
-                                interaction.edit_response(ctx, EditInteractionResponse::new()
-                                    .content("Invalid race ID.")
-                                ).await?;
-                                return Ok(());
-                            }
-                        };
-
-                        let binding_id: Id<RoleBindings> = match binding_id_str.parse::<u64>() {
-                            Ok(id) => Id::from(id),
-                            Err(_) => {
-                                interaction.edit_response(ctx, EditInteractionResponse::new()
-                                    .content("Invalid role binding ID.")
-                                ).await?;
-                                return Ok(());
-                            }
-                        };
-
-                        // Get the user from Discord ID
-                        let user = match User::from_discord(&mut *transaction, interaction.user.id).await? {
-                            Some(u) => u,
-                            None => {
-                                interaction.edit_response(ctx, EditInteractionResponse::new()
-                                    .content("You need to link your Discord account on the website first.")
-                                ).await?;
-                                return Ok(());
-                            }
-                        };
-
-                        // Get the race (validates it exists)
-                        let _race = match Race::from_id(&mut transaction, &http_client, race_id).await {
-                            Ok(r) => r,
-                            Err(_) => {
-                                interaction.edit_response(ctx, EditInteractionResponse::new()
-                                    .content("Could not find this race.")
-                                ).await?;
-                                return Ok(());
-                            }
-                        };
-
-                        // Verify user still has an approved request for this role binding
-                        let has_approval = event::roles::RoleRequest::approved_for_user(
-                            &mut transaction,
-                            binding_id,
-                            user.id,
-                        ).await?;
-
-                        if !has_approval {
-                            // Check if the binding is auto-approve — if so, create/upgrade the
-                            // role request right here so the signup can proceed atomically.
-                            let auto_approved = event::roles::RoleRequest::ensure_approved_for_auto_approve(
-                                &mut transaction,
-                                binding_id,
-                                user.id,
-                            ).await?;
-
-                            if auto_approved.is_none() {
-                                interaction.edit_response(ctx, EditInteractionResponse::new()
-                                    .content("You don't have permission for this role.")
-                                ).await?;
-                                return Ok(());
-                            }
-                        }
-
-                        // Check if already signed up
-                        let already_signed = event::roles::Signup::active_for_user(
-                            &mut transaction,
-                            race_id,
-                            binding_id,
-                            user.id,
-                        ).await?;
-
-                        if already_signed {
-                            interaction.edit_response(ctx, EditInteractionResponse::new()
-                                .content("You're already signed up for this role on this race.")
-                            ).await?;
-                            return Ok(());
-                        }
-
-                        // Create the signup
-                        event::roles::Signup::create(
-                            &mut transaction,
-                            race_id,
-                            binding_id,
-                            user.id,
-                            None,
-                        ).await?;
-
-                        transaction.commit().await?;
-
-                        speedgaming_export::schedule_sync(
-                            pool.clone(),
-                            http_client.clone(),
-                        );
-
-                        // Update the volunteer info post to reflect the new signup
-                        let _ = volunteer_requests::update_volunteer_post_for_race(
-                            &pool,
-                            ctx,
-                            race_id,
-                        ).await;
-
-                        // Confirm success - update the original message to remove buttons
-                        interaction.edit_response(ctx, EditInteractionResponse::new()
-                            .content("Thank you for signing up. You will be informed once your signup has been processed by the team.")
-                            .components(vec![])
-                        ).await?;
+                        volunteer_signups::button(ctx, &interaction, params).await?;
                     } else if let Some(signup_id_str) = custom_id.strip_prefix("volunteer_withdraw_") {
                         if let Some(signup_id_str) = signup_id_str.strip_prefix("confirm_") {
                             // Confirmed withdrawal — perform the actual withdrawal
@@ -5182,6 +5052,14 @@ pub(crate) fn configure_builder(
                                 return Ok(());
                             }
 
+                            if let Some(pair_id) = event::roles::pairs::signup_pair(&mut transaction, signup_id).await? {
+                                let pair = event::roles::pairs::load(&mut transaction, pair_id).await?.expect("signup pair foreign key");
+                                let race = Race::from_id(&mut transaction, &http_client, signup.race_id).await?;
+                                interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
+                                    CreateInteractionResponseMessage::new().content(format!("Withdrawing cancels both signups. Review and withdraw your pair here: {}{}", base_uri(), pair.url(race.series, &race.event))).components(vec![])
+                                )).await?;
+                                return Ok(());
+                            }
                             if matches!(signup.status, event::roles::VolunteerSignupStatus::Aborted) {
                                 interaction.create_response(ctx, CreateInteractionResponse::UpdateMessage(
                                     CreateInteractionResponseMessage::new()
@@ -5487,7 +5365,9 @@ pub(crate) fn configure_builder(
                     },
                 },
                 Interaction::Modal(interaction) => {
-                    if let Some(params) = interaction.data.custom_id.strip_prefix("draw_report_modal_") {
+                    if let Some(params) = interaction.data.custom_id.strip_prefix("volunteer_signup_form_") {
+                        volunteer_signups::modal(ctx, &interaction, params).await?;
+                    } else if let Some(params) = interaction.data.custom_id.strip_prefix("draw_report_modal_") {
                         let mut parts = params.rsplitn(3, '_');
                         let orig_msg_id = MessageId::new(parts.next().expect("msg_id in draw_report_modal").parse::<u64>().expect("msg_id parse"));
                         let orig_channel_id = ChannelId::new(parts.next().expect("channel_id in draw_report_modal").parse::<u64>().expect("channel_id parse"));

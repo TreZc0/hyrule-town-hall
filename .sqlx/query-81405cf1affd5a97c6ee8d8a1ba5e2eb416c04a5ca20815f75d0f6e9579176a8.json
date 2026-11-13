@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT rb.id as \"id: Id<RoleBindings>\", rb.series as \"series: Series\", rb.event, rb.game_id,\n                                  rb.role_type_id as \"role_type_id: Id<RoleTypes>\", rb.min_count, rb.max_count,\n                                  rt.name as role_type_name, rb.discord_role_id, rb.auto_approve,\n                                  rb.language AS \"language: Language\"\n                               FROM role_bindings rb\n                               JOIN role_types rt ON rb.role_type_id = rt.id\n                               WHERE rb.id = $1",
+  "query": "SELECT rb.id as \"id: Id<RoleBindings>\", rb.series as \"series: Series\", rb.event, rb.game_id,\n                                  rb.role_type_id as \"role_type_id: Id<RoleTypes>\", rb.min_count, rb.max_count,\n                                  rt.name as role_type_name, rb.discord_role_id, rb.auto_approve, rb.allow_signup_notes, rb.allow_paired_signups,\n                                  rb.language AS \"language: Language\"\n                               FROM role_bindings rb\n                               JOIN role_types rt ON rb.role_type_id = rt.id\n                               WHERE rb.id = $1",
   "describe": {
     "columns": [
       {
@@ -55,6 +55,16 @@
       },
       {
         "ordinal": 10,
+        "name": "allow_signup_notes",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 11,
+        "name": "allow_paired_signups",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 12,
         "name": "language: Language",
         "type_info": {
           "Custom": {
@@ -87,8 +97,10 @@
       false,
       true,
       false,
+      false,
+      false,
       false
     ]
   },
-  "hash": "24c4fb68529badbe958f9819c67d90c4f45e1c2aaa75aee13403cb1c2bd96e10"
+  "hash": "81405cf1affd5a97c6ee8d8a1ba5e2eb416c04a5ca20815f75d0f6e9579176a8"
 }

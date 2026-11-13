@@ -1128,6 +1128,8 @@ pub(crate) async fn rocket(
             event::roles::forfeit_role,
             event::roles::volunteer_page_get,
             event::roles::signup_for_match,
+            event::roles::pairs::review,
+            event::roles::pairs::action,
             event::roles::manage_roster,
             event::roles::withdraw_signup,
             event::roles::withdraw_role_request,

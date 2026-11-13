@@ -29,6 +29,7 @@ pub(crate) enum Notification {
     /// A notification from the `notifications` table that can only be dismissed
     Simple(Id<Notifications>),
     TeamInvite(Id<Teams>),
+    VolunteerPairInvite(String),
 }
 
 impl Notification {
@@ -50,6 +51,17 @@ impl Notification {
             if !event.is_started(&mut *transaction).await? {
                 notifications.push(Self::TeamInvite(team_id));
             }
+        }
+        let pairs: Vec<(i64, Id<Races>, Series, String)> = sqlx::query_as("SELECT p.id,p.race_id,r.series,r.event FROM volunteer_signup_pairs p JOIN races r ON r.id=p.race_id WHERE p.invitee_user_id=$1 AND p.state='awaiting_partner' AND r.start>NOW() AND NOT r.ignored")
+            .bind(me.id).fetch_all(&mut **transaction).await?;
+        for (id, race, series, event) in pairs {
+            notifications.push(Self::VolunteerPairInvite(format!(
+                "/event/{}/{}/races/{}/volunteer-pairs/{}",
+                series.slug(),
+                event,
+                race,
+                id
+            )));
         }
         Ok(notifications)
     }
@@ -105,6 +117,9 @@ impl Notification {
                     : errors;
                     div(class = "button-row") : button;
                 }
+            }
+            Self::VolunteerPairInvite(url) => {
+                html! { a(href=url) : "Review an invitation to volunteer together"; }
             }
             Self::TeamInvite(team_id) => {
                 team_invite(transaction, me, csrf, errors, source, team_id).await?

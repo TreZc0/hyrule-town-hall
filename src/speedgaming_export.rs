@@ -204,6 +204,10 @@ impl ExportConfig {
         export_volunteers: bool,
         volunteer_languages: &[Language],
     ) -> sqlx::Result<i32> {
+        event::roles::pairs::lock(transaction).await?;
+        if export_volunteers {
+            reject_active_pairs(transaction, series, event, volunteer_languages).await?;
+        }
         let archived_id = sqlx::query_scalar!(
             r#"
             SELECT id FROM speedgaming_exports
@@ -267,6 +271,15 @@ impl ExportConfig {
         enabled: bool,
         volunteer_languages: &[Language],
     ) -> sqlx::Result<()> {
+        event::roles::pairs::lock(transaction).await?;
+        if export_volunteers && enabled {
+            let (series, event): (Series, String) =
+                sqlx::query_as("SELECT series,event FROM speedgaming_exports WHERE id=$1")
+                    .bind(id)
+                    .fetch_one(&mut **transaction)
+                    .await?;
+            reject_active_pairs(transaction, series, &event, volunteer_languages).await?;
+        }
         sqlx::query!(
             r#"
             UPDATE speedgaming_exports SET
@@ -887,11 +900,26 @@ async fn sync_races_for_export(
     Ok(())
 }
 
+async fn reject_active_pairs(
+    transaction: &mut Transaction<'_, Postgres>,
+    series: Series,
+    event: &str,
+    languages: &[Language],
+) -> sqlx::Result<()> {
+    let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM volunteer_signup_pairs p JOIN races r ON r.id=p.race_id JOIN role_bindings rb ON rb.id=p.role_binding_id JOIN role_types rt ON rt.id=rb.role_type_id WHERE r.series=$1 AND r.event=$2 AND r.start>NOW() AND p.state IN ('awaiting_partner','pending','confirmed') AND rb.language=ANY($3) AND rt.name IN ('Commentary','Tracking'))")
+        .bind(series.to_string()).bind(event).bind(languages).fetch_one(&mut **transaction).await?;
+    if exists {
+        return Err(sqlx::Error::Protocol("Resolve active paired volunteer signups before enabling automatic SpeedGaming volunteer exports for these languages.".into()));
+    }
+    Ok(())
+}
+
 async fn claim_volunteer_export(
     transaction: &mut Transaction<'_, Postgres>,
     signup_id: Id<Signups>,
     export_id: i32,
 ) -> sqlx::Result<bool> {
+    event::roles::pairs::lock(transaction).await?;
     let enabled = sqlx::query_scalar!("SELECT enabled FROM speedgaming_exports WHERE id = $1 AND archived_at IS NULL FOR KEY SHARE", export_id)
         .fetch_optional(&mut **transaction)
         .await?;
@@ -907,7 +935,7 @@ async fn claim_volunteer_export(
         JOIN role_types rt ON rt.id=rb.role_type_id JOIN users u ON u.id=s.user_id
         JOIN races r ON r.id=s.race_id
         JOIN speedgaming_race_exports re ON re.race_id=s.race_id AND re.export_id=$2
-        WHERE s.id=$1 AND s.status IN ('pending','confirmed') AND re.state='succeeded'
+        WHERE s.id=$1 AND s.pair_id IS NULL AND s.status IN ('pending','confirmed') AND re.state='succeeded'
           AND re.operation<>'delete' AND NOT r.ignored AND r.start>NOW()
         ON CONFLICT (signup_id, export_id) DO UPDATE SET
             state = 'in_progress', attempt_count = speedgaming_volunteer_exports.attempt_count + 1,
@@ -1014,7 +1042,7 @@ async fn sync_volunteers_for_export(
         JOIN speedgaming_race_exports re ON re.race_id = s.race_id AND re.export_id = $1
         WHERE re.state = 'succeeded' AND re.episode_id IS NOT NULL AND re.operation<>'delete'
           AND rb.language = ANY($2)
-          AND s.status IN ('pending', 'confirmed') AND rt.name IN ('Commentary', 'Tracking')
+          AND s.pair_id IS NULL AND s.status IN ('pending', 'confirmed') AND rt.name IN ('Commentary', 'Tracking')
         ORDER BY s.created_at, s.id
     "#,
     )
@@ -1315,13 +1343,15 @@ async fn poll_export(
             })
             .collect_vec();
         let mut transaction = pool.begin().await?;
+        event::roles::pairs::lock(&mut transaction).await?;
+        let mut affected_pairs = Vec::new();
         for (role_type_name, volunteer, language) in approved {
             let discord_id = volunteer.discord_id.parse::<i64>().ok();
             let confirmed = sqlx::query!(r#"
                 UPDATE signups s SET status = 'confirmed', updated_at = NOW()
                 FROM role_bindings rb, role_types rt, users u
                 WHERE s.race_id = $1 AND s.role_binding_id = rb.id AND rb.role_type_id = rt.id
-                  AND s.user_id = u.id AND s.status = 'pending' AND rb.language = $2 AND rt.name = $3
+                  AND s.pair_id IS NULL AND s.user_id = u.id AND s.status = 'pending' AND rb.language = $2 AND rt.name = $3
                   AND (($4::BIGINT IS NOT NULL AND u.discord_id = $4)
                        OR LOWER(u.discord_username) = LOWER($5))
                 RETURNING s.id AS "signup_id: Id<Signups>", s.user_id AS "user_id: crate::id::Id<crate::id::Users>"
@@ -1329,12 +1359,14 @@ async fn poll_export(
             .fetch_all(&mut *transaction)
             .await?;
             for signup in confirmed {
-                Signup::auto_reject_overlapping_signups(
-                    &mut transaction,
-                    signup.signup_id,
-                    signup.user_id,
-                )
-                .await?;
+                affected_pairs.extend(
+                    Signup::auto_reject_overlapping_signups(
+                        &mut transaction,
+                        signup.signup_id,
+                        signup.user_id,
+                    )
+                    .await?,
+                );
             }
         }
         let mut race = Race::from_id(&mut transaction, http_client, race_id).await?;
@@ -1389,6 +1421,13 @@ async fn poll_export(
         .execute(&mut *transaction)
         .await?;
         transaction.commit().await?;
+        event::roles::pairs::refresh(
+            pool,
+            http_client,
+            &*discord_ctx.read().await,
+            &affected_pairs,
+        )
+        .await;
         zsr_export::schedule_volunteer_api_call(pool.clone(), http_client.clone(), race_id);
     }
     Ok(())

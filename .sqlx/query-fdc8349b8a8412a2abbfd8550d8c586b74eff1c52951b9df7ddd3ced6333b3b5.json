@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n                        SELECT\n                            rb.id AS \"id: Id<RoleBindings>\",\n                            rb.role_type_id AS \"role_type_id: Id<RoleTypes>\",\n                            rb.min_count,\n                            rb.max_count,\n                            rt.name AS \"role_type_name\",\n                            rb.discord_role_id,\n                            rb.auto_approve,\n                            rb.language AS \"language: Language\",\n                            true AS \"is_game_binding!: bool\",\n                            false AS \"has_event_override!: bool\",\n                            false AS \"is_disabled!: bool\"\n                        FROM role_bindings rb\n                        JOIN role_types rt ON rb.role_type_id = rt.id\n                        WHERE rb.game_id = $1\n                        ORDER BY rb.language, rt.name\n                    ",
+  "query": "\n                        SELECT\n                            rb.id AS \"id: Id<RoleBindings>\",\n                            rb.role_type_id AS \"role_type_id: Id<RoleTypes>\",\n                            rb.min_count,\n                            rb.max_count,\n                            rt.name AS \"role_type_name\",\n                            rb.discord_role_id,\n                            rb.auto_approve, rb.allow_signup_notes, rb.allow_paired_signups,\n                            rb.language AS \"language: Language\",\n                            true AS \"is_game_binding!: bool\",\n                            false AS \"has_event_override!: bool\",\n                            false AS \"is_disabled!: bool\"\n                        FROM role_bindings rb\n                        JOIN role_types rt ON rb.role_type_id = rt.id\n                        WHERE rb.game_id = $1\n                        ORDER BY rb.language, rt.name\n                    ",
   "describe": {
     "columns": [
       {
@@ -40,6 +40,16 @@
       },
       {
         "ordinal": 7,
+        "name": "allow_signup_notes",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 8,
+        "name": "allow_paired_signups",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 9,
         "name": "language: Language",
         "type_info": {
           "Custom": {
@@ -56,17 +66,17 @@
         }
       },
       {
-        "ordinal": 8,
+        "ordinal": 10,
         "name": "is_game_binding!: bool",
         "type_info": "Bool"
       },
       {
-        "ordinal": 9,
+        "ordinal": 11,
         "name": "has_event_override!: bool",
         "type_info": "Bool"
       },
       {
-        "ordinal": 10,
+        "ordinal": 12,
         "name": "is_disabled!: bool",
         "type_info": "Bool"
       }
@@ -85,10 +95,12 @@
       true,
       false,
       false,
+      false,
+      false,
       null,
       null,
       null
     ]
   },
-  "hash": "c98829ffcb4e8bc1678f5512174e41c3d6519d4e830cc7223122ddf0a9f92202"
+  "hash": "fdc8349b8a8412a2abbfd8550d8c586b74eff1c52951b9df7ddd3ced6333b3b5"
 }

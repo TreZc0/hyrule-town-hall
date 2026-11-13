@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT rb.id as \"id: Id<RoleBindings>\", rb.series as \"series: Series\", rb.event, rb.game_id, rb.role_type_id as \"role_type_id: Id<RoleTypes>\", rb.min_count, rb.max_count, rt.name as role_type_name, rb.discord_role_id, rb.auto_approve, rb.language AS \"language: Language\" FROM role_bindings rb JOIN role_types rt ON rb.role_type_id = rt.id WHERE rb.id = $1",
+  "query": "\n                SELECT\n                    rb.id AS \"id: Id<RoleBindings>\",\n                    rb.series AS \"series: Series\",\n                    rb.event,\n                    rb.game_id,\n                    rb.role_type_id AS \"role_type_id: Id<RoleTypes>\",\n                    rb.min_count,\n                    rb.max_count,\n                    rt.name AS \"role_type_name\",\n                    rb.discord_role_id,\n                    rb.auto_approve, rb.allow_signup_notes, rb.allow_paired_signups,\n                    rb.language AS \"language: Language\"\n                FROM role_bindings rb\n                JOIN role_types rt ON rb.role_type_id = rt.id\n                WHERE rb.series = $1 AND rb.event = $2\n                ORDER BY rt.name, rb.language\n            ",
   "describe": {
     "columns": [
       {
@@ -55,6 +55,16 @@
       },
       {
         "ordinal": 10,
+        "name": "allow_signup_notes",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 11,
+        "name": "allow_paired_signups",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 12,
         "name": "language: Language",
         "type_info": {
           "Custom": {
@@ -73,7 +83,8 @@
     ],
     "parameters": {
       "Left": [
-        "Int4"
+        "Text",
+        "Text"
       ]
     },
     "nullable": [
@@ -87,8 +98,10 @@
       false,
       true,
       false,
+      false,
+      false,
       false
     ]
   },
-  "hash": "a98d11298d6e34b6c0a50b9d7e57ad5a1257dd47dd9fe8cbfcd9cbcba5b706f1"
+  "hash": "3ac0b3a237090c752a592c7446b160ebde278804bf042122d48f675aa4376f19"
 }

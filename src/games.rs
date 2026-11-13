@@ -715,6 +715,8 @@ pub(crate) async fn manage_roles(
                             th : "Min Count";
                             th : "Max Count";
                             th : "Auto-approve";
+                            th : "Signup notes";
+                            th : "Paired signups";
                             th : "Discord Role";
                             th : "Actions";
                         }
@@ -736,6 +738,8 @@ pub(crate) async fn manage_roles(
                                         span(style = "color: red;") : "✗ No";
                                     }
                                 }
+                                td(class = "allow-signup-notes", data_value = binding.allow_signup_notes.to_string()) : if binding.allow_signup_notes { "Enabled" } else { "Disabled" };
+                                td(class = "allow-paired-signups", data_value = binding.allow_paired_signups.to_string()) : if binding.allow_paired_signups { "Enabled" } else { "Disabled" };
                                 td(class = "discord-role", data_value = binding.discord_role_id.map(|id| id.to_string()).unwrap_or_default()) {
                                     @if let Some(discord_role_id) = binding.discord_role_id {
                                         : format!("{}", discord_role_id);
@@ -787,6 +791,8 @@ pub(crate) async fn manage_roles(
                     label(for = "max_count") : "Maximum Count:";
                     input(type = "number", name = "max_count", id = "max_count", value = "1", min = "1");
                 });
+                label { input(type = "checkbox", name = "allow_signup_notes", checked); : " Allow race signup notes"; }
+                label { input(type = "checkbox", name = "allow_paired_signups"); : " Allow paired signups"; }
                 : form_field("auto_approve", &mut errors, html! {
                     label(for = "auto_approve") : "Auto-approve:";
                     input(type = "checkbox", name = "auto_approve", id = "auto_approve");
@@ -1397,6 +1403,8 @@ pub(crate) struct AddGameRoleBindingForm {
     #[field(default = String::new())]
     discord_role_id: String,
     language: Language,
+    allow_signup_notes: bool,
+    allow_paired_signups: bool,
 }
 
 #[derive(FromForm, CsrfForm)]
@@ -1432,6 +1440,8 @@ pub(crate) struct EditGameRoleBindingForm {
     #[field(default = String::new())]
     discord_role_id: String,
     auto_approve: bool,
+    allow_signup_notes: bool,
+    allow_paired_signups: bool,
 }
 
 #[rocket::post("/games/<game_name>/role-bindings", data = "<form>")]
@@ -1496,6 +1506,8 @@ pub(crate) async fn add_game_role_binding(
             discord_role_id,
             value.auto_approve,
             value.language,
+            value.allow_signup_notes,
+            value.allow_paired_signups,
         )
         .await
         .map_err(Error::from)?;
@@ -1825,11 +1837,15 @@ pub(crate) async fn edit_game_role_binding(
     me: Option<User>,
     game_name: &str,
     binding_id: Id<RoleBindings>,
-    _csrf: Option<CsrfToken>,
+    csrf: Option<CsrfToken>,
     form: Form<Contextual<'_, EditGameRoleBindingForm>>,
 ) -> Result<Redirect, StatusOrError<Error>> {
     let me = me.ok_or(StatusOrError::Status(Status::Forbidden))?;
-    let form = form.into_inner();
+    let mut form = form.into_inner();
+    form.verify(&csrf);
+    if form.context.errors().next().is_some() {
+        return Err(StatusOrError::Status(Status::BadRequest));
+    }
 
     let value = form
         .value
@@ -1872,8 +1888,8 @@ pub(crate) async fn edit_game_role_binding(
         )
     };
 
-    // Update the role binding
-    sqlx::query!(
+    // Update only the binding in this game before changing signup options.
+    let updated = sqlx::query!(
         r#"UPDATE role_bindings
            SET min_count = $1, max_count = $2, discord_role_id = $3, auto_approve = $4
            WHERE id = $5 AND game_id = $6"#,
@@ -1888,6 +1904,17 @@ pub(crate) async fn edit_game_role_binding(
     .await
     .map_err(Error::from)?;
 
+    if updated.rows_affected() != 1 {
+        return Err(StatusOrError::Status(Status::NotFound));
+    }
+    event::roles::pairs::set_binding_options(
+        &mut transaction,
+        binding_id,
+        value.allow_signup_notes,
+        value.allow_paired_signups,
+    )
+    .await
+    .map_err(Error::from)?;
     transaction.commit().await.map_err(Error::from)?;
 
     // Update volunteer info messages for all events that use this game's role bindings

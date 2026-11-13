@@ -3017,7 +3017,7 @@ async fn copy_event_configuration(
         "INSERT INTO organizers (series, event, organizer) SELECT $1, $2, organizer FROM organizers WHERE series = $3 AND event = $4",
         "INSERT INTO event_volunteer_managers (series, event, user_id) SELECT $1, $2, user_id FROM event_volunteer_managers WHERE series = $3 AND event = $4",
         "INSERT INTO restreamers (series, event, restreamer, language) SELECT $1, $2, restreamer, language FROM restreamers WHERE series = $3 AND event = $4",
-        "INSERT INTO role_bindings (series, event, role_type_id, min_count, max_count, discord_role_id, game_id, auto_approve, language, custom_pool) SELECT $1, $2, role_type_id, min_count, max_count, discord_role_id, NULL, auto_approve, language, custom_pool FROM role_bindings WHERE series = $3 AND event = $4 AND game_id IS NULL",
+        "INSERT INTO role_bindings (series, event, role_type_id, min_count, max_count, discord_role_id, game_id, auto_approve, language, custom_pool, allow_signup_notes, allow_paired_signups) SELECT $1, $2, role_type_id, min_count, max_count, discord_role_id, NULL, auto_approve, language, custom_pool, allow_signup_notes, allow_paired_signups FROM role_bindings WHERE series = $3 AND event = $4 AND game_id IS NULL",
     ] {
         sqlx::query(statement)
             .bind(series.slug())
@@ -3040,9 +3040,9 @@ async fn copy_event_configuration(
                AND new_binding.language = source_binding.language
            WHERE source_row.series = $3 AND source_row.event = $4"#,
         r#"INSERT INTO event_role_binding_overrides
-               (series, event, role_binding_id, discord_role_id, min_count, max_count)
+               (series, event, role_binding_id, discord_role_id, min_count, max_count, allow_signup_notes, allow_paired_signups)
            SELECT $1, $2, CASE WHEN source_binding.game_id IS NULL THEN new_binding.id ELSE source_binding.id END,
-               source_row.discord_role_id, source_row.min_count, source_row.max_count
+               source_row.discord_role_id, source_row.min_count, source_row.max_count, source_row.allow_signup_notes, source_row.allow_paired_signups
            FROM event_role_binding_overrides source_row
            JOIN role_bindings source_binding ON source_binding.id = source_row.role_binding_id
            LEFT JOIN role_bindings new_binding ON source_binding.game_id IS NULL

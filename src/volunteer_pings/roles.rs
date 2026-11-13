@@ -151,6 +151,8 @@ mod tests {
             role_type_name: format!("Role {id}"),
             discord_role_id: Some(100 + id),
             auto_approve: false,
+            allow_signup_notes: true,
+            allow_paired_signups: false,
             is_game_binding,
             has_event_override: is_game_binding,
             is_disabled: false,

@@ -15,6 +15,33 @@ function getCsrf() {
     return el ? el.value : '';
 }
 
+const signupSettings = [
+    ['allow-signup-notes', 'allow_signup_notes', 'Allow race signup notes'],
+    ['allow-paired-signups', 'allow_paired_signups', 'Allow paired signups'],
+];
+
+function editSignupSettings(row, formId) {
+    signupSettings.forEach(([cls, name, label]) => {
+        const cell = row.querySelector(`.${cls}`);
+        if (!cell) return;
+        const input = document.createElement(formId ? 'select' : 'input');
+        input.name = name;
+        input.setAttribute('aria-label', label);
+        if (formId) {
+            input.setAttribute('form', formId);
+            const current = row.getAttribute(`data-override-${cls}`) || '';
+            const inherited = row.getAttribute(`data-inherited-${cls}`) === 'true' ? 'Enabled' : 'Disabled';
+            [['', `Inherit — ${inherited}`], ['true', 'Enabled'], ['false', 'Disabled']].forEach(([value, text]) => {
+                input.add(new Option(text, value, false, current === value));
+            });
+        } else {
+            input.type = 'checkbox';
+            input.checked = cell.dataset.value === 'true';
+        }
+        cell.replaceChildren(input);
+    });
+}
+
 // ── Regular role binding edit ────────────────────────────────────────────────
 
 function startEdit(bindingId) {
@@ -34,6 +61,7 @@ function startEdit(bindingId) {
         `<input type="checkbox" name="auto_approve" ${autoApprove === 'true' ? 'checked' : ''}>`;
     row.querySelector('.discord-role').innerHTML =
         `<input type="text" name="discord_role_id" value="${discordRole}" placeholder="e.g. 123456789012345678" style="width: 220px;">`;
+    editSignupSettings(row);
 
     const actionsDiv = row.querySelector('.actions');
     actionsDiv.innerHTML =
@@ -56,6 +84,10 @@ function cancelEdit(bindingId) {
         ? '<span style="color: green;">✓ Yes</span>'
         : '<span style="color: red;">✗ No</span>';
     row.querySelector('.discord-role').textContent = discordRole || 'None';
+    signupSettings.forEach(([cls]) => {
+        const cell = row.querySelector(`.${cls}`);
+        if (cell) cell.textContent = cell.dataset.value === 'true' ? 'Enabled' : 'Disabled';
+    });
 
     restoreEditActions(row, bindingId);
 }
@@ -88,6 +120,10 @@ function saveEdit(bindingId) {
     formData.append('max_count', maxCount);
     formData.append('auto_approve', autoApprove);
     formData.append('discord_role_id', discordRole);
+    signupSettings.forEach(([, name]) => {
+        const input = row.querySelector(`input[name="${name}"]`);
+        if (input) formData.append(name, input.checked);
+    });
 
     fetch(savePath, { method: 'POST', body: formData })
         .then(response => {
@@ -96,6 +132,10 @@ function saveEdit(bindingId) {
                 row.querySelector('.max-count').setAttribute('data-value', maxCount);
                 row.querySelector('.auto-approve').setAttribute('data-value', autoApprove.toString());
                 row.querySelector('.discord-role').setAttribute('data-value', discordRole);
+                signupSettings.forEach(([cls, name]) => {
+                    const cell = row.querySelector(`.${cls}`);
+                    if (cell) cell.dataset.value = formData.get(name);
+                });
                 cancelEdit(bindingId);
             } else {
                 alert('Failed to save changes. Please try again.');
@@ -111,7 +151,7 @@ function startOverrideEdit(bindingId) {
     if (!row) return;
 
     // Save current cell HTML for cancel restoration
-    const cells = ['min-count', 'max-count', 'discord-role'];
+    const cells = ['min-count', 'max-count', 'discord-role', ...signupSettings.map(([cls]) => cls)];
     cells.forEach(cls => {
         const cell = row.querySelector(`.${cls}`);
         if (cell) cell._savedHtml = cell.innerHTML;
@@ -124,6 +164,7 @@ function startOverrideEdit(bindingId) {
     const overrideMaxCount    = row.getAttribute('data-override-max-count') || '';
     const savePath = row.getAttribute('data-override-save-path');
     const formId = `override-form-${bindingId}`;
+    editSignupSettings(row, formId);
 
     // Inputs live in separate <td>s, so a wrapping <form> won't reach them all;
     // associate them with a hidden <form> elsewhere via the HTML5 form="" attribute
@@ -149,8 +190,9 @@ function validateOverrideForm(formId) {
     const discordRole = form.elements['discord_role_id'].value.trim();
     const minCount    = form.elements['min_count'].value.trim();
     const maxCount    = form.elements['max_count'].value.trim();
-    if (!discordRole && !minCount && !maxCount) {
-        alert('At least one of Discord role ID, minimum count, or maximum count must be provided.');
+    const hasSignupOverride = signupSettings.some(([, name]) => form.elements[name] && form.elements[name].value !== '');
+    if (!discordRole && !minCount && !maxCount && !hasSignupOverride) {
+        alert('Provide at least one override, or use Remove Override to inherit all game settings.');
         return false;
     }
     return true;
@@ -160,7 +202,7 @@ function cancelOverrideEdit(bindingId) {
     const row = document.querySelector(`tr[data-binding-id="${bindingId}"]`);
     if (!row) return;
 
-    const cells = ['min-count', 'max-count', 'discord-role'];
+    const cells = ['min-count', 'max-count', 'discord-role', ...signupSettings.map(([cls]) => cls)];
     cells.forEach(cls => {
         const cell = row.querySelector(`.${cls}`);
         if (cell && cell._savedHtml !== undefined) {
