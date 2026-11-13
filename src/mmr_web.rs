@@ -139,6 +139,15 @@ impl Settings {
 pub(crate) enum Purpose {
     Practice,
     Competition,
+    AsyncQualifier,
+}
+
+pub(crate) fn seed_url(id: &str, secret: Option<&str>) -> String {
+    let mut url = format!("https://mmrandomizer.com/seed/get?id={id}");
+    if let Some(secret) = secret {
+        url.push_str(&format!("&seedAuth={secret}"));
+    }
+    url
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -178,7 +187,7 @@ impl ApiClient {
             ("locked".into(), "true".into()),
         ];
         // These are presence flags: encrypt=false would still enable encryption.
-        if purpose == Purpose::Competition {
+        if purpose != Purpose::Practice {
             query.push(("encrypt".into(), "true".into()));
         }
         query
@@ -273,11 +282,24 @@ impl ApiClient {
         updates: &mpsc::Sender<racetime_bot::SeedRollUpdate>,
     ) -> Result<seed::Data, Error> {
         config.validate().map_err(Error::Invalid)?;
+        // Generate once so all retries use the same secret that we persist with the seed.
+        let seed_page_secret: Option<String> = (purpose == Purpose::AsyncQualifier).then(|| {
+            const ALPHABET: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789";
+            let mut rng = rng();
+            (0..9)
+                .map(|_| char::from(ALPHABET[rng.random_range(0..ALPHABET.len())]))
+                .collect()
+        });
+        let mut query = self.create_query(&config, purpose);
+        if let Some(secret) = &seed_page_secret {
+            query.push(("passwordLock".into(), "true".into()));
+            query.push(("seedPageSecret".into(), secret.clone()));
+        }
         let response = self
             .request(
                 Method::POST,
                 "/api/v2/seed/create",
-                &self.create_query(&config, purpose),
+                &query,
                 Some(&config.body()),
             )
             .await?;
@@ -311,7 +333,10 @@ impl ApiClient {
                 }
                 Some(1) => {
                     if let Some(details) = self.json("/api/v2/seed/details", &id).await? {
-                        let data = payload(&id, &details, purpose)?;
+                        let mut data = payload(&id, &details, purpose)?;
+                        if let Some(secret) = &seed_page_secret {
+                            data["seed_page_secret"] = json!(secret);
+                        }
                         return Ok(seed::Data::from_seed_data_only(Some(data), None, false));
                     }
                 }
@@ -428,7 +453,7 @@ fn payload(
         .ok_or_else(|| Error::Invalid("invalid creation timestamp".into()))?;
     Ok(
         json!({"type":"mmr", "id":id, "version":version, "gen_time":timestamp, "hash":hash,
-        "encrypted":purpose == Purpose::Competition, "locked":true}),
+        "encrypted":purpose != Purpose::Practice, "locked":true}),
     )
 }
 
@@ -587,7 +612,7 @@ mod tests {
         assert_eq!(data["hash"][2], "0x61");
         assert!(!data.to_string().contains("private"));
         assert!(
-            matches!(seed.files(), Some(seed::Files::MmrWeb { id, hash }) if id == "123" && hash.len() == 5)
+            matches!(seed.files(), Some(seed::Files::MmrWeb { id, hash, .. }) if id == "123" && hash.len() == 5)
         );
     }
 

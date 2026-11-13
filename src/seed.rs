@@ -40,6 +40,7 @@ pub(crate) enum Files {
     MmrWeb {
         id: String,
         hash: Vec<String>,
+        seed_page_secret: Option<String>,
     },
     AlttprDoorRando {
         uuid: Uuid,
@@ -79,7 +80,13 @@ impl Files {
     /// merged in via `Data::to_seed_data()` — this method omits them.
     pub(crate) fn to_seed_data_base(&self) -> serde_json::Value {
         match self {
-            Self::MmrWeb { id, hash } => json!({"type":"mmr", "id":id, "hash":hash}),
+            Self::MmrWeb { id, hash, seed_page_secret } => {
+                let mut data = json!({"type":"mmr", "id":id, "hash":hash});
+                if let Some(secret) = seed_page_secret {
+                    data["seed_page_secret"] = json!(secret);
+                }
+                data
+            }
             Self::AlttprDoorRando { uuid, is_owr } => serde_json::json!({
                 "type": if *is_owr { "alttpr_owr" } else { "alttpr_dr" },
                 "uuid": uuid.to_string(),
@@ -149,7 +156,17 @@ impl Files {
                 let id = value.get("id")?.as_str()?.to_owned();
                 let hash: Vec<String> = serde_json::from_value(value.get("hash")?.clone()).ok()?;
                 if id.is_empty() || id.len() > 128 || !id.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_')) || hash.is_empty() || hash.iter().any(|s| s.trim().is_empty()) { return None; }
-                Some(Self::MmrWeb { id, hash })
+                let seed_page_secret = match value.get("seed_page_secret") {
+                    None | Some(serde_json::Value::Null) => None,
+                    Some(secret) => {
+                        let secret = secret.as_str()?;
+                        if secret.len() != 9 || !secret.bytes().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit()) {
+                            return None;
+                        }
+                        Some(secret.to_owned())
+                    }
+                };
+                Some(Self::MmrWeb { id, hash, seed_page_secret })
             },
             "alttpr_dr" => {
                 let uuid = value

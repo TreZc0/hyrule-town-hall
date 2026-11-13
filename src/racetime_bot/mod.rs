@@ -761,7 +761,7 @@ impl GlobalState {
         };
         let fail = |message: String| alttpr_dr_error_receiver(RollError::AlttprDe(message));
         match event.seed_gen_type.as_ref() {
-            Some(SeedGenType::Mmr { config }) => self.roll_mmr_seed(config.settings.clone(), crate::mmr_web::Purpose::Competition, None, None, unlock, None),
+            Some(SeedGenType::Mmr { config }) => self.roll_mmr_seed(config.settings.clone(), crate::mmr_web::Purpose::AsyncQualifier, None, None, unlock, None),
             Some(SeedGenType::TWWR { permalink }) => self.roll_twwr_seed(event.rando_version.clone(), permalink.clone(), unlock),
             Some(SeedGenType::AlttprAvianart { default_preset, .. }) => {
                 match event.single_settings.as_ref().and_then(|settings| settings.get("preset")).and_then(|preset| preset.as_str()).map(str::to_owned).or_else(|| default_preset.clone()) {
@@ -2111,7 +2111,7 @@ pub(crate) fn start_practice_seed_roll(
             match updates.recv().await {
                 Some(SeedRollUpdate::Done { seed, .. }) => {
                     break match seed.files() {
-                        Some(seed::Files::MmrWeb { id, hash }) => event::PracticeSeedStatus::Done(event::PracticeSeedResult::SeedLink { url: format!("https://mmrandomizer.com/seed/get?id={id}"), label: "Open Seed on MM Randomizer".into(), seed_hash: Some(hash) }),
+                        Some(seed::Files::MmrWeb { id, hash, .. }) => event::PracticeSeedStatus::Done(event::PracticeSeedResult::SeedLink { url: format!("https://mmrandomizer.com/seed/get?id={id}"), label: "Open Seed on MM Randomizer".into(), seed_hash: Some(hash) }),
                         Some(seed::Files::AvianartSeed {
                             ref hash,
                             ref seed_hash,
@@ -5838,7 +5838,7 @@ impl Handler {
                 return false;
             }
             let Ok(updates) =
-                event::pooled_qualifiers::generation::roll(Arc::clone(&ctx.global_state), &kind)
+                event::pooled_qualifiers::generation::roll(Arc::clone(&ctx.global_state), &kind, false)
             else {
                 return false;
             };

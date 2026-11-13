@@ -29,12 +29,20 @@ pub(crate) fn supported(kind: &SeedGenType) -> bool {
 pub(crate) fn roll(
     state: Arc<GlobalState>,
     kind: &SeedGenType,
+    async_qualifier: bool,
 ) -> Result<mpsc::Receiver<SeedRollUpdate>, Error> {
     if !supported(kind) {
         return Err(Error::ModeUnavailable);
     }
     Ok(match kind {
-        SeedGenType::Mmr { config } => state.roll_mmr_seed(config.settings.clone(), crate::mmr_web::Purpose::Competition, None, None, UnlockSpoilerLog::Never, None),
+        SeedGenType::Mmr { config } => {
+            let purpose = if async_qualifier {
+                crate::mmr_web::Purpose::AsyncQualifier
+            } else {
+                crate::mmr_web::Purpose::Competition
+            };
+            state.roll_mmr_seed(config.settings.clone(), purpose, None, None, UnlockSpoilerLog::Never, None)
+        }
         SeedGenType::Owr { config, build } => state.roll_pooled_owr_seed(config.clone(), *build),
         SeedGenType::AlttprDoorRando {
             source: AlttprDrSource::MutualChoices { config },
@@ -197,7 +205,7 @@ async fn generate(
     config: &serde_json::Value,
 ) -> Result<serde_json::Value, Error> {
     let kind = SeedGenType::from_db(Some(name), Some(config)).ok_or(Error::ModeUnavailable)?;
-    let updates = roll(state, &kind)?;
+    let updates = roll(state, &kind, true)?;
     consume(&kind, updates).await
 }
 

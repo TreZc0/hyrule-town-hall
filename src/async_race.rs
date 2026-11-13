@@ -2037,7 +2037,7 @@ pub(crate) async fn handle_ready_qualifier(
 
     if let Some(ref seed_data) = seed.seed_data {
         if seed::Files::from_seed_data(seed_data).is_some() {
-            append_seed_details(&mut seed_msg, seed_data)?;
+            append_seed_details(&mut seed_msg, seed_data, true)?;
         } else {
             // Preserve historical normal qualifier payloads without a type tag.
             if let Some(hash) = seed_data.get("avianart_hash").and_then(|v| v.as_str()).filter(|value| !value.is_empty()) {
@@ -2109,14 +2109,23 @@ fn bracket_seed_message(seed: &seed::Data, requires_seed: bool) -> Result<Option
 fn seed_message(seed_data: &serde_json::Value) -> Result<MessageBuilder, Error> {
     let mut message = MessageBuilder::default();
     message.push("**Your seed is ready!**\n\n");
-    append_seed_details(&mut message, seed_data)?;
+    append_seed_details(&mut message, seed_data, false)?;
     Ok(message)
 }
 
-fn append_seed_details(message: &mut MessageBuilder, seed_data: &serde_json::Value) -> Result<(), Error> {
+fn qualifier_seed_message(seed_data: &serde_json::Value) -> Result<MessageBuilder, Error> {
+    let mut message = MessageBuilder::default();
+    message.push("**Your seed is ready!**\n\n");
+    append_seed_details(&mut message, seed_data, true)?;
+    Ok(message)
+}
+
+fn append_seed_details(message: &mut MessageBuilder, seed_data: &serde_json::Value, async_qualifier: bool) -> Result<(), Error> {
     match seed::Files::from_seed_data(seed_data).ok_or(Error::NoSeedAvailable)? {
-        seed::Files::MmrWeb { id, hash } => {
-            message.push(format!("Seed URL: https://mmrandomizer.com/seed/get?id={id}\nSeed Hash: {}\n", hash.join(", ")));
+        seed::Files::MmrWeb { id, hash, seed_page_secret } => {
+            let secret = if async_qualifier { seed_page_secret.as_deref() } else { None };
+            let url = crate::mmr_web::seed_url(&id, secret);
+            message.push(format!("Seed URL: {url}\nSeed Hash: {}\n", hash.join(", ")));
         }
         seed::Files::AlttprDoorRando { uuid, is_owr } => {
             let prefix = if is_owr { "OR_" } else { "DR_" };
@@ -2189,7 +2198,7 @@ pub(crate) async fn handle_ready_pooled(
         interaction.channel_id.get() as i64,
     )
     .await?;
-    seed_message(&revealed.data)?;
+    qualifier_seed_message(&revealed.data)?;
     debug_assert_eq!(revealed.next_control_version, control_version + 1);
     pooled::reconcile(pool, &ctx.http, attempt_id).await?;
     Ok(())

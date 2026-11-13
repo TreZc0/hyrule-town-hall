@@ -504,7 +504,7 @@ async fn deliver(pool: &PgPool, http: &Arc<Http>, id: i64, claim: &str) -> Resul
                     }
                 }
             }
-            let mut content = seed_message(&row.seed_data)?.build();
+            let mut content = qualifier_seed_message(&row.seed_data)?.build();
             if let Some(due) = row.start_due_at {
                 content.push_str(&format!(
                     "\nAutomatic countdown: <t:{}:R>.",
