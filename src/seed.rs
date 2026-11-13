@@ -521,9 +521,14 @@ pub(crate) async fn hash_icons(
     } else {
         Vec::new()
     };
+    Ok(render_hash_icons(&icons, hash))
+}
+
+/// Render with a preloaded catalog so lists only fetch the icon set once.
+pub(crate) fn render_hash_icons(icons: &[HashIconData], hash: &[String]) -> RawHtml<String> {
     // Providers differ in spacing and capitalization (e.g. "Bug Net", "Bugnet", "BugNet").
     let normalize = |name: &str| name.split_whitespace().collect::<String>().to_lowercase();
-    Ok(html! {
+    html! {
         @for (index, name) in hash.iter().enumerate() {
             @if index > 0 { : " "; }
             @if let Some(icon) = icons.iter().find(|icon| normalize(&icon.name) == normalize(name)) {
@@ -532,7 +537,7 @@ pub(crate) async fn hash_icons(
                 code : name;
             }
         }
-    })
+    }
 }
 
 pub(crate) async fn table_cell(
@@ -959,6 +964,20 @@ pub(crate) async fn get(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn renders_known_hash_icons_and_preserves_unknown_symbols() {
+        let icons = vec![HashIconData {
+            id: 1, name: "ITEM_BOW".into(), game_id: 1,
+            file_name: "mmr/HashBow.png".into(), racetime_emoji: None,
+        }];
+        let html = render_hash_icons(&icons, &["ITEM_BOW".into(), "future<icon>".into()]).0;
+        assert!(html.contains("/static/hash-icon/mmr/HashBow.png"));
+        assert!(html.contains("alt=\"ITEM_BOW\""));
+        assert!(html.contains("title=\"ITEM_BOW\""));
+        assert!(html.contains("future&lt;icon&gt;"));
+        assert!(!html.contains("future<icon>"));
+    }
 
     fn legacy_load(xkeys_uuid: Option<Uuid>, seed_data: Option<serde_json::Value>) -> Data {
         Data::from_db(

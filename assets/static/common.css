@@ -1988,6 +1988,47 @@ p.error {
 [data-race-field="race_start"] input { min-width: 14rem; }
 .qualifier-pool-actions { margin-bottom: 1.5rem; }
 .qualifier-admin .setting-help pre { white-space: pre; }
+/* Async management: compact rows and forms scoped away from full-page forms. */
+.async-editor .async-create { margin-block: 0.75rem; background: var(--bg-secondary); }
+.qualifier-admin .async-create > form { max-width: 58rem; border: 0; padding: 1rem 0 0; margin: 0; background: transparent; }
+.async-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem 1.5rem; }
+.async-count { max-width: 16rem; }
+.async-batch .async-form-grid { margin-top: 1rem; }
+.async-manual { margin-bottom: 1rem; }
+.async-manual[open] > summary { margin-bottom: 1rem; }
+.qualifier-admin table.async-table { display: table; width: 100%; table-layout: auto; overflow: visible; }
+.async-table th, .async-table td { padding: 0.8rem 1rem; }
+.async-table th { text-align: left; }
+.qualifier-admin .async-table td { vertical-align: middle; }
+.qualifier-admin .async-table td:has(form) { min-width: 0; }
+.async-muted { display: block; margin-top: 0.25rem; color: var(--text-muted); font-size: 0.85rem; }
+.async-status { display: inline-block; justify-self: start; padding: 0.15rem 0.5rem; border-radius: 1rem; background: var(--bg-secondary); color: var(--text-muted); font-size: 0.8rem; }
+.async-ready { color: #93dbc0; background: #16333a; }
+.async-seed-details { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem 0.75rem; margin-top: 0.4rem; }
+.async-hash { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 0.2rem; }
+.async-hash .hash-icon { width: 1.75rem; height: 1.75rem; object-fit: contain; }
+.async-hash code { font-size: 0.75rem; overflow-wrap: anywhere; }
+.async-date { font-size: 0.9rem; }
+.async-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; }
+.qualifier-admin .async-actions form { display: inline-flex; margin: 0; padding: 0; border: 0; background: transparent; }
+.async-actions button, .async-actions .button, .async-more > summary { box-sizing: border-box; margin: 0; padding: 0.45rem 0.65rem; font: inherit; font-size: 0.85rem; line-height: 1.4; white-space: nowrap; }
+.async-more > summary { border: 1px solid var(--border); border-radius: 0.4rem; cursor: pointer; }
+.async-more[open] { flex-basis: 100%; }
+.async-more[open] > summary { width: fit-content; }
+.async-more-items { display: flex; flex-wrap: wrap; gap: 0.4rem; padding-top: 0.4rem; }
+.async-actions .async-delete { color: #ffb4b4; }
+@media (max-width: 1000px) {
+  .qualifier-admin table.async-table, .async-table tbody, .async-table tr { display: block; }
+  .qualifier-admin table.async-table { border: 0; }
+  .async-table thead { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); }
+  .async-table tr { margin-top: 0.75rem; border: 1px solid var(--border); border-radius: 0.4rem; }
+  .qualifier-admin .async-table td { display: grid; grid-template-columns: 7rem minmax(0, 1fr); align-items: start; gap: 0.25rem 0.75rem; border: 0; padding: 0.5rem 0.75rem; }
+  .async-table td::before { content: attr(data-label); grid-column: 1; grid-row: 1; font-size: 0.85rem; color: var(--text-muted); }
+  .async-table td > * { grid-column: 2; }
+}
+@media (max-width: 700px) {
+  .async-form-grid { grid-template-columns: minmax(0, 1fr); gap: 0; }
+}
 @media (max-width: 700px) {
   .qualifier-grid { grid-template-columns: minmax(0, 1fr); }
   .qualifier-admin form, .qualifier-mode-card, .qualifier-pool-card, .qualifier-disclosure { padding: 0.85rem; }
