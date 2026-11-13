@@ -207,6 +207,17 @@ pub(super) async fn editor(
     .fetch_all(&mut **transaction)
     .await?;
 
+    // Results are recorded per player, including forfeits, for both solo and team asyncs.
+    let played_counts: HashMap<i64, i64> = sqlx::query_as::<_, (i64, i64)>(
+        "SELECT async_id, COUNT(*) FROM async_players WHERE series=$1 AND event=$2 GROUP BY async_id",
+    )
+    .bind(event.series)
+    .bind(&*event.event)
+    .fetch_all(&mut **transaction)
+    .await?
+    .into_iter()
+    .collect();
+
     let editing_async = edit_id.and_then(|id| asyncs.iter().find(|row| row.id == id));
     let default_kind = editing_async
         .map(|row| format!("{:?}", row.kind))
@@ -453,6 +464,7 @@ pub(super) async fn editor(
                         tr {
                             th(scope = "col") : "Async";
                             th(scope = "col") : "Seed";
+                            th(scope = "col", title = "Players with a submitted result, including forfeits") : "Played";
                             th(scope = "col") : "Opens (UTC)";
                             th(scope = "col") : "Closes (UTC)";
                             th(scope = "col") : "Actions";
@@ -556,6 +568,7 @@ pub(super) async fn editor(
                                         }
                                     }
                                 }
+                                td(data_label = "Played", title = "Players with a submitted result, including forfeits") : played_counts.get(&row.id).copied().unwrap_or(0);
                                 td(data_label = "Opens (UTC)", class = "async-date") : row.start.map(|dt| dt.format("%d %b %Y, %H:%M").to_string()).unwrap_or_else(|| "Any time".into());
                                 td(data_label = "Closes (UTC)", class = "async-date") : row.end_time.map(|dt| dt.format("%d %b %Y, %H:%M").to_string()).unwrap_or_else(|| "No deadline".into());
                                 td(data_label = "Actions") {
