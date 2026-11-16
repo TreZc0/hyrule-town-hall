@@ -22,6 +22,7 @@ use {
 };
 
 mod scheduling_time;
+pub(crate) mod mmr_hash;
 
 use scheduling_time::{parse_natural_language_timestamp, parse_timestamp, timezone_utc_offset};
 
@@ -2080,6 +2081,13 @@ pub(crate) fn configure_builder(
         .data::<NewRoomLock>(new_room_lock)
         .data::<PendingAsyncVod>(Arc::new(tokio::sync::Mutex::new(HashMap::new())))
         .data::<CleanShutdown>(clean_shutdown)
+        .on_ready(|ctx, _| Box::pin(async move {
+            let pool = ctx.data.read().await.get::<DbPool>().expect("database connection pool missing from Discord context").clone();
+            if let Err(error) = mmr_hash::sync(ctx, &pool).await {
+                log::warn!("Could not initialize MMR hash emojis; using readable names: {error}");
+            }
+            Ok(())
+        }))
         .on_guild_create(false, |ctx, guild, _| Box::pin(async move {
             let mut transaction = ctx.data.read().await.get::<DbPool>().expect("database connection pool missing from Discord context").begin().await?;
             let guild_event_rows = sqlx::query!(r#"SELECT series AS "series: Series", event FROM events WHERE discord_guild = $1 AND (end_time IS NULL OR end_time > NOW())"#, PgSnowflake(guild.id) as _).fetch_all(&mut *transaction).await?;

@@ -107,11 +107,17 @@ fn async_completion_evidence_is_consistent_in_welcome_and_finish_messages() {
 
 #[test]
 fn mmr_async_delivery_uses_remote_seed_and_complete_hash() {
-    let data = serde_json::json!({"type":"mmr", "id":"123", "hash":["ITEM_BOW", "0x61", "future-icon"], "encrypted":true, "locked":true});
+    let data = serde_json::json!({"type":"mmr", "id":"123", "hash":["ITEM_BOW", "0x61", "future-icon"], "seed_page_secret":"test-auth", "encrypted":true, "locked":true});
+    let original = data.clone();
     let text = seed_message(&data).unwrap().build();
     assert!(text.contains("https://mmrandomizer.com/seed/get?id=123"));
-    assert!(text.contains("ITEM_BOW, 0x61, future-icon"));
+    assert!(text.contains("Bow, Bombers Notebook, future-icon"));
     assert!(!text.contains("patcher"));
+    assert!(!text.contains("seedAuth="));
+    let qualifier = qualifier_seed_message(&data).unwrap().build();
+    assert!(qualifier.contains("&seedAuth=test-auth"));
+    assert!(qualifier.contains("Bow, Bombers Notebook, future-icon"));
+    assert_eq!(data, original);
     assert!(seed_message(&serde_json::json!({"type":"mmr", "id":"123", "hash":[]})).is_err());
 }
 

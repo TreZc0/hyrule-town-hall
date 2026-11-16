@@ -2125,7 +2125,7 @@ fn append_seed_details(message: &mut MessageBuilder, seed_data: &serde_json::Val
         seed::Files::MmrWeb { id, hash, seed_page_secret } => {
             let secret = if async_qualifier { seed_page_secret.as_deref() } else { None };
             let url = crate::mmr_web::seed_url(&id, secret);
-            message.push(format!("Seed URL: {url}\nSeed Hash: {}\n", hash.join(", ")));
+            message.push(format!("Seed URL: {url}\nSeed Hash: {}\n", crate::discord_bot::mmr_hash::format(&hash)));
         }
         seed::Files::AlttprDoorRando { uuid, is_owr } => {
             let prefix = if is_owr { "OR_" } else { "DR_" };
