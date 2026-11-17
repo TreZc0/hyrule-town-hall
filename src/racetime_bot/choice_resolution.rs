@@ -296,8 +296,9 @@ pub(crate) async fn read<'e, E>(executor: E, race: Id<Races>) -> sqlx::Result<Op
 where
     E: sqlx::Executor<'e, Database = Postgres>,
 {
+    // A custom mode may be saved before player choices are due to resolve.
     sqlx::query_scalar::<_, Json<Snapshot>>(
-        "SELECT resolved_settings FROM races WHERE id = $1 AND resolved_settings IS NOT NULL",
+        "SELECT resolved_settings FROM races WHERE id = $1 AND resolved_settings ? 'resolved'",
     )
     .bind(i64::from(race))
     .fetch_optional(executor)
@@ -312,6 +313,12 @@ pub(crate) async fn ensure(
     config: &OwrEventConfig,
     stage: Timing,
 ) -> sqlx::Result<Option<Snapshot>> {
+    let selected_config = race.custom_baseline.as_deref()
+        .filter(|_| config.baselines.is_some())
+        .map(|key| config.select(Some(key)))
+        .transpose()
+        .map_err(sqlx::Error::Protocol)?;
+    let config = selected_config.as_ref().unwrap_or(config);
     let (team1, team2, team3) = sqlx::query_as::<_, (Option<i64>, Option<i64>, Option<i64>)>(
         "SELECT team1, team2, team3 FROM races WHERE id = $1 FOR UPDATE",
     )
@@ -388,7 +395,8 @@ pub(crate) async fn ensure(
         timing: config.choice_resolution,
         selected_baseline: config.selected_baseline.clone(),
     };
-    sqlx::query("UPDATE races SET resolved_settings = $2 WHERE id = $1")
+    // Keep the organizer's mode selection when adding the resolved choices.
+    sqlx::query("UPDATE races SET resolved_settings = COALESCE(resolved_settings, '{}'::jsonb) || $2::jsonb WHERE id = $1")
         .bind(i64::from(race.id))
         .bind(Json(&snapshot))
         .execute(&mut **transaction)
@@ -407,7 +415,7 @@ pub(crate) async fn for_seed(
     Ok(snapshot)
 }
 
-const PENDING_ANNOUNCEMENTS: &str = "SELECT r.id, r.resolved_settings, r.scheduling_thread, r.game, (e.automated_asyncs OR r.async_start1 IS NOT NULL) FROM races r JOIN events e ON e.series = r.series AND e.event = r.event WHERE r.resolved_settings IS NOT NULL AND NOT COALESCE((r.resolved_settings->>'announced')::boolean, FALSE) AND r.resolved_settings->>'timing' = 'race_creation' AND r.scheduling_thread IS NOT NULL AND NOT r.ignored FOR UPDATE OF r SKIP LOCKED";
+const PENDING_ANNOUNCEMENTS: &str = "SELECT r.id, r.resolved_settings, r.scheduling_thread, r.game, (e.automated_asyncs OR r.async_start1 IS NOT NULL) FROM races r JOIN events e ON e.series = r.series AND e.event = r.event WHERE r.resolved_settings ? 'resolved' AND NOT COALESCE((r.resolved_settings->>'announced')::boolean, FALSE) AND r.resolved_settings->>'timing' = 'race_creation' AND r.scheduling_thread IS NOT NULL AND NOT r.ignored FOR UPDATE OF r SKIP LOCKED";
 
 /// Only creation-time choices belong in the shared scheduling thread.
 pub(crate) async fn announce_pending(pool: &PgPool, ctx: &DiscordCtx) -> sqlx::Result<()> {

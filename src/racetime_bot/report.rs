@@ -1197,6 +1197,7 @@ async fn report_external_and_init_draft<'a>(
         if let Entrant::MidosHouseTeam(loser) = loser;
         if let Some(draft_kind) = event.draft_kind();
         if let Some(next_game) = race.next_game(&mut transaction, &global_state.http_client).await.to_racetime()?;
+        if next_game.custom_baseline.is_none();
         then {
             let draft = match draft_kind {
                 draft::Kind::PickOnly { .. }

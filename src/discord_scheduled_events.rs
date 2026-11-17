@@ -231,7 +231,7 @@ async fn generate_event_title(
     transaction: &mut Transaction<'_, Postgres>,
     ctx: &DiscordCtx,
 ) -> Result<String, Error> {
-    if let Some(custom_title) = &race.custom_title {
+    if let Some(custom_title) = race.custom_game_title() {
         let mut title = format!("{}: {}", event_config.display_name, custom_title);
         if let Some(companion) = companion {
             title.push_str(" / ");

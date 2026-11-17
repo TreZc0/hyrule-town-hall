@@ -4544,7 +4544,11 @@ fn is_pooled_live_qualifier(cal_event: &cal::Event, event: &event::Data<'_>) -> 
 }
 
 fn room_draft_kind(cal_event: &cal::Event, event: &event::Data<'_>) -> Option<draft::Kind> {
-    if is_pooled_live_qualifier(cal_event, event) { None } else { event.draft_kind() }
+    if is_pooled_live_qualifier(cal_event, event) || cal_event.race.custom_baseline.is_some() {
+        None
+    } else {
+        event.draft_kind()
+    }
 }
 
 fn room_has_seed_configuration(cal_event: &cal::Event, event: &event::Data<'_>) -> bool {
@@ -6491,6 +6495,13 @@ impl RaceHandler<GlobalState> for Handler {
                         welcome_message,
                         welcome_message_allow_ping,
                     ));
+                    if cal_event.race.custom_baseline.is_some() {
+                        if let Some(mode) = cal_event.race.completed_mode(&event) {
+                            pending_sends.push(PendingSend::Say(format!(
+                                "This race will be played in {mode} mode."
+                            )));
+                        }
+                    }
                     // Announce mode for events with round_modes set
                     if matches!(
                         event.seed_gen_type.as_ref(),

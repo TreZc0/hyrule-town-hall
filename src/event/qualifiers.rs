@@ -1349,6 +1349,8 @@ pub(crate) async fn post_race(
                 restream_consent_required: false,
                 custom_title: None,
                 custom_create_room: true,
+                custom_baseline: None,
+                custom_match_id: None,
                 companion_race_id: None,
             };
             if event_data.qualifier_mode == "pooled_by_mode" {
@@ -2395,6 +2397,8 @@ pub(crate) async fn post_seeding_race(
                 restream_consent_required: false,
                 custom_title: None,
                 custom_create_room: true,
+                custom_baseline: None,
+                custom_match_id: None,
                 companion_race_id: None,
             };
             race.save(&mut transaction).await?;

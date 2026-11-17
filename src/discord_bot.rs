@@ -3039,6 +3039,8 @@ pub(crate) fn configure_builder(
                                             restream_consent_required: race.restream_consent_required,
                                             custom_title: race.custom_title,
                                             custom_create_room: race.custom_create_room,
+                                            custom_baseline: race.custom_baseline,
+                                            custom_match_id: race.custom_match_id,
                                             companion_race_id: race.companion_race_id,
                                         };
                                         race.save(&mut transaction).await?;
@@ -3109,7 +3111,7 @@ pub(crate) fn configure_builder(
                                         }
                                         let response_content = response_builder.build();
                                         finish_deferred_public_response(ctx, interaction, response_content, None).await?;
-                                        if reset_draft && event.draft_kind().is_some_and(|k| k.uses_button_draft()) {
+                                        if reset_draft && race.draft.is_some() && event.draft_kind().is_some_and(|k| k.uses_button_draft()) {
                                             if let Some(thread_id) = scheduling_thread {
                                                 thread_id.send_message(ctx, CreateMessage::new()
                                                     .content("Any participant may click **Start Draft** to start the draft.")
@@ -5461,6 +5463,8 @@ pub(crate) fn configure_builder(
                             restream_consent_required: race.restream_consent_required,
                             custom_title: race.custom_title,
                             custom_create_room: race.custom_create_room,
+                            custom_baseline: race.custom_baseline,
+                            custom_match_id: race.custom_match_id,
                             companion_race_id: race.companion_race_id,
                         };
                         race.save(&mut transaction).await
@@ -6064,7 +6068,9 @@ pub(crate) async fn create_scheduling_thread<'a>(
     game_count: i16,
 ) -> Result<Transaction<'a, Postgres>, Error> {
     let event = races[0].event(&mut transaction).await?;
-    racetime_bot::baselines::validate_match(&event, game_count).map_err(sqlx::Error::Protocol)?;
+    if !races[0].is_custom() {
+        racetime_bot::baselines::validate_match(&event, game_count).map_err(sqlx::Error::Protocol)?;
+    }
     // Save every game's decision before publishing the opening message. A Discord failure
     // must not roll back an outcome that players might already have seen.
     for race in races.iter() {
@@ -6075,7 +6081,17 @@ pub(crate) async fn create_scheduling_thread<'a>(
     transaction = pool.begin().await?;
     let mut choice_summaries = Vec::new();
     for race in races.iter() {
-        if let Some(snapshot) = racetime_bot::choice_resolution::read(&mut *transaction, race.id).await?
+        if race.is_custom() {
+            let summary = if let Some(generator) = &event.seed_gen_type {
+                generator.scheduling_thread_str(&pool, race, event.round_modes.as_ref(), event.automated_asyncs && race.supports_async(), event.draft_kind_str.is_some()).await
+            } else {
+                None
+            };
+            if let Some(summary) = summary.or_else(|| race.completed_mode(&event).map(|mode| format!("Mode: {mode}"))) {
+                let prefix = race.game.map(|game| format!("Game {game}\n")).unwrap_or_default();
+                choice_summaries.push(format!("{prefix}{summary}"));
+            }
+        } else if let Some(snapshot) = racetime_bot::choice_resolution::read(&mut *transaction, race.id).await?
             .filter(|snapshot| snapshot.visible_at(racetime_bot::choice_resolution::Timing::RaceCreation)) {
             let prefix = race.game.map(|game| format!("Game {game}\n")).unwrap_or_default();
             choice_summaries.push(format!("{prefix}{}", snapshot.display(event.automated_asyncs || matches!(race.schedule, RaceSchedule::Async { .. }))));
@@ -6164,7 +6180,7 @@ pub(crate) async fn create_scheduling_thread<'a>(
     let runner_timezones = runner_timezones_for_race(&mut transaction, ctx, race).await?;
     let mut settings = MessageBuilder::default();
     if !choice_summaries.is_empty() {
-        if let Some(config) = event.seed_gen_type.as_ref().and_then(racetime_bot::choice_resolution::config) {
+        if let Some(config) = event.seed_gen_type.as_ref().and_then(racetime_bot::choice_resolution::config).filter(|_| !race.is_custom()) {
             if let Some(baseline) = config.pending_baseline(race, event.draft_kind_str.is_some()) {
                 settings.push_line(baseline);
             }
@@ -6396,6 +6412,7 @@ pub(crate) async fn create_scheduling_thread<'a>(
     race.scheduling_thread = Some(thread_id);
     if let Some(draft_kind) = event.draft_kind() {
         if matches!(race.entrants, Entrants::Two(_) | Entrants::Three(_))
+            && race.draft.is_some()
             && draft_kind.uses_button_draft()
         {
             thread_id

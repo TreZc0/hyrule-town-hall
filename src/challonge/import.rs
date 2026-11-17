@@ -332,6 +332,8 @@ pub(crate) async fn races_to_import(
                 restream_consent_required: false,
                 custom_title: None,
                 custom_create_room: false,
+                custom_baseline: None,
+                custom_match_id: None,
                 companion_race_id: None,
             });
         }

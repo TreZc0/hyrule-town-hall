@@ -25,6 +25,90 @@ fn draft_config() -> serde_json::Value {
     json!({"label": "mode", "options": [{"display_name": "Mode A", "preset": "a"}, {"display_name": "Mode B", "preset": "b"}, {"display_name": "Mode C", "preset": "c"}], "order": [{"phase": "pick", "team": "high_seed"}, {"phase": "pick", "team": "low_seed"}]})
 }
 
+#[tokio::test]
+#[ignore = "requires HTH_TEST_DATABASE_URL pointing to a migrated *_test database"]
+async fn database_custom_mode_survives_reload_and_bypasses_the_event_draft() {
+    let pool = configuration::test_pool().await;
+    let mut tx = pool.begin().await.unwrap();
+    let client = reqwest::Client::new();
+    let slug = format!("mode-{}", &Uuid::new_v4().simple().to_string()[..12]);
+    sqlx::query("INSERT INTO events (series, event, display_name, team_config, draft_kind, draft_config) VALUES ('alttprmain', $1, 'Custom mode test', 'solo', 'ban_pick', $2)")
+        .bind(&slug).bind(draft_config()).execute(&mut *tx).await.unwrap();
+    let mut teams = Vec::new();
+    for _ in 0..3 {
+        let id = Id::<Teams>::new(&mut tx).await.unwrap();
+        sqlx::query("INSERT INTO teams (id, series, event, custom_choices) VALUES ($1, 'alttprmain', $2, $3)")
+            .bind(i64::from(id)).bind(&slug).bind(json!({"option": "always", "delay": "never"}))
+            .execute(&mut *tx).await.unwrap();
+        teams.push(Team::from_id(&mut tx, id).await.unwrap().unwrap());
+    }
+    for generator in ["owr", "owr_tourney", "alttpr_dr", "alttpr_dr_latest"] {
+        let mut value = fixture();
+        value["default_baseline"] = json!("a");
+        value["choice_resolution"] = json!(if generator.ends_with("tourney") || generator.ends_with("latest") { "seed_rolling" } else { "race_creation" });
+        value["choices"]["option"]["baselines"] = json!(["a", "c"]);
+        if generator.starts_with("alttpr_dr") {
+            value["source"] = json!("mutual_choices");
+        }
+        sqlx::query("UPDATE events SET seed_gen_type = $1, seed_config = $2 WHERE series = 'alttprmain' AND event = $3")
+            .bind(generator).bind(&value).bind(&slug).execute(&mut *tx).await.unwrap();
+        let event = event::Data::new(&mut tx, Series::AlttprMain, slug.as_str()).await.unwrap().unwrap();
+        let config = racetime_bot::choice_resolution::config(event.seed_gen_type.as_ref().unwrap()).unwrap();
+        assert!(event.draft_kind().is_some());
+        for (key, entrants) in [("a", 0), ("b", 2), ("c", 3)] {
+            let id = Id::<Races>::new(&mut tx).await.unwrap();
+            sqlx::query("INSERT INTO races (id, series, event) VALUES ($1, 'alttprmain', $2)")
+                .bind(i64::from(id)).bind(&slug).execute(&mut *tx).await.unwrap();
+            let mut race = Race::from_id(&mut tx, &client, id).await.unwrap();
+            race.custom_title = Some("BO1 tiebreaker".into());
+            race.custom_baseline = Some(key.into());
+            if entrants > 0 {
+                race.entrants = Entrants::Many(teams[..entrants].to_vec());
+            }
+            race.save(&mut tx).await.unwrap();
+            let mut race = Race::from_id(&mut tx, &client, id).await.unwrap();
+            assert_eq!(race.custom_baseline.as_deref(), Some(key));
+            assert_eq!(race.game, None);
+            assert!(race.draft.is_none());
+            let label = value["baselines"][key]["label"].as_str().unwrap();
+            assert_eq!(race.completed_mode(&event).as_deref(), Some(label));
+            assert_eq!(config.pending_baseline(&race, true), Some(format!("Baseline: {label}")));
+            assert_eq!(config.for_display(&race, true).selected_baseline.unwrap().0, key);
+            let cal_event = cal::Event { race: race.clone(), kind: cal::EventKind::Normal };
+            assert!(racetime_bot::room_draft_kind(&cal_event, &event).is_none());
+            assert!(racetime_bot::room_has_seed_configuration(&cal_event, &event));
+            let selected = config.for_race(&race, &event).await.unwrap();
+            assert_eq!(selected.base_settings, value["baselines"][key]["base_settings"]);
+            assert_eq!(selected.choices.get("option").is_some(), key != "b");
+            let initial_snapshot = racetime_bot::choice_resolution::read(&mut *tx, id).await.unwrap();
+            assert_eq!(initial_snapshot.is_some(), entrants > 0 && config.choice_resolution == racetime_bot::choice_resolution::Timing::RaceCreation);
+            let snapshot = racetime_bot::choice_resolution::ensure(&mut tx, &race, &selected, racetime_bot::choice_resolution::Timing::SeedRolling).await.unwrap();
+            if entrants > 0 {
+                let snapshot = snapshot.unwrap();
+                assert!(snapshot.display(false).contains(&format!("Baseline: {label}")));
+            } else {
+                assert!(snapshot.is_none());
+            }
+            let saved_mode: String = sqlx::query_scalar("SELECT resolved_settings->>'custom_baseline' FROM races WHERE id = $1")
+                .bind(i64::from(id)).fetch_one(&mut *tx).await.unwrap();
+            assert_eq!(saved_mode, key);
+            // A reschedule or seed retry keeps the explicit selection.
+            race.schedule = RaceSchedule::Live { start: Utc::now() + TimeDelta::hours(1), end: None, room: None };
+            race.save(&mut tx).await.unwrap();
+            let reloaded = Race::from_id(&mut tx, &client, id).await.unwrap();
+            let reroll = config.for_race(&reloaded, &event).await.unwrap();
+            assert_eq!(reroll.selected_baseline, selected.selected_baseline);
+            assert_eq!(reroll.base_settings, selected.base_settings);
+            // A deleted mode must fail rather than silently using the event default.
+            race.custom_baseline = Some("deleted".into());
+            assert!(config.for_race(&race, &event).await.is_err());
+            race.custom_baseline = None;
+            assert!(config.for_race(&race, &event).await.is_err());
+        }
+    }
+    tx.rollback().await.unwrap();
+}
+
 #[test]
 fn scoped_choices_validate_references_and_keep_shared_choices() {
     let mut value = fixture();

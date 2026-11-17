@@ -57,6 +57,9 @@ fn same_match(a: &Race, b: &Race) -> bool {
     if a.series != b.series || a.event != b.event {
         return false;
     }
+    if a.custom_match_id.is_some() || b.custom_match_id.is_some() {
+        return a.custom_match_id == b.custom_match_id;
+    }
     match (&a.source, &b.source) {
         (Source::StartGG { event: ae, set: a }, Source::StartGG { event: be, set: b }) => {
             ae == be && a == b
@@ -316,14 +319,7 @@ pub(crate) async fn race_detail(
     } else {
         None
     };
-    let preset = race.draft.as_ref().and_then(|draft| {
-        let preset = draft
-            .settings
-            .get(&*format!("game{}_preset", race.game.unwrap_or(1)))?;
-        data.draft_kind()?
-            .preset_display_name(preset.as_ref())
-            .map(str::to_owned)
-    });
+    let preset = race.selected_mode(&data);
     let drafted_settings = if data.single_settings.is_none() && race.draft.is_some() {
         race.single_settings(&mut transaction).await?
     } else {
@@ -470,10 +466,10 @@ pub(crate) async fn race_detail(
                     }
                 }
             }
-            @if settings.is_some() || race.draft.is_some() || data.single_settings.is_some() {
+            @if preset.is_some() || settings.is_some() || race.draft.is_some() || data.single_settings.is_some() {
                 section(class = "race-detail-section") {
                     h2 : "Settings";
-                    @if let Some(preset) = &preset { p { strong : "Drafted preset: "; : preset; } }
+                    @if let Some(preset) = &preset { p { strong : if race.custom_baseline.is_some() { "Mode: " } else { "Drafted preset: " }; : preset; } }
                     @if let Some(settings) = &settings { p(class = "race-settings-summary") : settings; }
                     @if let Some(settings) = &drafted_settings {
                         details {

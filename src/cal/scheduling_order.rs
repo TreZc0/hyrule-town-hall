@@ -64,8 +64,12 @@ impl Race {
                 END AS last_start
             FROM races sibling JOIN races current ON current.id = $1
             WHERE NOT sibling.ignored AND sibling.game IS NOT NULL
+                AND (current.custom_title IS NOT NULL OR sibling.custom_title IS NULL)
                 AND sibling.series = current.series AND sibling.event = current.event
                 AND CASE
+                    WHEN current.resolved_settings->>'custom_match_id' IS NOT NULL
+                        THEN sibling.resolved_settings->>'custom_match_id' = current.resolved_settings->>'custom_match_id'
+                    WHEN current.custom_title IS NOT NULL THEN sibling.id = current.id
                     WHEN current.startgg_set IS NOT NULL THEN sibling.startgg_set = current.startgg_set
                     WHEN current.challonge_match IS NOT NULL THEN sibling.challonge_match = current.challonge_match
                     WHEN current.scheduling_thread IS NOT NULL THEN sibling.scheduling_thread = current.scheduling_thread

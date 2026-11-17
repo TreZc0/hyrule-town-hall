@@ -51,8 +51,16 @@ pub(crate) async fn format_draft_step(
         {
             if config.baselines.is_some() {
                 let games = race.game_count(transaction).await?;
-                if let Some(summary) = race
-                    .draft
+                let mut state = race.draft.clone();
+                if let (Some(match_id), Some(state)) = (race.custom_match_id, state.as_mut()) {
+                    let overrides: Vec<(Option<i16>, String)> = sqlx::query_as("SELECT game, resolved_settings->>'custom_baseline' FROM races WHERE NOT ignored AND series = $1 AND event = $2 AND resolved_settings->>'custom_match_id' = $3 AND resolved_settings->>'custom_baseline' IS NOT NULL")
+                        .bind(race.series.slug()).bind(&race.event).bind(match_id.to_string())
+                        .fetch_all(&mut **transaction).await?;
+                    for (game, key) in overrides {
+                        state.settings.insert(format!("game{}_preset", game.unwrap_or(1)).into(), key.into());
+                    }
+                }
+                if let Some(summary) = state
                     .as_ref()
                     .and_then(|state| config.draft_summary(state, games))
                 {
@@ -343,6 +351,12 @@ impl OwrEventConfig {
         race: &Race,
         event: &event::Data<'_>,
     ) -> Result<Self, String> {
+        if let Some(key) = &race.custom_baseline {
+            if !race.is_custom() || self.baselines.is_none() {
+                return Err("This race's selected mode is no longer configured for this event.".into());
+            }
+            return self.select(Some(key));
+        }
         if self.baselines.is_some() && event.draft_kind_str.is_some() && event.round_modes.is_some()
         {
             return Err("Remove round_modes to use a named-baseline draft.".into());
@@ -366,6 +380,9 @@ impl OwrEventConfig {
     }
 
     fn pending_baseline_key<'a>(&'a self, race: &'a Race, draft_required: bool) -> Option<&'a str> {
+        if let Some(key) = &race.custom_baseline {
+            return Some(key);
+        }
         let key = match &race.draft {
             Some(state) => state
                 .settings

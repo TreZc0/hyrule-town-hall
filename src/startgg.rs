@@ -668,6 +668,8 @@ pub(crate) async fn races_to_import(
             round,
             custom_title: None,
             custom_create_room: true,
+            custom_baseline: None,
+            custom_match_id: None,
             companion_race_id: None,
         });
         Ok(None)

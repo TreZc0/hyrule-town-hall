@@ -31,6 +31,8 @@ use {
 mod room_opening_tests;
 #[cfg(test)]
 mod async_visibility_tests;
+#[cfg(test)]
+mod custom_mode_tests;
 pub(crate) mod detail;
 mod scheduling_order;
 
@@ -834,14 +836,37 @@ pub(crate) struct Race {
     pub(crate) restream_consent_required: bool,
     pub(crate) custom_title: Option<String>,
     pub(crate) custom_create_room: bool,
+    /// Organizer-selected mode, stored in resolved_settings independently of draft progress.
+    pub(crate) custom_baseline: Option<String>,
+    /// Groups manually created games even before a Discord thread exists.
+    pub(crate) custom_match_id: Option<Uuid>,
     pub(crate) companion_race_id: Option<Id<Races>>,
 }
 
 impl Race {
     pub(crate) fn completed_mode(&self, event: &event::Data<'_>) -> Option<String> {
+        if self.custom_baseline.is_some() {
+            return self.selected_mode(event);
+        }
         event
             .draft_kind()?
             .completed_mode(self.draft.as_ref()?, self.game)
+    }
+
+    /// The race pages can show an assigned game before the rest of its draft is finished.
+    fn selected_mode(&self, event: &event::Data<'_>) -> Option<String> {
+        if let Some(key) = &self.custom_baseline {
+            return Some(
+                event.seed_gen_type.as_ref()
+                    .and_then(racetime_bot::choice_resolution::config)
+                    .and_then(|config| config.baselines.as_ref())
+                    .and_then(|baselines| baselines.get(key))
+                    .map_or_else(|| key.clone(), |baseline| baseline.label.clone()),
+            );
+        }
+        let preset = self.draft.as_ref()?.settings
+            .get(format!("game{}_preset", self.game.unwrap_or(1)).as_str())?;
+        event.draft_kind()?.preset_display_name(preset.as_ref()).map(str::to_owned)
     }
 
     pub(crate) fn supports_async(&self) -> bool {
@@ -853,9 +878,15 @@ impl Race {
     }
 
     pub(crate) fn custom_title_with_event(&self, event_display_name: &str) -> Option<String> {
-        self.custom_title
-            .as_ref()
+        self.custom_game_title()
             .map(|custom_title| format!("{event_display_name}: {custom_title}"))
+    }
+
+    pub(crate) fn custom_game_title(&self) -> Option<String> {
+        self.custom_title.as_ref().map(|title| match self.game {
+            Some(game) => format!("{title} (Game {game})"),
+            None => title.clone(),
+        })
     }
 
     pub(crate) async fn seeding_race_label(
@@ -912,8 +943,8 @@ impl Race {
         transaction: &mut Transaction<'_, Postgres>,
         discord_ctx: &DiscordCtx,
     ) -> Result<String, discord_bot::Error> {
-        if let Some(custom_title) = &self.custom_title {
-            return Ok(custom_title.clone());
+        if let Some(custom_title) = self.custom_game_title() {
+            return Ok(custom_title);
         }
         let mut label = String::new();
         if let Some(ref phase) = self.phase {
@@ -1211,6 +1242,9 @@ impl Race {
         if seed.file_hash.is_none() {
             seed.file_hash = legacy_file_hash;
         }
+        let custom_settings: (Option<String>, Option<Uuid>) = sqlx::query_as(
+            "SELECT resolved_settings->>'custom_baseline', (resolved_settings->>'custom_match_id')::uuid FROM races WHERE id = $1",
+        ).bind(i64::from(id)).fetch_one(&mut **transaction).await?;
 
         Ok(Self {
             series: row.series,
@@ -1282,6 +1316,8 @@ impl Race {
             restream_consent_required: row.restream_consent_required,
             custom_title: row.custom_title,
             custom_create_room: row.custom_create_room,
+            custom_baseline: custom_settings.0,
+            custom_match_id: custom_settings.1,
             companion_race_id: row.companion_race_id,
             id,
             source,
@@ -1407,6 +1443,14 @@ impl Race {
         &self,
         transaction: &mut Transaction<'_, Postgres>,
     ) -> Result<i16, Error> {
+        if let Some(match_id) = self.custom_match_id {
+            return Ok(sqlx::query_scalar("SELECT COALESCE(MAX(game), 1)::smallint FROM races WHERE NOT ignored AND series = $1 AND event = $2 AND resolved_settings->>'custom_match_id' = $3")
+                .bind(self.series.slug()).bind(&self.event).bind(match_id.to_string())
+                .fetch_one(&mut **transaction).await?);
+        }
+        if self.is_custom() {
+            return Ok(1);
+        }
         let (
             [team1, team2, team3],
             [p1, p2, p3],
@@ -1418,6 +1462,7 @@ impl Race {
         Ok(sqlx::query_scalar!(
             r#"SELECT game AS "game!" FROM races WHERE
             NOT ignored
+            AND custom_title IS NULL
             AND series = $1
             AND event = $2
             AND phase IS NOT DISTINCT FROM $3
@@ -1468,11 +1513,24 @@ impl Race {
         transaction: &mut Transaction<'_, Postgres>,
         http_client: &reqwest::Client,
     ) -> Result<Option<Self>, Error> {
+        if self.is_custom() {
+            let (Some(match_id), Some(game)) = (self.custom_match_id, self.game) else {
+                return Ok(None);
+            };
+            let id: Option<i64> = sqlx::query_scalar("SELECT id FROM races WHERE NOT ignored AND series = $1 AND event = $2 AND resolved_settings->>'custom_match_id' = $3 AND game = $4")
+                .bind(self.series.slug()).bind(&self.event).bind(match_id.to_string()).bind(game + 1)
+                .fetch_optional(&mut **transaction).await?;
+            return match id {
+                Some(id) => Ok(Some(Self::from_id(transaction, http_client, id.into()).await?)),
+                None => Ok(None),
+            };
+        }
         Ok(if_chain! {
             if let Some(game) = self.game;
             let ([team1, team2, team3], [p1, p2, p3], [p1_discord, p2_discord], [p1_racetime, p2_racetime], [p1_twitch, p2_twitch], [total, finished]) = self.entrants.to_db();
             if let Some(id) = sqlx::query_scalar!(r#"SELECT id AS "id: Id<Races>" FROM races WHERE
                 NOT ignored
+                AND custom_title IS NULL
                 AND series = $1
                 AND event = $2
                 AND phase IS NOT DISTINCT FROM $3
@@ -1526,6 +1584,15 @@ impl Race {
         transaction: &mut Transaction<'_, Postgres>,
         draft: &Draft,
     ) -> Result<(), Error> {
+        if let Some(match_id) = self.custom_match_id {
+            sqlx::query("UPDATE races SET draft_state = $1 WHERE NOT ignored AND series = $2 AND event = $3 AND resolved_settings->>'custom_match_id' = $4")
+                .bind(Json(draft)).bind(self.series.slug()).bind(&self.event).bind(match_id.to_string())
+                .execute(&mut **transaction).await?;
+            return Ok(());
+        }
+        if self.is_custom() {
+            return Ok(());
+        }
         if let Some(game) = self.game {
             let (
                 [team1, team2, team3],
@@ -1538,6 +1605,7 @@ impl Race {
             sqlx::query!(
                 r#"UPDATE races SET draft_state = $1 WHERE
                 NOT ignored
+                AND custom_title IS NULL
                 AND series = $2
                 AND event = $3
                 AND phase IS NOT DISTINCT FROM $4
@@ -1589,6 +1657,15 @@ impl Race {
         &self,
         transaction: &mut Transaction<'_, Postgres>,
     ) -> Result<Vec<Id<Races>>, Error> {
+        if self.is_custom() {
+            let (Some(match_id), Some(game)) = (self.custom_match_id, self.game) else {
+                return Ok(Vec::new());
+            };
+            let ids: Vec<i64> = sqlx::query_scalar("UPDATE races SET ignored = true WHERE NOT ignored AND series = $1 AND event = $2 AND resolved_settings->>'custom_match_id' = $3 AND game > $4 RETURNING id")
+                .bind(self.series.slug()).bind(&self.event).bind(match_id.to_string()).bind(game)
+                .fetch_all(&mut **transaction).await?;
+            return Ok(ids.into_iter().map(Id::from).collect());
+        }
         if let Some(game) = self.game {
             let (
                 [team1, team2, team3],
@@ -1601,6 +1678,7 @@ impl Race {
             let ids = sqlx::query_scalar!(
                 r#"UPDATE races SET ignored = true WHERE
                 NOT ignored
+                AND custom_title IS NULL
                 AND series = $1
                 AND event = $2
                 AND phase IS NOT DISTINCT FROM $3
@@ -2345,7 +2423,15 @@ impl Race {
             .bind(i64::from(self.id))
             .execute(&mut **transaction)
             .await?;
-        sqlx::query!("UPDATE races SET custom_title = $1, custom_create_room = $2, companion_race_id = $3 WHERE id = $4", self.custom_title.as_deref(), self.custom_create_room, self.companion_race_id.map(i64::from), self.id as _)
+        sqlx::query("UPDATE races SET custom_title = $1, custom_create_room = $2, companion_race_id = $3, resolved_settings = CASE WHEN $5::jsonb = '{}'::jsonb THEN resolved_settings - 'custom_baseline' - 'custom_match_id' ELSE (COALESCE(resolved_settings, '{}'::jsonb) - 'custom_baseline' - 'custom_match_id') || $5::jsonb END WHERE id = $4")
+            .bind(self.custom_title.as_deref())
+            .bind(self.custom_create_room)
+            .bind(self.companion_race_id.map(i64::from))
+            .bind(i64::from(self.id))
+            .bind(serde_json::Value::Object([
+                self.custom_baseline.as_ref().map(|key| ("custom_baseline".into(), json!(key))),
+                self.custom_match_id.map(|id| ("custom_match_id".into(), json!(id))),
+            ].into_iter().flatten().collect()))
             .execute(&mut **transaction)
             .await?;
         if let Entrants::Many(ref teams) = self.entrants {
@@ -2381,8 +2467,8 @@ impl Race {
         &self,
         transaction: &mut Transaction<'_, Postgres>,
     ) -> sqlx::Result<String> {
-        if let Some(custom_title) = &self.custom_title {
-            return Ok(custom_title.clone());
+        if let Some(custom_title) = self.custom_game_title() {
+            return Ok(custom_title);
         }
         if self.is_qualifier || self.phase.as_deref() == Some("Seeding") {
             return Ok(match (&self.round, &self.phase) {
@@ -3342,6 +3428,78 @@ pub(crate) async fn for_event(
     Ok(Response(cal))
 }
 
+fn validate_custom_baseline(
+    config: Option<&racetime_bot::seed_gen_type::OwrEventConfig>,
+    is_custom: bool,
+    key: &str,
+) -> Result<Option<String>, String> {
+    if !is_custom {
+        return if key.is_empty() {
+            Ok(None)
+        } else {
+            Err("A fixed mode can only be selected for a custom race.".into())
+        };
+    }
+    if key.is_empty() {
+        return Ok(None);
+    }
+    match config.and_then(|config| config.baselines.as_ref()) {
+        Some(baselines) if baselines.contains_key(key) => Ok(Some(key.to_owned())),
+        _ if !key.is_empty() => Err("Choose one of this event's configured modes.".into()),
+        _ => Ok(None),
+    }
+}
+
+fn validate_custom_modes(
+    config: Option<&racetime_bot::seed_gen_type::OwrEventConfig>,
+    is_custom: bool,
+    games: i16,
+    keys: &[String],
+) -> Result<Vec<Option<String>>, String> {
+    if !is_custom {
+        return if keys.is_empty() { Ok(Vec::new()) } else {
+            Err("Fixed modes can only be selected for a custom race.".into())
+        };
+    }
+    if !(1..=255).contains(&games) {
+        return Err("Choose between 1 and 255 games.".into());
+    }
+    if config.is_some_and(|config| config.baselines.is_some()) {
+        if keys.len() > games as usize {
+            return Err("More mode selections were supplied than games in this match.".into());
+        }
+        (0..games as usize).map(|index| {
+            validate_custom_baseline(config, true, keys.get(index).map_or("", String::as_str))
+                .map_err(|error| format!("Game {}: {error}", index + 1))
+        }).collect()
+    } else if keys.is_empty() {
+        Ok(vec![None; games as usize])
+    } else {
+        Err("This event does not have selectable modes.".into())
+    }
+}
+
+async fn custom_match_games(
+    transaction: &mut Transaction<'_, Postgres>,
+    template: Race,
+    modes: Vec<Option<String>>,
+) -> sqlx::Result<Vec<Race>> {
+    let count = modes.len();
+    let match_id = Uuid::new_v4();
+    let mut races = Vec::with_capacity(count);
+    for (index, mode) in modes.into_iter().enumerate() {
+        let mut race = template.clone();
+        if index > 0 {
+            race.id = Id::<Races>::new(transaction).await?;
+        }
+        race.game = (count > 1).then_some(index as i16 + 1);
+        race.custom_baseline = mode;
+        race.custom_match_id = Some(match_id);
+        races.push(race);
+    }
+    Ok(races)
+}
+
 pub(crate) async fn create_race_form(
     mut transaction: Transaction<'_, Postgres>,
     me: Option<User>,
@@ -3379,6 +3537,9 @@ pub(crate) async fn create_race_form(
         .fetch_all(&mut *transaction)
         .await?;
         let selected_multi_teams = ctx.field_values("multi_teams").collect::<HashSet<_>>();
+        let selected_modes = ctx.field_values("custom_baselines").collect_vec();
+        let mode_count = ctx.field_value("game_count").and_then(|count| count.parse::<usize>().ok())
+            .unwrap_or(event.default_game_count as usize).clamp(1, 255);
         let mut errors = ctx.errors().collect_vec();
         full_form(
             uri!(create_race_post(event.series, &*event.event)),
@@ -3391,6 +3552,24 @@ pub(crate) async fn create_race_form(
                         input(type = "text", name = "custom_title", value? = ctx.field_value("custom_title"));
                         label(class = "help") : "With two or more entrants selected below, this names a schedulable custom match. Otherwise it creates an open custom race and ignores the team fields below.";
                     });
+                    @if let Some(baselines) = event.seed_gen_type.as_ref().and_then(racetime_bot::choice_resolution::config).and_then(|config| config.baselines.as_ref()) {
+                        : form_field("custom_baselines", &mut errors, html! {
+                            div(id = "custom-mode-fields") {
+                                @for game in 1..=mode_count {
+                                    div(class = "custom-mode-field") {
+                                        label(for = format!("custom_baseline_{game}")) : format!("Game {game} mode:");
+                                        select(id = format!("custom_baseline_{game}"), name = "custom_baselines") {
+                                            option(value = "", selected? = selected_modes.get(game - 1).is_none_or(|key| key.is_empty())) : if event.draft_kind().is_some() { "Use event settings (draft)" } else { "Use event settings" };
+                                            @for (key, baseline) in baselines.iter().sorted_by_key(|(key, baseline)| (&baseline.label, *key)) {
+                                                option(value = key, selected? = selected_modes.get(game - 1).copied() == Some(key.as_str())) : &baseline.label;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            label(class = "help") : "Each game uses the event settings by default. You may select a fixed mode for any game; it overrides that game's draft result. The event draft runs normally for the other games. Modes may repeat.";
+                        });
+                    }
                     : form_field("start_date", &mut errors, html! {
                         label(for = "start_date") : "Start date (YYYY-MM-DD HH:MM in your timezone):";
                         input(type = "text", name = "start_date", value? = ctx.field_value("start_date"));
@@ -3417,7 +3596,7 @@ pub(crate) async fn create_race_form(
                                 option(value = id, selected? = selected_multi_teams.contains(id.as_str())) : name;
                             }
                         }
-                        label(class = "help") : "Select two or more entrants. This creates one live-only match with a shared scheduling thread; drafts, async scheduling, and automatic result reporting are disabled.";
+                        label(class = "help") : "Select two or more entrants and choose the number of games below. All games share one scheduling thread. Two entrants use normal match scheduling and drafting; larger matches are live-only and require fixed modes when the event has a draft.";
                     });
                 }
                 : form_field("team1", &mut errors, html! {
@@ -3590,9 +3769,12 @@ pub(crate) struct CreateRaceForm {
     is_qualifier: bool,
     #[field(default = 1, validate = range(1..))]
     qualifier_number: i64,
+    #[field(default = 1, validate = range(1..=255))]
     game_count: i16,
     #[field(default = String::new())]
     custom_title: String,
+    #[field(default = Vec::new())]
+    custom_baselines: Vec<String>,
     #[field(default = String::new())]
     start_date: String,
     #[field(default = String::new())]
@@ -3625,10 +3807,48 @@ pub(crate) async fn create_race_post(
         ));
     }
     Ok(if let Some(ref value) = form.value {
-        if let Err(error) = racetime_bot::baselines::validate_match(&event, value.game_count) {
-            form.context.push_error(form::Error::validation(error).with_name("game_count"));
-        }
         let custom_title = value.custom_title.trim();
+        let is_custom = !custom_title.is_empty() || !value.multi_teams.is_empty();
+        if !is_custom {
+            if let Err(error) = racetime_bot::baselines::validate_match(&event, value.game_count) {
+                form.context.push_error(form::Error::validation(error).with_name("game_count"));
+            }
+        }
+        let custom_baselines = match validate_custom_modes(
+            event.seed_gen_type.as_ref().and_then(racetime_bot::choice_resolution::config),
+            is_custom,
+            if value.multi_teams.is_empty() { 1 } else { value.game_count },
+            &value.custom_baselines,
+        ) {
+            Ok(baseline) => baseline,
+            Err(error) => {
+                form.context.push_error(form::Error::validation(error).with_name("custom_baselines"));
+                Vec::new()
+            }
+        };
+        let inherits_settings = is_custom && custom_baselines.iter().any(Option::is_none);
+        if inherits_settings {
+            if event.draft_kind().is_some() {
+                if value.multi_teams.len() != 2 {
+                    form.context.push_error(form::Error::validation(
+                        "The event draft requires exactly two entrants. Choose fixed modes for an open or multi-entrant race."
+                    ).with_name("custom_baselines"));
+                }
+                if let Err(error) = racetime_bot::baselines::validate_match(&event, value.game_count) {
+                    form.context.push_error(form::Error::validation(error).with_name("game_count"));
+                }
+            } else if event.seed_gen_type.as_ref().and_then(racetime_bot::choice_resolution::config)
+                .is_some_and(|config| config.baselines.is_some() && config.default_baseline.is_none()) {
+                form.context.push_error(form::Error::validation(
+                    "This event has no default mode. Select a mode for each game."
+                ).with_name("custom_baselines"));
+            }
+        }
+        if custom_baselines.iter().any(Option::is_some) && value.is_qualifier && event.qualifier_mode == "pooled_by_mode" {
+            form.context.push_error(form::Error::validation(
+                "Create pooled qualifiers from the qualifier controls so their mode and scoring are linked."
+            ).with_name("is_qualifier"));
+        }
         if !value.multi_teams.is_empty() {
             if custom_title.is_empty() {
                 form.context.push_error(
@@ -3718,14 +3938,28 @@ pub(crate) async fn create_race_post(
             } else {
                 None
             };
-            let mut race = Race {
+            let draft = if inherits_settings && teams.len() == 2 {
+                if let Some(kind) = event.draft_kind() {
+                    Some(Draft::for_game1(&mut transaction, http_client, &kind, &event, phase.as_deref(), [&teams[0], &teams[1]]).await?)
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            let entrants = if teams.len() == 2 {
+                Entrants::Two([Entrant::MidosHouseTeam(teams[0].clone()), Entrant::MidosHouseTeam(teams[1].clone())])
+            } else {
+                Entrants::Many(teams)
+            };
+            let race = Race {
                 is_qualifier: value.is_qualifier,
                 qualifier_number: value.is_qualifier.then_some(value.qualifier_number),
                 id: Id::<Races>::new(&mut transaction).await?,
                 series: event.series,
                 event: event.event.to_string(),
                 source: Source::Manual,
-                entrants: Entrants::Many(teams),
+                entrants,
                 phase,
                 round,
                 game: None,
@@ -3734,7 +3968,7 @@ pub(crate) async fn create_race_post(
                 schedule_updated_at: None,
                 fpa_invoked: false,
                 breaks_used: false,
-                draft: None,
+                draft,
                 seed: seed::Data::default(),
                 racetime_goal_slug: None,
                 video_urls: HashMap::default(),
@@ -3754,16 +3988,18 @@ pub(crate) async fn create_race_post(
                 restream_consent_required: false,
                 custom_title: Some(custom_title.to_owned()),
                 custom_create_room: value.custom_create_room,
+                custom_baseline: None,
+                custom_match_id: None,
                 companion_race_id: None,
             };
+            let mut races = custom_match_games(&mut transaction, race, custom_baselines).await?;
             transaction = discord_bot::create_scheduling_thread(
                 &*discord_ctx.read().await,
                 transaction,
-                std::slice::from_mut(&mut race),
-                1,
+                &mut races,
+                value.game_count,
             )
             .await?;
-            race.save(&mut transaction).await?;
             transaction.commit().await?;
             return Ok(RedirectOrContent::Redirect(Redirect::to(uri!(
                 event::races(event.series, &*event.event)
@@ -3872,6 +4108,8 @@ pub(crate) async fn create_race_post(
                 racetime_goal_slug: None,
                 custom_title: Some(custom_title.to_owned()),
                 custom_create_room: value.custom_create_room,
+                custom_baseline: custom_baselines.into_iter().next().flatten(),
+                custom_match_id: None,
                 companion_race_id: None,
             };
             race.save(&mut transaction).await?;
@@ -4052,6 +4290,8 @@ pub(crate) async fn create_race_post(
                     restream_consent_required: false,
                     custom_title: None,
                     custom_create_room: true,
+                    custom_baseline: None,
+                    custom_match_id: None,
                     companion_race_id: None,
                     scheduling_thread: None,
                 };
@@ -4118,6 +4358,9 @@ pub(crate) async fn race_table(
     let has_games = options.game_count || races.iter().any(|race| race.game.is_some());
     let has_seeds = 'has_seeds: {
         for race in races {
+            if race.custom_baseline.is_some() {
+                break 'has_seeds true;
+            }
             if race.show_seed(&mut *transaction).await? {
                 if race.seed.file_hash.is_some() || race.seed.files().is_some() {
                     break 'has_seeds true;
@@ -4699,12 +4942,7 @@ pub(crate) async fn race_table(
                                     // Only show "Add Hash" for games that support hashes (not TWWR)
                                     @let supports_hash = !matches!(event.rando_version, Some(racetime_bot::VersionedBranch::Tww { .. }));
                                     @let add_hash_url = options.can_edit.then(|| uri!(cal::add_file_hash(race.series, &*race.event, race.id))).filter(|_| supports_hash);
-                                    // Extract draft mode for display if applicable
-                                    @let draft_mode = race.draft.as_ref().and_then(|draft| {
-                                        let game = race.game.unwrap_or(1);
-                                        let preset = draft.settings.get(&*format!("game{game}_preset"))?;
-                                        event.draft_kind().and_then(|kind| kind.preset_display_name(preset.as_ref()).map(|s| s.to_owned()))
-                                    });
+                                    @let draft_mode = race.selected_mode(event);
                                     : seed::table_cell(now, &race.seed, true, add_hash_url, &mut *transaction, game_id, draft_mode.as_deref()).await?;
                                 } else {
                                     // hide seed if unfinished async
@@ -4715,13 +4953,9 @@ pub(crate) async fn race_table(
                                             : "Practice";
                                         }
                                     }
-                                    // Show drafted preset for upcoming races that have a completed draft
-                                    @if let Some(ref draft) = race.draft {
-                                        @let game = race.game.unwrap_or(1);
-                                        @if let Some(mode) = draft.settings.get(&*format!("game{game}_preset")).and_then(|v| event.draft_kind().and_then(|kind| kind.preset_display_name(v.as_ref()).map(|s| s.to_owned()))) {
-                                            div(class = "draft-mode") {
-                                                : mode;
-                                            }
+                                    @if let Some(mode) = race.selected_mode(event) {
+                                        div(class = "draft-mode") {
+                                            : mode;
                                         }
                                     }
                                 }
@@ -4747,13 +4981,9 @@ pub(crate) async fn race_table(
                                         }
                                     }
                                 }
-                                // Show drafted preset for any event with a completed preset draft
-                                @if let Some(ref draft) = race.draft {
-                                    @let game = race.game.unwrap_or(1);
-                                    @if let Some(mode) = draft.settings.get(&*format!("game{game}_preset")).and_then(|v| event.draft_kind().and_then(|kind| kind.preset_display_name(v.as_ref()).map(|s| s.to_owned()))) {
-                                        div(class = "draft-mode") {
-                                            : mode;
-                                        }
+                                @if let Some(mode) = race.selected_mode(event) {
+                                    div(class = "draft-mode") {
+                                        : mode;
                                     }
                                 }
                             }
@@ -6038,6 +6268,8 @@ async fn auto_import_races_inner(
                                     restream_consent_required: false,
                                     custom_title: None,
                                     custom_create_room: true,
+                                    custom_baseline: None,
+                                    custom_match_id: None,
                                     companion_race_id: None,
                                 };
                                 if let Some(race) = races.iter_mut().find(|race| if let Source::League { id } = race.source { id == match_data.id } else { false }) {
@@ -6349,6 +6581,8 @@ pub(crate) async fn ensure_weekly_races(
                     restream_consent_required: false,
                     custom_title: None,
                     custom_create_room: true,
+                    custom_baseline: None,
+                    custom_match_id: None,
                     companion_race_id: None,
                     schedule,
                 };
@@ -6975,6 +7209,9 @@ pub(crate) async fn edit_race_form(
             p {
                 : "Automatic racetime.gg room creation: ";
                 : if race.custom_create_room { "enabled" } else { "disabled" };
+            }
+            @if let Some(mode) = race.completed_mode(&event) {
+                p : format!("Mode: {mode}");
             }
         }
         @match race.source {
@@ -9173,6 +9410,8 @@ mod race_import_tests {
             restream_consent_required: false,
             custom_title: None,
             custom_create_room: true,
+            custom_baseline: None,
+            custom_match_id: None,
             companion_race_id: None,
         }
     }
