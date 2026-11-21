@@ -283,7 +283,7 @@ async fn mutate(
 
 fn crew_time(time: DateTime<Utc>) -> String {
     time.with_timezone(&Tz::get("America/New_York"))
-        .format("%b%d %Y %-I:%M%P")
+        .format("%Y %b%d %-I:%M%P")
         .to_string()
         .to_lowercase()
 }
@@ -710,9 +710,9 @@ mod tests {
     #[test]
     fn crew_times_use_eastern_time_and_minute_precision() {
         let summer = Utc.with_ymd_and_hms(2026, 9, 13, 18, 45, 32).unwrap();
-        let winter = Utc.with_ymd_and_hms(2027, 1, 13, 19, 45, 0).unwrap();
-        assert_eq!(crew_time(summer), "sep13 2026 2:45pm");
-        assert_eq!(crew_time(winter), "jan13 2027 2:45pm");
+        let winter = Utc.with_ymd_and_hms(2026, 11, 22, 18, 0, 0).unwrap();
+        assert_eq!(crew_time(summer), "2026 sep13 2:45pm");
+        assert_eq!(crew_time(winter), "2026 nov22 1:00pm");
         assert_eq!(minute_precision(summer).second(), 0);
         assert_eq!(minute_precision(summer).minute(), 45);
     }
