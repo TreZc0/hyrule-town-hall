@@ -118,11 +118,10 @@ async fn assert_race_links(pool: &PgPool, slug: &str, user_id: i64, race_id: i64
         &uri,
         Some(&data),
         cal::RaceTableOptions {
-            game_count: false,
             show_multistreams: false,
             can_edit: false,
             show_restream_consent: false,
-            challonge_import_ctx: None,
+            import_ctx: None,
         },
         &[race],
         Some(&user),

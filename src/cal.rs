@@ -229,6 +229,16 @@ pub(crate) enum Source {
     SpeedGaming { id: i64 },
 }
 
+impl Source {
+    fn bracket_match_id(&self) -> Option<&str> {
+        match self {
+            Self::Challonge { id } => Some(id),
+            Self::StartGG { set, .. } => Some(&set.0),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone)]
 pub(crate) enum Entrant {
     MidosHouseTeam(Team),
@@ -4324,11 +4334,10 @@ pub(crate) async fn create_race_post(
 }
 
 pub(crate) struct RaceTableOptions<'a> {
-    pub(crate) game_count: bool,
     pub(crate) show_multistreams: bool,
     pub(crate) can_edit: bool,
     pub(crate) show_restream_consent: bool,
-    pub(crate) challonge_import_ctx: Option<Context<'a>>,
+    pub(crate) import_ctx: Option<Context<'a>>,
 }
 
 pub(crate) async fn race_table(
@@ -4348,14 +4357,15 @@ pub(crate) async fn race_table(
     }
     let phase_round_options = if_chain! {
         if let Some(event) = event;
-        if options.challonge_import_ctx.is_some();
+        if options.import_ctx.is_some();
+        if matches!(event.match_source(), MatchSource::Challonge { .. });
         then {
             Some(sqlx::query!("SELECT phase, round FROM phase_round_options WHERE series = $1 AND event = $2", event.series as _, &event.event).fetch_all(&mut **transaction).await?)
         } else {
             None
         }
     };
-    let has_games = options.game_count || races.iter().any(|race| race.game.is_some());
+    let has_games = options.import_ctx.is_some() || races.iter().any(|race| race.game.is_some());
     let has_seeds = 'has_seeds: {
         for race in races {
             if race.custom_baseline.is_some() {
@@ -4673,6 +4683,9 @@ pub(crate) async fn race_table(
         table {
             thead {
                 tr {
+                    @if options.import_ctx.is_some() {
+                        th : "Import as ignored";
+                    }
                     th : "Start";
                     @if event.is_none() {
                         th : "Event";
@@ -4682,7 +4695,7 @@ pub(crate) async fn race_table(
                     }
                     th : "Round";
                     @if has_games {
-                        @if options.game_count {
+                        @if options.import_ctx.is_some() {
                             th : "Best of";
                         } else {
                             th : "Game";
@@ -4716,6 +4729,14 @@ pub(crate) async fn race_table(
                                 hash_map::Entry::Vacant(entry) => entry.insert(race.event(&mut *transaction).await?),
                             }, true)
                         };
+                        @if let Some(ctx) = &options.import_ctx {
+                            td {
+                                @if let Some(id) = race.source.bracket_match_id() {
+                                    @let name = format!("ignored[{id}]");
+                                    input(type = "checkbox", name = &name, aria_label = format!("Import match {id} as ignored"), checked? = ctx.field_value(&*name) == Some("on"));
+                                }
+                            }
+                        }
                         @let restream_race = primary_races_by_companion.get(&race.id).unwrap_or(race);
                         @let volunteer_race_id = companion_display_starts.get(&race.id).map(|(primary_id, _, _)| *primary_id).unwrap_or(race.id);
                         td {
@@ -4745,7 +4766,7 @@ pub(crate) async fn race_table(
                             }
                             td(class = "large-table-content") : event;
                         }
-                        @if let (Some(ctx), Some(phase_round_options), Source::Challonge { id: challonge_id }) = (&options.challonge_import_ctx, &phase_round_options, &race.source) {
+                        @if let (Some(ctx), Some(phase_round_options), Source::Challonge { id: challonge_id }) = (&options.import_ctx, &phase_round_options, &race.source) {
                             @if phase_round_options.is_empty() {
                                 : form_table_cell(&format!("phase[{challonge_id}]"), &mut Vec::default(), html! {
                                     input(type = "text", name = format!("phase[{challonge_id}]"), value? = ctx.field_value(&*format!("phase[{challonge_id}]")));
@@ -4773,7 +4794,7 @@ pub(crate) async fn race_table(
                             }
                         }
                         @if has_games {
-                            @if let (Some(ctx), Source::Challonge { id: challonge_id }) = (&options.challonge_import_ctx, &race.source) {
+                            @if let (Some(ctx), Source::Challonge { id: challonge_id }) = (&options.import_ctx, &race.source) {
                                 : form_table_cell(&format!("game_count[{challonge_id}]"), &mut Vec::default(), html! {
                                     input(type = "number", min = "1", max = "255", name = format!("game_count[{challonge_id}]"), value = ctx.field_value(&*format!("game_count[{challonge_id}]")).map_or_else(|| event.default_game_count.to_string(), |game_count| game_count.to_owned()));
                                 });
@@ -5302,6 +5323,8 @@ impl RaceImportJob {
 /// retained for the process lifetime so repeated status-page reloads after completion stay safe.
 pub(crate) type RaceImportJobs = Arc<tokio::sync::RwLock<HashMap<Uuid, RaceImportJob>>>;
 
+const IGNORED_IMPORT_HELP: &str = "Check “Import as ignored” to save every game in that match without creating a Discord scheduling thread or notifying players. Unchecked matches import normally.";
+
 pub(crate) async fn import_races_form(
     mut transaction: Transaction<'_, Postgres>,
     http_client: &reqwest::Client,
@@ -5376,11 +5399,10 @@ pub(crate) async fn import_races_form(
                         &uri,
                         Some(&event),
                         RaceTableOptions {
-                            game_count: true,
                             show_multistreams: false,
                             can_edit: false,
                             show_restream_consent: false,
-                            challonge_import_ctx: Some(ctx.clone()),
+                            import_ctx: Some(ctx.clone()),
                         },
                         &races,
                         None,
@@ -5392,7 +5414,7 @@ pub(crate) async fn import_races_form(
                         uri!(import_races_post(event.series, &*event.event)),
                         csrf,
                         html! {
-                            p : "The following races will be imported:";
+                            p : IGNORED_IMPORT_HELP;
                             : table;
                             p {
                                 : "If some games of a multi-game match end up not being necessary, use ";
@@ -5500,6 +5522,8 @@ pub(crate) struct ImportRacesForm {
     #[field(default = String::new())]
     csrf: String,
     #[field(default = HashMap::new())]
+    ignored: HashMap<String, bool>,
+    #[field(default = HashMap::new())]
     is_qualifier: HashMap<String, bool>,
     #[field(default = HashMap::new())]
     qualifier_number: HashMap<String, i64>,
@@ -5511,6 +5535,14 @@ pub(crate) struct ImportRacesForm {
     phase_round: HashMap<String, String>,
     #[field(default = HashMap::new())]
     game_count: HashMap<String, i16>,
+}
+
+impl ImportRacesForm {
+    fn import_as_ignored(&self, source: &Source) -> bool {
+        source
+            .bracket_match_id()
+            .is_some_and(|id| self.ignored.get(id) == Some(&true))
+    }
 }
 
 #[rocket::post("/event/<series>/<event>/races/import", data = "<form>")]
@@ -5679,6 +5711,7 @@ pub(crate) async fn import_races_post(
                             .map(|row| (Some(row.phase), Some(row.round)))
                             .unwrap_or_else(|| (None, Some(value.phase_round[id].clone())))
                     };
+                    race.ignored = value.import_as_ignored(&race.source);
                     race.is_qualifier = value.is_qualifier.get(id).copied().unwrap_or(false);
                     race.qualifier_number = race
                         .is_qualifier
@@ -5808,33 +5841,28 @@ pub(crate) async fn import_races_status(
         : header;
         : race_import_status_content(&job.status);
         @if let RaceImportStatus::Review { ref races, .. } = job.status {
-            : race_table(
-                &mut transaction,
-                None,
-                http_client,
-                &uri,
-                Some(&data),
-                RaceTableOptions {
-                    game_count: true,
-                    show_multistreams: false,
-                    can_edit: false,
-                    show_restream_consent: false,
-                    challonge_import_ctx: None,
-                },
-                races,
-                None,
-                None,
-            ).await?;
-            @let (errors, button) = button_form(
-                uri!(import_races_confirm(series, event, job_id.to_string())),
-                csrf.as_ref(),
-                Vec::new(),
-                "Confirm import",
-            );
-            : errors;
-            div(class = "button-row race-actions") {
-                : button;
-                a(class = "button", href = uri!(event::races(series, event))) : "Cancel";
+            form(action = uri!(import_races_confirm(series, event, job_id.to_string())), method = "post") {
+                : csrf.as_ref();
+                : race_table(
+                    &mut transaction,
+                    None,
+                    http_client,
+                    &uri,
+                    Some(&data),
+                    RaceTableOptions {
+                        show_multistreams: false,
+                        can_edit: false,
+                        show_restream_consent: false,
+                        import_ctx: Some(Context::default()),
+                    },
+                    races,
+                    None,
+                    None,
+                ).await?;
+                div(class = "button-row race-actions") {
+                    input(class = "button", type = "submit", value = "Confirm import");
+                    a(class = "button", href = uri!(event::races(series, event))) : "Cancel";
+                }
             }
         } else {
             div(class = "button-row race-actions") {
@@ -5870,14 +5898,14 @@ pub(crate) async fn import_races_confirm(
     series: Series,
     event: &str,
     job_id: &str,
-    form: Form<Contextual<'_, EmptyForm>>,
+    form: Form<Contextual<'_, ImportRacesForm>>,
 ) -> Result<Redirect, StatusOrError<event::Error>> {
     let job_id = Uuid::parse_str(job_id).map_err(|_| StatusOrError::Status(Status::NotFound))?;
     let mut form = form.into_inner();
     form.verify(&csrf);
-    if form.context.errors().next().is_some() || form.value.is_none() {
+    let Some(value) = form.value.filter(|_| form.context.errors().next().is_none()) else {
         return Err(StatusOrError::Status(Status::Forbidden));
-    }
+    };
     let mut transaction = pool.begin().await?;
     let data = event::Data::new(&mut transaction, series, event)
         .await?
@@ -5893,7 +5921,10 @@ pub(crate) async fn import_races_confirm(
             .ok_or(StatusOrError::Status(Status::NotFound))?;
         job.confirm(series, event).map_err(StatusOrError::Status)?
     };
-    if let Some((races, skipped)) = batch {
+    if let Some((mut races, skipped)) = batch {
+        for race in &mut races {
+            race.ignored = value.import_as_ignored(&race.source);
+        }
         let pool = pool.inner().clone();
         let discord_ctx = discord_ctx.inner().clone();
         let race_import_lock = global_state.race_import_lock();
@@ -5935,7 +5966,7 @@ fn race_import_status_content(status: &RaceImportStatus) -> RawHtml<String> {
                 RaceImportStatus::Review { races, skipped } => {
                     h2 : "Review race import";
                     p : format!("{} new matches are ready to import.", races.len());
-                    p : "Review the matches below, then confirm to create the races and their scheduling threads. Nothing has been imported yet.";
+                    p : IGNORED_IMPORT_HELP;
                     @if !skipped.is_empty() {
                         details {
                             summary : format!("{} matches skipped", skipped.len());
@@ -5955,7 +5986,7 @@ fn race_import_status_content(status: &RaceImportStatus) -> RawHtml<String> {
                 RaceImportStatus::Running { total, completed, failed } => {
                     h2 : "Importing Races…";
                     progress(value = (completed + failed.len()).to_string(), max = (*total).max(1).to_string(), aria_label = "Importing matches") {}
-                    p(role = "status") : format!("{completed} of {total} matches imported; {} failed. Creating races and scheduling threads…", failed.len());
+                    p(role = "status") : format!("{completed} of {total} matches imported; {} failed.", failed.len());
                     p : "This page will refresh automatically.";
                 }
                 RaceImportStatus::Done { total, completed, failed, skipped } => {
@@ -6017,7 +6048,7 @@ async fn run_race_import(
         }
         for race in races {
             let label = format!("{:?}", race.source);
-            let result = import_race(pool, &*discord_ctx.read().await, race).await;
+            let result = import_race(pool, discord_ctx, race).await;
             let mut jobs = jobs.write().await;
             if let Some(RaceImportJob { status: RaceImportStatus::Running { completed, failed, .. }, .. }) = jobs.get_mut(&job_id) {
                 match result {
@@ -6050,7 +6081,7 @@ async fn run_race_import(
 /// (and usable by race room commands) without waiting for the rest of the batch.
 async fn import_race(
     pool: &PgPool,
-    discord_ctx: &DiscordCtx,
+    discord_ctx: &RwFuture<DiscordCtx>,
     race: Race,
 ) -> Result<(), event::Error> {
     let mut transaction = pool.begin().await?;
@@ -6083,6 +6114,9 @@ async fn import_race(
         return Ok(());
     }
     let game_count = race.game.unwrap_or(1);
+    if game_count < 1 {
+        return Err(sqlx::Error::Protocol("A match must have at least one game.".into()).into());
+    }
     let mut races = Vec::new();
     for game in 1..=game_count {
         races.push(Race {
@@ -6093,7 +6127,19 @@ async fn import_race(
             ..race.clone()
         });
     }
-    transaction = discord_bot::create_scheduling_thread(discord_ctx, transaction, &mut races, game_count).await?;
+    if race.ignored {
+        for game in &races {
+            game.save(&mut transaction).await?;
+        }
+    } else {
+        transaction = discord_bot::create_scheduling_thread(
+            &*discord_ctx.read().await,
+            transaction,
+            &mut races,
+            game_count,
+        )
+        .await?;
+    }
     transaction.commit().await?;
     Ok(())
 }
@@ -6195,7 +6241,7 @@ async fn auto_import_races_inner(
                         MatchSource::Challonge { community, tournament } => {
                             let (races, _) = challonge::races_to_import(&mut transaction, &http_client, &config, &event, community, tournament).await?;
                             for race in races {
-                                import_race(&db_pool, &*discord_ctx.read().await, race).await?;
+                                import_race(&db_pool, &discord_ctx, race).await?;
                             }
                         }
                         MatchSource::League => if event.is_started(&mut transaction).await? {
@@ -6308,7 +6354,7 @@ async fn auto_import_races_inner(
                                     let set_count = races.len() + skips.len();
                                     let new_race_count = races.len();
                                     for race in races {
-                                        import_race(&db_pool, &*discord_ctx.read().await, race).await?;
+                                        import_race(&db_pool, &discord_ctx, race).await?;
                                     }
                                     let import_duration = import_started_at.elapsed();
                                     if import_duration >= Duration::from_secs(10) {
@@ -9425,7 +9471,7 @@ mod race_import_tests {
         assert!(matches!(status, RaceImportStatus::Review { .. }));
         let html = race_import_status_content(&status).0;
         assert!(html.contains("Review race import"));
-        assert!(html.contains("Nothing has been imported yet"));
+        assert!(html.contains(IGNORED_IMPORT_HELP));
         assert!(html.contains("&lt;already imported&gt;"));
         assert!(!html.contains("location.reload()"));
     }
@@ -9495,6 +9541,68 @@ mod race_import_tests {
             );
             assert!(!matches!(job.status, RaceImportStatus::Running { .. }));
         }
+    }
+
+    #[test]
+    fn ignore_checkboxes_apply_only_to_selected_provider_matches() {
+        let form = Form::<ImportRacesForm>::parse("ignored[42]=on&ignored[87]=on").unwrap();
+        let empty = Form::<ImportRacesForm>::parse("").unwrap();
+        for id in ["42", "73", "87"] {
+            for source in [
+                Source::Challonge { id: id.into() },
+                Source::StartGG {
+                    event: "event".into(),
+                    set: startgg::ID(id.into()),
+                },
+            ] {
+                assert_eq!(form.import_as_ignored(&source), id != "73");
+                assert!(!empty.import_as_ignored(&source));
+            }
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires HTH_TEST_DATABASE_URL pointing to a migrated *_test database"]
+    async fn ignored_match_saves_all_games_and_skips_reimports_without_discord() {
+        let pool = event::configuration::test_pool().await;
+        let discord_ctx = RwFuture::new(std::future::pending::<DiscordCtx>());
+        let event = format!("import-{}", &Uuid::new_v4().simple().to_string()[..12]);
+        sqlx::query("INSERT INTO events (series, event, display_name, team_config) VALUES ($1, $2, 'Import test', 'solo')")
+            .bind(Series::Standard.slug()).bind(&event).execute(&pool).await.unwrap();
+
+        let mut race = Race {
+            event: event.clone(),
+            source: Source::StartGG {
+                event: event.clone(),
+                set: startgg::ID(event.clone()),
+            },
+            ignored: true,
+            ..discovered_race()
+        };
+        tokio::time::timeout(Duration::from_secs(10), async {
+            import_race(&pool, &discord_ctx, race.clone())
+                .await
+                .unwrap();
+            race.ignored = false;
+            import_race(&pool, &discord_ctx, race).await.unwrap();
+        })
+        .await
+        .expect("ignored imports and retries must finish with Discord offline");
+        let games = sqlx::query_as::<_, (i16, bool, bool)>(
+            "SELECT game, ignored, scheduling_thread IS NULL FROM races WHERE startgg_set = $1 ORDER BY game",
+        ).bind(&event).fetch_all(&pool).await.unwrap();
+        sqlx::query("DELETE FROM races WHERE startgg_set = $1")
+            .bind(&event)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM events WHERE series = $1 AND event = $2")
+            .bind(Series::Standard.slug())
+            .bind(&event)
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert_eq!(games, [(1, true, true), (2, true, true), (3, true, true)]);
     }
 
     #[test]

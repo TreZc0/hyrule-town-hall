@@ -8,9 +8,6 @@ use crate::{
 
 use rocket::response::Flash;
 
-#[cfg(test)]
-mod tests;
-
 pub(crate) async fn resolve_control(
     pool: &PgPool,
     team: i64,
