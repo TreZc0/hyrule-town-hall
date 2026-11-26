@@ -337,7 +337,9 @@ impl SeedGenType {
     /// Whether this seed gen type has per-race player-chosen settings that should
     /// be shown as a column in the race table.
     pub(crate) fn has_display_settings(&self) -> bool {
-        super::choice_resolution::config(self).is_some()
+        super::choice_resolution::config(self)
+            .and_then(|config| config.choices.as_object())
+            .is_some_and(|choices| !choices.is_empty())
     }
 
     pub(crate) async fn settings_display_str(
@@ -423,6 +425,25 @@ impl std::str::FromStr for SeedGenType {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn race_table_settings_require_defined_choices() {
+        for slug in ["owr", "mmr", "alttpr_dr"] {
+            let mut config = match slug {
+                "mmr" => serde_json::json!({"version": "2.0.0-0", "settings": {"GameplaySettings.DrawHash": true}}),
+                "alttpr_dr" => serde_json::json!({"source": "mutual_choices", "base_settings": {"mode": "open"}}),
+                _ => serde_json::json!({"base_settings": {"shuffle": "crossed"}}),
+            };
+            let shows_settings = |config: &serde_json::Value| {
+                SeedGenType::from_db(Some(slug), Some(config)).unwrap().has_display_settings()
+            };
+            assert!(!shows_settings(&config), "{slug} without choices");
+            config["choices"] = serde_json::json!({});
+            assert!(!shows_settings(&config), "{slug} with empty choices");
+            config["choices"] = serde_json::json!({"delay": {"label": "Stream delay", "value_labels": {"always": "Use stream delay"}}});
+            assert!(shows_settings(&config), "{slug} with a defined choice");
+        }
+    }
+
     #[test]
     fn door_rando_build_selection_preserves_sources_and_settings() {
         use super::DoorRandoBuild;

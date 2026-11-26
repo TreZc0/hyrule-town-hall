@@ -4399,7 +4399,7 @@ pub(crate) async fn race_table(
         false
     };
 
-    // Check if any event uses a seed gen type that exposes per-race player-chosen settings.
+    // The Settings column can also contain a race's selected mode.
     let has_settings = 'has_settings: {
         for race in races {
             let event = match event_cache.entry((race.series, &race.event)) {
@@ -4412,6 +4412,7 @@ pub(crate) async fn race_table(
                 .seed_gen_type
                 .as_ref()
                 .is_some_and(|sgt| sgt.has_display_settings())
+                || race.selected_mode(event).is_some()
             {
                 break 'has_settings true;
             }
@@ -4956,6 +4957,7 @@ pub(crate) async fn race_table(
                                 }
                             }
                         }
+                        @let settings_generator = event.seed_gen_type.as_ref().filter(|sgt| sgt.has_display_settings());
                         @if has_seeds {
                             @let show_seed = race.show_seed(&mut *transaction).await?;
                             td {
@@ -4983,12 +4985,10 @@ pub(crate) async fn race_table(
                                 }
 
                                 // Add Settings link for races with per-race player-chosen settings
-                                @if show_seed || race.is_ended() || matches!(race.schedule, RaceSchedule::Unscheduled | RaceSchedule::Async { .. } | RaceSchedule::Live { .. }) {
-                                    @if let Some(sgt) = event.seed_gen_type.as_ref() {
-                                        @if let Some(summary) = sgt.settings_display_str(&mut **transaction, race, &event.choice_requirements()).await {
-                                            span(class = "settings-link", data_tooltip = summary) {
-                                                : " -Hover for Settings- ";
-                                            }
+                                @if let Some(sgt) = settings_generator {
+                                    @if let Some(summary) = sgt.settings_display_str(&mut **transaction, race, &event.choice_requirements()).await {
+                                        span(class = "settings-link", data_tooltip = summary) {
+                                            : " -Hover for Settings- ";
                                         }
                                     }
                                 }
@@ -4996,7 +4996,7 @@ pub(crate) async fn race_table(
                         }
                         @if !has_seeds && has_settings {
                             td {
-                                @if let Some(sgt) = event.seed_gen_type.as_ref() {
+                                @if let Some(sgt) = settings_generator {
                                     @if let Some(summary) = sgt.settings_display_str(&mut **transaction, race, &event.choice_requirements()).await {
                                         span(class = "settings-link", data_tooltip = summary) {
                                             : "-Hover for Settings-";
