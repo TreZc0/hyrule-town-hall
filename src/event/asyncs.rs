@@ -8,6 +8,49 @@ use crate::{
 
 use rocket::response::Flash;
 
+pub(crate) struct ConcludedAsync {
+    pub(crate) name: String,
+    pub(crate) seed: Option<RawHtml<String>>,
+}
+
+pub(crate) async fn concluded(
+    transaction: &mut Transaction<'_, Postgres>,
+    event: &Data<'_>,
+) -> Result<Vec<ConcludedAsync>, event::Error> {
+    let rows = sqlx::query!(
+        r#"SELECT name, kind AS "kind: AsyncKind", start, file_stem, web_id, web_gen_time,
+                  is_tfb_dev, tfb_uuid, xkeys_uuid, seed_data, hash1, hash2, hash3, hash4, hash5
+           FROM asyncs WHERE series = $1 AND event = $2 AND end_time <= NOW() ORDER BY id"#,
+        event.series as _, &event.event,
+    )
+    .fetch_all(&mut **transaction)
+    .await?;
+    let mut concluded = Vec::with_capacity(rows.len());
+    if rows.is_empty() {
+        return Ok(concluded);
+    }
+    let game_id = event.game(transaction).await?.map_or(1, |game| game.id);
+    let now = Utc::now();
+    for row in rows {
+        let mut seed_cell = None;
+        if row.kind == AsyncKind::Qualifier {
+            let seed = seed::Data::from_db(
+                row.start, None, None, None, row.file_stem, None, row.web_id, row.web_gen_time,
+                row.is_tfb_dev, row.tfb_uuid, row.xkeys_uuid, row.seed_data, row.hash1, row.hash2,
+                row.hash3, row.hash4, row.hash5, None, false,
+            );
+            if seed.file_hash.is_some() || seed.files().is_some() || row.web_id.is_some() {
+                seed_cell = Some(seed::table_cell(
+                    now, &seed, seed::TableLinks::CompletedQualifier { legacy_web_id: row.web_id },
+                    None, transaction, game_id, None,
+                ).await?);
+            }
+        }
+        concluded.push(ConcludedAsync { name: row.name, seed: seed_cell });
+    }
+    Ok(concluded)
+}
+
 pub(crate) async fn resolve_control(
     pool: &PgPool,
     team: i64,
@@ -1398,4 +1441,54 @@ async fn save_seed(pool: &PgPool, id: i64, seed: seed::Data) -> Result<bool, sql
         .execute(&mut *tx).await?;
     tx.commit().await?;
     Ok(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    #[ignore = "requires HTH_TEST_DATABASE_URL pointing to a migrated *_test database"]
+    async fn races_table_publishes_only_closed_qualifier_seeds() {
+        let pool = event::configuration::test_pool().await;
+        let mut tx = pool.begin().await.unwrap();
+        let slug = format!("async-{}", rng().random::<u32>());
+        sqlx::query("INSERT INTO events (series,event,display_name,team_config) VALUES ('mmrmain',$1,'Async test','solo')")
+            .bind(&slug).execute(&mut *tx).await.unwrap();
+        sqlx::query(r#"INSERT INTO asyncs (series,event,kind,name,end_time,seed_data)
+            SELECT 'mmrmain',$1,kind::async_kind,name,deadline,
+                jsonb_build_object('type','mmr','id',name,'hash',jsonb_build_array(name || '-hash'),
+                                   'seed_page_secret','abc123xyz')
+            FROM (VALUES ('qualifier','closed',NOW()), ('qualifier','open',NOW() + interval '1 day'),
+                         ('qualifier','unbounded',NULL), ('seeding','seeding',NOW()),
+                         ('tiebreaker1','tiebreaker',NOW())) AS fixture(kind,name,deadline)"#)
+            .bind(&slug).execute(&mut *tx).await.unwrap();
+        sqlx::query("INSERT INTO asyncs (series,event,kind,name,end_time,web_id,hash1,hash2,hash3,hash4,hash5)
+            VALUES ('mmrmain',$1,'qualifier','legacy',NOW(),12345,'A','B','C','D','legacy-hash')")
+            .bind(&slug).execute(&mut *tx).await.unwrap();
+
+        let event = Data::new(&mut tx, Series::MmrMain, slug.as_str()).await.unwrap().unwrap();
+        let rows = concluded(&mut tx, &event).await.unwrap();
+        let uri = Origin(rocket::http::uri::Origin::parse_owned(format!("/event/mmrmain/{slug}/races")).unwrap());
+        let table = cal::race_table(
+            &mut tx, None, &reqwest::Client::new(), &uri, Some(&event),
+            cal::RaceTableOptions {
+                show_multistreams: false, can_edit: false, show_restream_consent: false,
+                import_ctx: None, concluded_asyncs: &rows,
+            },
+            &[], None, None,
+        ).await.unwrap().0;
+        assert!(table.contains("<th>Seed</th>"));
+        assert!(table.contains("id=closed&amp;seedAuth=abc123xyz"));
+        assert!(table.contains("closed-hash"));
+        assert!(table.contains("https://ootrandomizer.com/seed/get?id=12345"));
+        assert!(table.contains("legacy-hash"));
+        for hidden in ["open", "unbounded", "seeding", "tiebreaker"] {
+            assert!(!table.contains(&format!("id={hidden}")));
+            assert!(!table.contains(&format!("{hidden}-hash")));
+        }
+        assert!(table.contains("<td>seeding</td>"));
+        assert!(table.contains("<td>tiebreaker</td>"));
+        tx.rollback().await.unwrap();
+    }
 }

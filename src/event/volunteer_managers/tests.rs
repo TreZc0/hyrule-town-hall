@@ -122,6 +122,7 @@ async fn assert_race_links(pool: &PgPool, slug: &str, user_id: i64, race_id: i64
             can_edit: false,
             show_restream_consent: false,
             import_ctx: None,
+            concluded_asyncs: &[],
         },
         &[race],
         Some(&user),

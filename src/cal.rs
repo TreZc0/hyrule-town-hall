@@ -4338,6 +4338,7 @@ pub(crate) struct RaceTableOptions<'a> {
     pub(crate) can_edit: bool,
     pub(crate) show_restream_consent: bool,
     pub(crate) import_ctx: Option<Context<'a>>,
+    pub(crate) concluded_asyncs: &'a [event::asyncs::ConcludedAsync],
 }
 
 pub(crate) async fn race_table(
@@ -4366,7 +4367,7 @@ pub(crate) async fn race_table(
         }
     };
     let has_games = options.import_ctx.is_some() || races.iter().any(|race| race.game.is_some());
-    let has_seeds = 'has_seeds: {
+    let has_seeds = options.concluded_asyncs.iter().any(|row| row.seed.is_some()) || 'has_seeds: {
         for race in races {
             if race.custom_baseline.is_some() {
                 break 'has_seeds true;
@@ -4964,7 +4965,7 @@ pub(crate) async fn race_table(
                                     @let supports_hash = !matches!(event.rando_version, Some(racetime_bot::VersionedBranch::Tww { .. }));
                                     @let add_hash_url = options.can_edit.then(|| uri!(cal::add_file_hash(race.series, &*race.event, race.id))).filter(|_| supports_hash);
                                     @let draft_mode = race.selected_mode(event);
-                                    : seed::table_cell(now, &race.seed, true, add_hash_url, &mut *transaction, game_id, draft_mode.as_deref()).await?;
+                                    : seed::table_cell(now, &race.seed, seed::TableLinks::WithSpoilerLog, add_hash_url, &mut *transaction, game_id, draft_mode.as_deref()).await?;
                                 } else {
                                     // hide seed if unfinished async
                                     //TODO show to the team that played the 1st async half
@@ -5238,6 +5239,18 @@ pub(crate) async fn race_table(
                         }
                     }
                 }
+                @for row in options.concluded_asyncs {
+                    tr {
+                        td : "(async)";
+                        td : &row.name;
+                        @if has_games { td {} }
+                        td(colspan = "6") : "(open)";
+                        td {}
+                        @if has_seeds || has_settings { td : &row.seed; }
+                        @if has_buttons { td {} }
+                        td : "no restream";
+                    }
+                }
             }
         }
     })
@@ -5403,6 +5416,7 @@ pub(crate) async fn import_races_form(
                             can_edit: false,
                             show_restream_consent: false,
                             import_ctx: Some(ctx.clone()),
+                            concluded_asyncs: &[],
                         },
                         &races,
                         None,
@@ -5854,6 +5868,7 @@ pub(crate) async fn import_races_status(
                         can_edit: false,
                         show_restream_consent: false,
                         import_ctx: Some(Context::default()),
+                        concluded_asyncs: &[],
                     },
                     races,
                     None,

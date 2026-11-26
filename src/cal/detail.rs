@@ -494,7 +494,7 @@ pub(crate) async fn race_detail(
                 @if show_seed {
                     @let game_id = data.game(&mut transaction).await?.map(|game| game.id).unwrap_or(1);
                     @if race.seed.file_hash.is_some() || race.seed.files().is_some() {
-                        : seed::table_cell(now, &race.seed, true, None, &mut transaction, game_id, preset.as_deref()).await?;
+                        : seed::table_cell(now, &race.seed, seed::TableLinks::WithSpoilerLog, None, &mut transaction, game_id, preset.as_deref()).await?;
                     } else { p : "No seed recorded."; }
                 } else if is_async {
                     p : "The seed stays hidden until every entrant has finished or received it.";

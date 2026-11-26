@@ -625,7 +625,7 @@ pub(crate) async fn index(
         @if races.is_empty() {
             i : "(none currently)";
         } else {
-            : cal::race_table(&mut transaction, None, http_client, &uri, None, cal::RaceTableOptions { show_multistreams: false, can_edit: me.as_ref().is_some_and(|me| me.is_archivist), show_restream_consent: false, import_ctx: None }, &races, me.as_ref(), None).await?;
+            : cal::race_table(&mut transaction, None, http_client, &uri, None, cal::RaceTableOptions { show_multistreams: false, can_edit: me.as_ref().is_some_and(|me| me.is_archivist), show_restream_consent: false, import_ctx: None, concluded_asyncs: &[] }, &races, me.as_ref(), None).await?;
         }
     };
     Ok(page(

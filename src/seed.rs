@@ -369,47 +369,48 @@ impl Data {
         password: Option<&str>,
         progression_spoiler: bool,
     ) -> Self {
-        Self {
-            file_hash: match (hash1, hash2, hash3, hash4, hash5) {
-                (Some(hash1), Some(hash2), Some(hash3), Some(hash4), Some(hash5)) => Some([hash1, hash2, hash3, hash4, hash5]),
-                (None, None, None, None, None) => None,
-                _ => unreachable!("only some hash icons present, should be prevented by SQL constraint"),
-            },
-            password: password.map(|pw| pw.chars().map(|note| OcarinaNote::try_from(note).expect("invalid ocarina note in password, should be prevented by SQL constraint")).collect_vec().try_into().expect("invalid password length, should be prevented by SQL constraint")),
-            seed_data: match (file_stem, locked_spoiler_log_path, web_id, web_gen_time, tfb_uuid, xkeys_uuid, seed_data) {
-                (_, _, _, _, Some(uuid), None, None) => Some(Files::TriforceBlitz { is_dev: is_tfb_dev, uuid }.to_seed_data_base()),
-                (Some(file_stem), _, Some(id), Some(gen_time), None, None, None) => Some(Files::OotrWeb { id, gen_time, file_stem: Cow::Owned(file_stem) }.to_seed_data_base()),
-                (Some(file_stem), locked_spoiler_log_path, Some(id), None, None, None, None) => Some(if let Some(first_start) = [start, async_start1, async_start2, async_start3].into_iter().filter_map(identity).min() {
-                    Files::OotrWeb { id, gen_time: first_start - TimeDelta::days(1), file_stem: Cow::Owned(file_stem) }.to_seed_data_base()
-                } else {
-                    Files::MidosHouse { file_stem: Cow::Owned(file_stem), locked_spoiler_log_path }.to_seed_data_base()
-                }),
-                (Some(file_stem), locked_spoiler_log_path, None, _, None, None, None) => Some(Files::MidosHouse { file_stem: Cow::Owned(file_stem), locked_spoiler_log_path }.to_seed_data_base()),
-                // Keep the legacy Crosskeys UUID authoritative even when
-                // seed_data also contains resolved-random metadata. This is
-                // the precedence used by the pre-agnostic application.
-                (_, _, _, _, _, Some(uuid), _) => Some(Files::AlttprDoorRando { uuid, is_owr: false }.to_seed_data_base()),
-                (_, _, _, _, _, _, Some(ref old_data)) => (|| {
-                    // New async seed forms already write canonical seed_data.
-                    // Preserve the complete JSON object (including auxiliary
-                    // metadata) once its typed identity parses successfully.
-                    if Files::from_seed_data(old_data).is_some() {
-                        return Some(old_data.clone());
-                    }
-                    if let Some(hash) = old_data.get("avianart_hash").and_then(|v| v.as_str()) {
-                        let seed_hash = old_data.get("avianart_seed_hash")
-                            .and_then(|v| v.as_str())
-                            .and_then(|s| crate::avianart::parse_file_hash(s).ok());
-                        return Some(Files::AvianartSeed { hash: hash.to_owned(), seed_hash }.to_seed_data_base());
-                    }
-                    let permalink = old_data.get("permalink")?.as_str()?.to_owned();
-                    let seed_hash = old_data.get("seed_hash")?.as_str()?.to_owned();
-                    Some(Files::TwwrPermalink { permalink, seed_hash }.to_seed_data_base())
-                })(),
-                (None, _, _, _, None, None, None) => None,
-            },
-            progression_spoiler,
+        let seed_data = match (file_stem, locked_spoiler_log_path, web_id, web_gen_time, tfb_uuid, xkeys_uuid, seed_data) {
+            (_, _, _, _, Some(uuid), None, None) => Some(Files::TriforceBlitz { is_dev: is_tfb_dev, uuid }.to_seed_data_base()),
+            (Some(file_stem), _, Some(id), Some(gen_time), None, None, None) => Some(Files::OotrWeb { id, gen_time, file_stem: Cow::Owned(file_stem) }.to_seed_data_base()),
+            (Some(file_stem), locked_spoiler_log_path, Some(id), None, None, None, None) => Some(if let Some(first_start) = [start, async_start1, async_start2, async_start3].into_iter().filter_map(identity).min() {
+                Files::OotrWeb { id, gen_time: first_start - TimeDelta::days(1), file_stem: Cow::Owned(file_stem) }.to_seed_data_base()
+            } else {
+                Files::MidosHouse { file_stem: Cow::Owned(file_stem), locked_spoiler_log_path }.to_seed_data_base()
+            }),
+            (Some(file_stem), locked_spoiler_log_path, None, _, None, None, None) => Some(Files::MidosHouse { file_stem: Cow::Owned(file_stem), locked_spoiler_log_path }.to_seed_data_base()),
+            // Keep the legacy Crosskeys UUID authoritative even when
+            // seed_data also contains resolved-random metadata. This is
+            // the precedence used by the pre-agnostic application.
+            (_, _, _, _, _, Some(uuid), _) => Some(Files::AlttprDoorRando { uuid, is_owr: false }.to_seed_data_base()),
+            (_, _, _, _, _, _, Some(ref old_data)) => (|| {
+                // New async seed forms already write canonical seed_data.
+                // Preserve the complete JSON object (including auxiliary
+                // metadata) once its typed identity parses successfully.
+                if Files::from_seed_data(old_data).is_some() {
+                    return Some(old_data.clone());
+                }
+                let legacy_hash = old_data.get("avianart_hash").or_else(|| {
+                    if old_data.get("type").is_none() { old_data.get("hash") } else { None }
+                });
+                if let Some(hash) = legacy_hash.and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+                    let seed_hash = old_data.get("avianart_seed_hash")
+                        .and_then(|v| v.as_str())
+                        .and_then(|s| crate::avianart::parse_file_hash(s).ok());
+                    return Some(Files::AvianartSeed { hash: hash.to_owned(), seed_hash }.to_seed_data_base());
+                }
+                let permalink = old_data.get("permalink")?.as_str()?.to_owned();
+                let seed_hash = old_data.get("seed_hash")?.as_str()?.to_owned();
+                Some(Files::TwwrPermalink { permalink, seed_hash }.to_seed_data_base())
+            })(),
+            (None, _, _, _, None, None, None) => None,
+        };
+        let mut data = Self::from_seed_data_only(seed_data, password, progression_spoiler);
+        match (hash1, hash2, hash3, hash4, hash5) {
+            (Some(a), Some(b), Some(c), Some(d), Some(e)) => data.file_hash = Some([a, b, c, d, e]),
+            (None, None, None, None, None) => (),
+            _ => unreachable!("only some hash icons present, should be prevented by SQL constraint"),
         }
+        data
     }
 
     pub(crate) async fn extra(&self, now: DateTime<Utc>) -> Result<ExtraData, ExtraDataError> {
@@ -557,10 +558,17 @@ pub(crate) fn render_hash_icons(icons: &[HashIconData], hash: &[String]) -> RawH
     }
 }
 
+#[derive(Clone, Copy)]
+pub(crate) enum TableLinks {
+    SeedOnly,
+    WithSpoilerLog,
+    CompletedQualifier { legacy_web_id: Option<i64> },
+}
+
 pub(crate) async fn table_cell(
     now: DateTime<Utc>,
     seed: &Data,
-    spoiler_logs: bool,
+    links: TableLinks,
     add_hash_url: Option<rocket::http::uri::Origin<'_>>,
     transaction: &mut Transaction<'_, Postgres>,
     game_id: i32,
@@ -573,8 +581,9 @@ pub(crate) async fn table_cell(
         _ => extra.file_hash.map(Vec::from),
     };
     let mut seed_links = match seed.files() {
-        Some(Files::MmrWeb { id, .. }) => Some(html! {
-            a(href = format!("https://mmrandomizer.com/seed/get?id={id}"), target = "_blank") : "View Seed";
+        Some(Files::MmrWeb { id, seed_page_secret, .. }) => Some(html! {
+            @let secret = if matches!(links, TableLinks::CompletedQualifier { .. }) { seed_page_secret.as_deref() } else { None };
+            a(href = crate::mmr_web::seed_url(&id, secret), target = "_blank") : "View Seed";
         }),
         Some(Files::AlttprDoorRando { uuid, is_owr }) => {
             let prefix = if is_owr { "OR_" } else { "DR_" };
@@ -599,7 +608,7 @@ pub(crate) async fn table_cell(
                 } else {
                     "zpf"
                 })) : "Patch File";
-                @if spoiler_logs {
+                @if matches!(links, TableLinks::WithSpoilerLog) {
                     @match extra.spoiler_status {
                         SpoilerStatus::Unlocked(spoiler_file_name) => {
                             : " • ";
@@ -645,7 +654,13 @@ pub(crate) async fn table_cell(
         Some(Files::AvianartSeed { ref hash, .. }) => Some(html! {
             a(href = format!("https://avianart.games/perm/{hash}"), target = "_blank") : "View Seed";
         }),
-        None => None,
+        None => match links {
+            // A manually entered async can have a web ID without a local patch file.
+            TableLinks::CompletedQualifier { legacy_web_id: Some(id) } => Some(html! {
+                a(href = format!("https://ootrandomizer.com/seed/get?id={id}"), target = "_blank") : "View";
+            }),
+            _ => None,
+        },
     };
     if file_hash.is_none() {
         if let Some(add_hash_url) = add_hash_url {
@@ -704,6 +719,7 @@ pub(crate) async fn table(
     transaction: &mut Transaction<'_, Postgres>,
     game_id: i32,
 ) -> Result<RawHtml<String>, ExtraDataError> {
+    let links = if spoiler_logs { TableLinks::WithSpoilerLog } else { TableLinks::SeedOnly };
     let mut seeds = pin!(seeds);
     let now = Utc::now();
     Ok(html! {
@@ -716,7 +732,7 @@ pub(crate) async fn table(
             tbody {
                 @while let Some(seed) = seeds.next().await {
                     tr {
-                        td : table_cell(now, &seed, spoiler_logs, None, transaction, game_id, None).await?;
+                        td : table_cell(now, &seed, links, None, transaction, game_id, None).await?;
                     }
                 }
             }
