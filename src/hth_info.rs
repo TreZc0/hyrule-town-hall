@@ -258,7 +258,7 @@ pub(crate) async fn get(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>)
 
             section(id = "restream-coverage", class = "hth-info-section") {
                 h2 : "Restream coordinator workflow";
-                p : "A restream coordinator handles coverage for scheduled races: attach the broadcast destination, assign the racetime.gg restreamer, select the production volunteers, and ensure the assigned restreamer releases the room's auto-start when the broadcast is ready. This role does not grant access to event configuration, scheduling changes, seeds, or result decisions.";
+                p : "A restream coordinator handles coverage for scheduled races: attach the broadcast destination, assign the racetime.gg restreamer, select the production volunteers, and coordinate with the assigned restreamer or an event organizer to release auto-start when the broadcast is ready. This role does not grant access to event configuration, scheduling changes, seeds, or result decisions.";
 
                 div(class = "hth-info-flow") {
                     div {
@@ -279,7 +279,7 @@ pub(crate) async fn get(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>)
                     }
                     div {
                         strong : "4. Signal broadcast readiness";
-                        span : "The assigned restreamer types !ready in the racetime.gg room. This unlocks auto-start; with multiple language restreams, HTH waits until every assigned restreamer has used the command.";
+                        span : "Each assigned restreamer types !ready in the racetime.gg room when their broadcast is ready. Auto-start unlocks once all restreams are ready. An event organizer without a restream assignment in that room can also type !ready to confirm all broadcasts at once.";
                     }
                 }
 
@@ -287,9 +287,9 @@ pub(crate) async fn get(pool: &State<PgPool>, me: Option<User>, uri: Origin<'_>)
                     h3 : "What !ready means";
                     p {
                         code : "!ready";
-                        : " is a broadcast gate, not the entrant Ready button. Only the racetime.gg account assigned as a restreamer for that race can use it. Wait until the stream is genuinely ready: the channel is live, the correct runner feeds are visible, and the production team is prepared.";
+                        : " controls when the room can auto-start. Entrants use the Ready button separately. Before typing the command, confirm the channel is live, the correct runner feeds are visible, and the production team is prepared.";
                     }
-                    p : "If HTH says that only restreamers can use the command, check the Restreamer field-not just the Restream URL-and make sure it identifies the same racetime.gg account currently in the room. When no restreamer identity was assigned, an organizer must arrange race-monitor access before the start can be controlled.";
+                    p : "If HTH denies the command, check that the Restreamer field identifies your racetime.gg account. Event organizers can use the racetime.gg account linked to their HTH profile.";
                 }
 
                 div(class = "hth-info-screenshot-grid") {

@@ -4975,6 +4975,24 @@ impl Handler {
         });
     }
 
+    async fn is_event_organizer(
+        pool: &PgPool,
+        event: &event::Data<'_>,
+        racetime_id: &str,
+    ) -> sqlx::Result<bool> {
+        let Some(user) = User::from_racetime(pool, racetime_id).await? else {
+            return Ok(false);
+        };
+        sqlx::query_scalar!(
+            r#"SELECT EXISTS (SELECT 1 FROM organizers WHERE series = $1 AND event = $2 AND organizer = $3) AS "exists!""#,
+            event.series as _,
+            &event.event,
+            user.id as _,
+        )
+        .fetch_one(pool)
+        .await
+    }
+
     async fn can_monitor(
         &self,
         ctx: &RaceContext<GlobalState>,
@@ -4991,10 +5009,8 @@ impl Handler {
         }) = self.official_data
         {
             if let Some(UserData { ref id, .. }) = msg.user {
-                if let Some(user) = User::from_racetime(&ctx.global_state.db_pool, id).await? {
-                    if sqlx::query_scalar!(r#"SELECT EXISTS (SELECT 1 FROM organizers WHERE series = $1 AND event = $2 AND organizer = $3) AS "exists!""#, event.series as _, &event.event, user.id as _).fetch_one(&ctx.global_state.db_pool).await? {
-                        return Ok(true)
-                    }
+                if Self::is_event_organizer(&ctx.global_state.db_pool, event, id).await? {
+                    return Ok(true)
                 }
                 for video_url in restreams.keys() {
                     let pattern =
@@ -7082,30 +7098,16 @@ impl RaceHandler<GlobalState> for Handler {
                             .is_ok_and(|state| matches!(state.language, Some(French)));
                     let text = if restream_gate_is_optional {
                         if french {
-                            "L'auto-start reste activé jusqu'à ce qu'un race monitor confirme la présence du restream avec '!restream'. Le restreamer pourra ensuite utiliser '!ready' quand le restream sera prêt.".to_owned()
+                            "L'auto-start reste activé jusqu'à ce qu'un race monitor confirme la présence du restream avec '!restream'. Un restreamer désigné ou un organisateur du tournoi pourra ensuite utiliser '!ready'.".to_owned()
                         } else {
-                            "Auto-start remains enabled until a race monitor confirms that the restream is present with '!restream'. The restreamer can then use '!ready' once the restream is ready.".to_owned()
+                            "Auto-start remains enabled until a race monitor confirms the restream with '!restream'. Assigned restreamers and event organizers can then use '!ready'.".to_owned()
                         }
-                    } else if restreams_clone
-                        .values()
-                        .any(|state| state.restreamer_racetime_id.is_none())
-                    {
-                        if french {
-                            "L'auto-start est désactivé. Les organisateurs du tournoi peuvent utiliser '!monitor' pour devenir race monitor, puis pour inviter les restreamers en tant que race monitor et leur autoriser le force start.".to_owned()
-                        } else {
-                            format!(
-                                "Auto-start is disabled. Tournament organizers can use '!monitor' to become race monitors, then invite the restreamer{0} as race monitor{0} to allow them to force-start.",
-                                if restreams_clone.len() == 1 { "" } else { "s" }
-                            )
-                        }
+                    } else if french {
+                        "L'auto-start est désactivé. Le restreamer désigné ou un organisateur du tournoi peut utiliser '!ready' quand le restream est prêt.".to_owned()
                     } else if restreams_clone.len() == 1 {
-                        if french {
-                            "L'auto start est désactivé. Le restreamer peut utiliser '!ready' pour débloquer l'auto-start.".to_owned()
-                        } else {
-                            "Auto-start is disabled. The restreamer can use '!ready' to unlock auto-start.".to_owned()
-                        }
+                        "Auto-start is disabled. The assigned restreamer or an event organizer can use '!ready' when the broadcast is ready.".to_owned()
                     } else {
-                        "Auto-start is disabled. Restreamers can use '!ready' once the restream is ready. Auto-start will be unlocked once all restreams are ready.".to_owned()
+                        "Auto-start is disabled. Each assigned restreamer can use '!ready' for their broadcast. An event organizer without a restream assignment in this room can use '!ready' to confirm all broadcasts are ready.".to_owned()
                     };
                     let text = if restream_team_slugs.is_empty() {
                         text
@@ -7527,13 +7529,26 @@ impl RaceHandler<GlobalState> for Handler {
                 ctx.say(format!("Sorry {reply_to}, presets are not available for this event.")).await?;
             },
             "ready" => if let Some(OfficialRaceData { ref mut restreams, ref cal_event, ref event, .. }) = self.official_data {
-                if let Some(state) = restreams.values_mut().find(|state| state.restreamer_racetime_id.as_ref() == Some(&msg.user.as_ref().expect("received !ready command from bot").id)) {
+                if restreams.is_empty() {
+                    ctx.say(if let French = lang {
+                        format!("Désolé {reply_to}, aucun restream n'est configuré pour cette race.")
+                    } else {
+                        format!("Sorry {reply_to}, no restream is configured for this race.")
+                    }).await?;
+                    return Ok(())
+                }
+                let Some(sender) = &msg.user else { return Ok(()) };
+                if let Some(state) = restreams.values_mut().find(|state| state.restreamer_racetime_id.as_ref() == Some(&sender.id)) {
                     state.ready = true;
+                } else if Self::is_event_organizer(&ctx.global_state.db_pool, event, &sender.id).await.to_racetime()? {
+                    for state in restreams.values_mut() {
+                        state.ready = true;
+                    }
                 } else {
                     ctx.say(if let French = lang {
-                        format!("Désolé {reply_to}, seuls les restreamers peuvent faire cela.")
+                        format!("Désolé {reply_to}, seuls les restreamers désignés et les organisateurs du tournoi peuvent faire cela.")
                     } else {
-                        format!("Sorry {reply_to}, only restreamers can do that.")
+                        format!("Sorry {reply_to}, only assigned restreamers and organizers of this event can do that.")
                     }).await?;
                     return Ok(())
                 }
@@ -7572,13 +7587,13 @@ impl RaceHandler<GlobalState> for Handler {
                     } else if !can_change_auto_start {
                         ctx.say(format!("Sorry {reply_to}, it is too late to activate the restream start gate because the countdown or race has already started.")).await?;
                     } else if !auto_start {
-                        ctx.say(format!("The restream start gate is already active. The assigned restreamer can use '!ready' once the restream is ready.")).await?;
+                        ctx.say(format!("The restream start gate is already active. Assigned restreamers and event organizers can use '!ready'.")).await?;
                     } else {
                         for state in restreams.values_mut() {
                             state.ready = false;
                         }
                         set_room_auto_start(ctx, event, cal_event, false).await?;
-                        ctx.say(format!("Restream confirmed. Auto-start is now disabled. The assigned restreamer can use '!ready' once the restream is ready.")).await?;
+                        ctx.say(format!("Restream confirmed. Auto-start is now disabled. Assigned restreamers and event organizers can use '!ready'.")).await?;
                     }
                 } else {
                     ctx.say(format!("Sorry {reply_to}, this command is only available for official races.")).await?;
