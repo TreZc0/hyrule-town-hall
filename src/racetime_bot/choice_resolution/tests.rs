@@ -301,6 +301,30 @@ fn race(id: i64) -> Race {
 }
 
 #[tokio::test]
+async fn scheduling_without_choices_only_announces_the_baseline() {
+    let pool = PgPool::connect_lazy_with(sqlx::postgres::PgConnectOptions::new());
+    pool.close().await;
+    let race = race(1);
+    let named_mode = json!({
+        "baselines": {"open": {"label": "Open", "base_settings": {}}},
+        "default_baseline": "open",
+        "choices": {}
+    });
+    for (slug, config, draft_required, expected) in [
+        ("owr", json!({"base_settings": {}}), false, None),
+        ("mmr", json!({"version": "2.0.0-0", "settings": {"GameplaySettings.DrawHash": true}}), false, None),
+        ("alttpr_dr", json!({"source": "mutual_choices", "base_settings": {}, "choices": {}}), false, None),
+        ("owr", named_mode.clone(), false, Some("Baseline: Open")),
+        ("owr", named_mode, true, Some("Baseline: awaiting mode draft")),
+    ] {
+        let kind = SeedGenType::from_db(Some(slug), Some(&config)).unwrap();
+        for is_async in [false, true] {
+            assert_eq!(kind.scheduling_thread_str(&pool, &race, None, is_async, draft_required).await.as_deref(), expected);
+        }
+    }
+}
+
+#[tokio::test]
 #[ignore = "requires HTH_TEST_DATABASE_URL pointing to a *_test database; uses an isolated schema"]
 async fn database_timing_retries_concurrency_and_per_game_storage() {
     let admin = event::configuration::test_pool().await;

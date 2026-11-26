@@ -283,6 +283,10 @@ impl SeedGenType {
         draft_required: bool,
     ) -> Option<String> {
         if let Some(config) = super::choice_resolution::config(self) {
+            let baseline = config.pending_baseline(race, draft_required);
+            if !self.has_display_settings() {
+                return baseline;
+            }
             let display_config = config.for_display(race, draft_required);
             let summary = if let Some(snapshot) = super::choice_resolution::read(db_pool, race.id).await.ok()? {
                 snapshot.scheduling_display(is_async, &display_config)
@@ -298,7 +302,7 @@ impl SeedGenType {
                 }
                 super::choice_resolution::scheduling_preferences(&super::resolve_choice_values(&rows), &display_config, is_async)
             };
-            return Some(match config.pending_baseline(race, draft_required) {
+            return Some(match baseline {
                 Some(baseline) => format!("{baseline}\n{summary}"),
                 None => summary,
             });
@@ -334,8 +338,7 @@ impl SeedGenType {
         pairs
     }
 
-    /// Whether this seed gen type has per-race player-chosen settings that should
-    /// be shown as a column in the race table.
+    /// Whether the event defines player choices for race tables and scheduling messages.
     pub(crate) fn has_display_settings(&self) -> bool {
         super::choice_resolution::config(self)
             .and_then(|config| config.choices.as_object())
